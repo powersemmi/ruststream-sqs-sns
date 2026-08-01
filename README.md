@@ -29,7 +29,7 @@
 
 ## Status
 
-Implemented and verified against LocalStack (the framework's conformance lifecycle suite and the integration tests, including SNS fan-out, run in CI against it). Not yet published to crates.io: the release rides the `ruststream` 0.6 line. Design and scope are tracked in [powersemmi/ruststream#189](https://github.com/powersemmi/ruststream/issues/189).
+Implemented and verified against LocalStack (the framework's conformance lifecycle suite and the integration tests, including SNS fan-out, run in CI against it). The crate is not published to crates.io yet; it builds on the released `ruststream` 0.6 line. Design and scope are tracked in [powersemmi/ruststream#189](https://github.com/powersemmi/ruststream/issues/189).
 
 MSRV is 1.94, tracking the AWS SDK (the core stays at 1.85; a dependent may exceed its dependency's floor). Logical destination names map onto SQS queue names by replacing characters SQS forbids with `-` (a `.fifo` suffix survives).
 
