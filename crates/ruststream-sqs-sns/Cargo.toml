@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 readme = "../../README.md"
-keywords = ["aws", "sqs", "sns", "broker", "faststream"]
+keywords = ["aws", "sqs", "sns", "broker", "ruststream"]
 categories = ["asynchronous", "network-programming"]
 
 [lints]
