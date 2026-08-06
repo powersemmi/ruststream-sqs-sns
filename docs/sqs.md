@@ -14,6 +14,22 @@ serde = { version = "1", features = ["derive"] }
 The crate's MSRV is 1.94, tracking the AWS SDK; the framework core stays at 1.85, and a dependent
 may exceed its dependency's floor.
 
+## Capabilities
+
+Which of the framework's optional capability traits this broker implements natively. A capability
+that is not implemented does not compile at the mount site, rather than failing at runtime.
+
+| Capability | Native | Why |
+| --- | --- | --- |
+| `Subscribe` | yes | the connected broker resolves a queue by name, so `#[subscriber("orders")]` binds without a descriptor |
+| `BatchSubscriber` | no | `ReceiveMessage` returns up to ten messages per call, but each delivery is streamed and settled on its own; there is no batch handler surface |
+| `TransactionalPublisher` | no | SQS has no transactional send |
+| `OwnedTransactions` | no | SQS has no transactional send |
+| `RequestReply` | no | SQS has no reply inbox; a reply is an ordinary send to another queue |
+| `Partitioned` | yes | the `partition-key` header is the FIFO message group id, in both directions (see [FIFO message groups](#fifo-message-groups)) |
+| `Seekable` / `Positioned` | no | a queue is not a replayable log: a delivery is either deleted or returned to the queue, and there is no cursor to move; messages that outlive their attempts are recovered from the redrive policy's dead-letter queue, not by repositioning |
+| `DescribeServer` | yes | `SqsBroker` reports its endpoint and the `sqs` protocol, which the framework's AsyncAPI generation consumes |
+
 ## The lifecycle
 
 The broker is a ladder of consuming transitions, so each state is a distinct type:

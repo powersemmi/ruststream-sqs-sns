@@ -6,10 +6,17 @@
 
 <p align="center">
   <a href="https://github.com/powersemmi/ruststream-sqs-sns/actions/workflows/ci.yml"><img src="https://github.com/powersemmi/ruststream-sqs-sns/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/ruststream-sqs-sns"><img src="https://img.shields.io/crates/v/ruststream-sqs-sns.svg" alt="crates.io"></a>
+  <a href="https://crates.io/crates/ruststream-sqs-sns"><img src="https://img.shields.io/crates/dr/ruststream-sqs-sns" alt="Recent downloads"></a>
+  <a href="https://docs.rs/ruststream-sqs-sns"><img src="https://img.shields.io/docsrs/ruststream-sqs-sns" alt="docs.rs"></a>
   <img src="https://img.shields.io/badge/MSRV-1.94-blue.svg" alt="MSRV 1.94">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License">
   <a href="https://t.me/ruststream_community"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=News" alt="Telegram news channel"></a>
   <a href="https://t.me/ruststream_communuty_ru_chat"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=RU" alt="Telegram RU chat"></a>
+</p>
+
+<p align="center">
+  <b><a href="https://powersemmi.github.io/ruststream-sqs-sns/">Documentation</a></b>
 </p>
 
 ---
@@ -21,17 +28,11 @@
 - **Lazy startup contract.** `SqsBroker::new()` is synchronous and does no I/O (region and credentials resolve from the environment on connect; `from_config` takes a prebuilt `SdkConfig`; `endpoint` + `test_credentials` target a local stack); the runtime connects once at startup, so the broker composes with `#[ruststream::app]`.
 - **Native settlement.** `ack` deletes the message, `nack(requeue = true)` zeroes its visibility, and `retry_after(delay)` sets the visibility to the delay - the framework's deferred retry is the transport's own verb, not an emulation. `nack(requeue = false)` deletes: poison routing belongs to the queue's redrive policy, and the receive count is surfaced as a header.
 - **Crate-owned visibility extension.** A handler outliving the visibility timeout is protected: the crate keeps extending the visibility of every in-flight message for as long as the handler holds it.
-- **Explicit polling economics.** `SqsQueue::new("orders").wait(20s).batch(10).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default.
+- **Explicit polling settings.** `SqsQueue::new("orders").wait(20s).batch(10).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default. Logical destination names map onto SQS queue names by replacing characters SQS forbids with `-` (a `.fifo` suffix survives).
 - **FIFO ordering as the partition key.** On `.fifo` destinations the `partition-key` header becomes the message group id (and comes back as the same header), with a unique deduplication id per send.
 - **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
 - **Text bodies.** SQS bodies are text: UTF-8 payloads pass through untouched, binary payloads travel base64-encoded with a marker attribute and decode transparently on receive.
 - **In-process test broker** (feature `testing`). `SqsTestBroker` reproduces core routing with no server, implements `ruststream::testing::TestableBroker`, and passes the framework's conformance suite in process.
-
-## Status
-
-Implemented and verified against LocalStack (the framework's conformance lifecycle suite and the integration tests, including SNS fan-out, run in CI against it). Published on crates.io, tracking the released `ruststream` 0.6 line. Design and scope are tracked in [powersemmi/ruststream#189](https://github.com/powersemmi/ruststream/issues/189).
-
-MSRV is 1.94, tracking the AWS SDK (the core stays at 1.85; a dependent may exceed its dependency's floor). Logical destination names map onto SQS queue names by replacing characters SQS forbids with `-` (a `.fifo` suffix survives).
 
 ## Install
 
@@ -40,6 +41,9 @@ MSRV is 1.94, tracking the AWS SDK (the core stays at 1.85; a dependent may exce
 ruststream = { version = "0.6", features = ["macros", "json"] }
 ruststream-sqs-sns = "0.6"
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+ruststream-sqs-sns = { version = "0.6", features = ["testing"] }
 ```
 
 ## Write a service
@@ -72,7 +76,20 @@ fn app() -> impl App {
 
 ## Test it
 
-The `testing` feature runs handlers against an in-process SQS stand-in - no server, same routing. Product behaviour (visibility, redelivery, FIFO, SNS fan-out) is covered by the env-gated live suite instead: `just test-brokers` starts LocalStack and runs the integration tests plus the framework conformance lifecycle against it.
+The `testing` feature runs handlers against an in-process SQS stand-in - no server, same routing, same ladder. Inject a message as an external producer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
+
+```rust
+use ruststream::{Broker, OutgoingMessage};
+use ruststream::testing::{TestableBroker, expect_published};
+use ruststream_sqs_sns::testing::SqsTestBroker;
+
+let broker = SqsTestBroker::new().connect().await?;
+broker.inject(OutgoingMessage::new("orders", br#"{"id":1}"#));
+let confirmations =
+    expect_published(&broker, "confirmations", 1, std::time::Duration::from_secs(1)).await;
+```
+
+SQS behaviour itself (visibility, redelivery, FIFO, SNS fan-out) is covered by the env-gated live suite instead: `just test-brokers` starts LocalStack and runs the integration tests plus the framework conformance lifecycle against it.
 
 ## Layout
 
