@@ -1,0 +1,18 @@
+services:
+  localstack:
+    # Pinned to the last token-free tag: from 2026-03 the current LocalStack images require
+    # an auth token, which fork PRs cannot read from secrets.
+    image: localstack/localstack:4.14.0
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      SERVICES: sqs,sns
+      EAGER_SERVICE_LOADING: 1
+      # Return path-style queue URLs pointing at the configured endpoint instead of the
+      # localhost.localstack.cloud DNS trick.
+      SQS_ENDPOINT_STRATEGY: path
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health | grep -q '\"sqs\": \"running\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
