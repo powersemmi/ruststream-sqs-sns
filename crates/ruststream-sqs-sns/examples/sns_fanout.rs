@@ -40,6 +40,7 @@ fn broker() -> SqsBroker {
 /// Stays on the broker's own lifecycle ladder: topology administration is provisioning work
 /// (terraform or the console in production), and the app builder has no vocabulary for it. The
 /// queues themselves already exist by now - the subscriptions opened them.
+// --8<-- [start:wiring]
 async fn wire_topology() -> io::Result<()> {
     let connected = broker().connect().await.map_err(io::Error::other)?;
     for queue in ["billing", "shipping"] {
@@ -50,7 +51,9 @@ async fn wire_topology() -> io::Result<()> {
     }
     connected.shutdown().await.map_err(io::Error::other)
 }
+// --8<-- [end:wiring]
 
+// --8<-- [start:app]
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("sns-fanout", "0.1.0"))
@@ -70,3 +73,4 @@ fn app() -> impl App {
             });
         })
 }
+// --8<-- [end:app]
