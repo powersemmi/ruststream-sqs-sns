@@ -7,7 +7,7 @@ see the [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
 ruststream = { version = "0.6", features = ["macros"] }
-ruststream-sqs-sns = { git = "https://github.com/powersemmi/ruststream-sqs-sns" }
+ruststream-sqs-sns = "0.6"
 serde = { version = "1", features = ["derive"] }
 ```
 
