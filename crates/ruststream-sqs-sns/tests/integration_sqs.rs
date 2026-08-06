@@ -4,7 +4,7 @@
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.
 
 use std::pin::pin;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use ruststream::{
@@ -156,6 +156,71 @@ async fn nack_with_requeue_redelivers() {
         .expect("stream is open")
         .expect("redelivery is ok");
     assert_eq!(second.payload(), b"again");
+    second.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// How long the delayed-retry test asks SQS to hold the message.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
+
+// A delayed negative acknowledgement must ride the queue's own visibility timeout, which is what
+// the delivery advertises with `supports_nack_after`; the runtime's deferred re-publish fallback
+// is the alternative the flag turns off. The two are told apart by the clock: an immediate
+// requeue comes back on the next poll, while a visibility set to the delay holds the message for
+// it. The span is measured from the settle call, so it also contains the receive round trip and
+// can only overshoot the delay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nack_after_delays_the_redelivery() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = unique("delay");
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(1)),
+        )
+        .await
+        .expect("subscription opens");
+    let publisher = connected.publisher();
+    publisher
+        .publish(OutgoingMessage::new(&queue, b"not-yet".as_slice()))
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let first = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert!(
+        first.supports_nack_after(),
+        "an SQS delivery sets its own visibility, so it must advertise native delayed redelivery",
+    );
+
+    let settled = Instant::now();
+    first
+        .nack_after(RETRY_DELAY)
+        .await
+        .expect("delayed requeue succeeds");
+
+    let second = tokio::time::timeout(RETRY_DELAY * 6, stream.next())
+        .await
+        .expect("redelivery arrives")
+        .expect("stream is open")
+        .expect("redelivery is ok");
+    let elapsed = settled.elapsed();
+    assert!(
+        elapsed >= RETRY_DELAY,
+        "the redelivery came back after {elapsed:?}, before the {RETRY_DELAY:?} the settle asked \
+         for; the visibility timeout holds the message for the delay",
+    );
+    assert_eq!(second.payload(), b"not-yet");
     second.ack().await.expect("ack succeeds");
 
     connected.shutdown().await.expect("shutdown succeeds");

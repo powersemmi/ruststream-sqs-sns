@@ -152,6 +152,13 @@ impl IncomingMessage for SqsMessage {
         }
     }
 
+    /// Every SQS delivery honors a delayed redelivery: the visibility timeout is the delay, so
+    /// the runtime must take `nack_after` here instead of its broker-agnostic deferred
+    /// re-publish, which would re-publish a copy and reset the receive count.
+    fn supports_nack_after(&self) -> bool {
+        true
+    }
+
     async fn nack_after(self, delay: Duration) -> Result<(), AckError> {
         self.extender.abort();
         // Setting the visibility to the delay is the native deferred retry (capped at the
@@ -313,5 +320,34 @@ mod tests {
         assert_eq!(group.as_deref(), Some("user-42"));
         assert!(attributes.contains_key("x-tenant"));
         assert!(!attributes.contains_key(PARTITION_KEY_HEADER));
+    }
+
+    /// A client built from a bare config: no network happens until an operation is sent, and
+    /// this test never sends one.
+    fn offline_client() -> Client {
+        let config = aws_config::SdkConfig::builder()
+            .behavior_version(aws_config::BehaviorVersion::latest())
+            .region(aws_config::Region::new("us-east-1"))
+            .build();
+        Client::new(&config)
+    }
+
+    /// The runtime picks the native path off this flag, so a delivery that can change its own
+    /// visibility has to report it; without it `retry_after` silently falls back to the
+    /// deferred re-publish.
+    #[tokio::test]
+    async fn deliveries_advertise_native_delayed_redelivery() {
+        let raw = AwsMessage::builder()
+            .body("{}")
+            .receipt_handle("receipt")
+            .build();
+        let message = SqsMessage::new(
+            &raw,
+            offline_client(),
+            "http://localhost:4566/000000000000/queue".to_owned(),
+            "receipt".to_owned(),
+            Duration::from_secs(30),
+        );
+        assert!(message.supports_nack_after());
     }
 }
