@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/ruststream-sqs-sns"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 # The AWS SDK tracks a stable-2 MSRV policy (1.94.1 today); the core stays at 1.85 (a
 # dependent may exceed its dependency's floor).
