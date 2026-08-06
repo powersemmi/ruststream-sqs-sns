@@ -23,8 +23,8 @@
 - **Crate-owned visibility extension.** A handler outliving the visibility timeout is protected: the crate keeps extending the visibility of every in-flight message for as long as the handler holds it.
 - **Explicit polling economics.** `SqsQueue::new("orders").wait(20s).batch(10).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default.
 - **FIFO ordering as the partition key.** On `.fifo` destinations the `partition-key` header becomes the message group id (and comes back as the same header), with a unique deduplication id per send.
-- **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is deliberately not a subscriber - its delivery targets are queues and HTTP endpoints.
-- **Text-body honesty.** SQS bodies are text: UTF-8 payloads pass through untouched, binary payloads travel base64-encoded with a marker attribute and decode transparently on receive.
+- **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
+- **Text bodies.** SQS bodies are text: UTF-8 payloads pass through untouched, binary payloads travel base64-encoded with a marker attribute and decode transparently on receive.
 - **In-process test broker** (feature `testing`). `SqsTestBroker` reproduces core routing with no server, implements `ruststream::testing::TestableBroker`, and passes the framework's conformance suite in process.
 
 ## Status
