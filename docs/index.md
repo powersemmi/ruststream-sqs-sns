@@ -11,12 +11,11 @@ transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
 [`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients, and nothing broker-specific leaks back into
 the framework.
 
-The crate is not published to crates.io yet; it builds against the released `ruststream` 0.6 line
-and is depended on from git:
+The crate is published on crates.io and tracks the released `ruststream` 0.6 line:
 
 ```toml
 ruststream = { version = "0.6", features = ["macros", "json"] }
-ruststream-sqs-sns = { git = "https://github.com/powersemmi/ruststream-sqs-sns" }
+ruststream-sqs-sns = "0.6"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -30,7 +29,7 @@ serde = { version = "1", features = ["derive"] }
 
 - :material-aws: **[SQS guide](sqs.md)** - queue descriptors, settlement, FIFO groups, SNS fan-out, and testing.
 - :material-book-open-variant: **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
-- :material-language-rust: **[API reference](https://docs.rs/ruststream-sqs-sns)** - the crate's rustdoc, published with the first crates.io release.
+- :material-language-rust: **[API reference](https://docs.rs/ruststream-sqs-sns)** - the crate's rustdoc on docs.rs.
 
 </div>
 
