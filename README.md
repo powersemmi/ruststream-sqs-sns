@@ -48,12 +48,12 @@ ruststream-sqs-sns = { version = "0.7", features = ["testing"] }
 
 ## Write a service
 
+`ruststream_sqs_sns::prelude::*` is the one import a service file needs: it carries the framework's own prelude plus this crate's broker, descriptor and publish types.
+
 ```rust
 use std::time::Duration;
 
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_sqs_sns::{SqsBroker, SqsQueue};
+use ruststream_sqs_sns::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -67,8 +67,8 @@ async fn handle(order: &Order) -> HandlerResult {
     HandlerResult::Ack
 }
 
-#[ruststream::app]
-fn app() -> impl App {
+#[app]
+fn service() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0"))
         .with_broker(SqsBroker::new(), |b| b.include(handle))
 }

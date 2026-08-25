@@ -19,6 +19,7 @@
 mod broker;
 mod error;
 mod message;
+pub mod prelude;
 mod publisher;
 mod queue;
 mod subscriber;

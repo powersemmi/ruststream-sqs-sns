@@ -5,9 +5,7 @@
 
 use std::io;
 
-use ruststream::runtime::{App, AppInfo, HandlerResult, PublishExt, RustStream};
-use ruststream::{Outgoing, subscriber};
-use ruststream_sqs_sns::{SqsBroker, SqsPublish, SqsPublisher, SqsQueue};
+use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// The message declares both where it goes and which headers travel with it, so a publish of
@@ -48,8 +46,8 @@ async fn place(publisher: &SqsPublisher, order: &OrderPlaced) -> io::Result<()> 
 }
 // --8<-- [end:publish]
 
-#[ruststream::app]
-fn app() -> impl App {
+#[app]
+fn service() -> impl App {
     RustStream::new(AppInfo::new("sqs-fifo-group", "0.1.0")).with_broker(
         SqsBroker::new()
             .endpoint("http://localhost:4566")

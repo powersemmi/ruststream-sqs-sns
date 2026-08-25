@@ -11,6 +11,27 @@ ruststream-sqs-sns = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
+A service file imports `ruststream_sqs_sns::prelude::*` and nothing else from either crate: the
+glob carries the framework's own prelude along with this crate's broker, queue descriptor and
+publish types. The framework's prelude stops short of brokers on purpose, since which broker a
+service runs on is the one thing every service states for itself - and writing this import is that
+statement, because the broker is already named in the path. Code working below the handler surface
+(a raw codec, an `OutgoingMessage`, the `testing` broker) imports what it needs by name, and says
+by that import which layer it is on.
+
+The glob is also a capability manifest: it carries the framework's capability traits this broker
+implements, and only those, so the [table below](#capabilities) is what the import brings with it.
+For SQS that set is empty. Most of the table is empty because the capability is genuinely missing,
+but `Partitioned` is a deliberate exception: the crate implements it, and the framework already
+surfaces the partition key through `IncomingMessage::partition_key`, which its own prelude brings
+and this crate's delivery overrides. Re-exporting the trait as well would put two applicable
+methods in scope and make the natural `msg.partition_key()` ambiguous, so a service that wants the
+trait by itself imports it by name.
+
+Everything the glob does carry is the framework's own item rather than an alias of it, so a service
+that runs on two brokers can glob both preludes and what they share resolves to a single item, with
+the compiler checking it.
+
 The crate's MSRV is 1.94, tracking the AWS SDK; the framework core stays at 1.85, and a dependent
 may exceed its dependency's floor.
 

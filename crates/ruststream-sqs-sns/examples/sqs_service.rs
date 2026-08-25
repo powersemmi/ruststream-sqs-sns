@@ -6,9 +6,7 @@
 // --8<-- [start:handler]
 use std::time::Duration;
 
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_sqs_sns::{SqsBroker, SqsQueue};
+use ruststream_sqs_sns::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -24,8 +22,8 @@ async fn handle(order: &Order) -> HandlerResult {
 // --8<-- [end:handler]
 
 // --8<-- [start:app]
-#[ruststream::app]
-fn app() -> impl App {
+#[app]
+fn service() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
         SqsBroker::new()
             .endpoint("http://localhost:4566")
