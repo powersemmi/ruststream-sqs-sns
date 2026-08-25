@@ -2,7 +2,9 @@
 //!
 //! `use ruststream_sqs_sns::prelude::*;` brings in the framework's own prelude and this crate's
 //! user-facing surface: the broker, the queue descriptor, the publish policies, and the live
-//! publishers a handle-taking helper names.
+//! publishers a handle-taking helper names. The publish policy is also available under the
+//! uniform policy vocabulary as [`Publish`], the name every broker crate gives the value a mount
+//! site hands to `include` and the lifecycle hooks.
 //!
 //! The framework's prelude stops short of brokers on purpose - which broker a service runs on is
 //! the one thing every service states for itself. This glob is that statement: the broker
@@ -57,6 +59,26 @@ pub use ruststream::prelude::*;
 // would owe a UFCS spelling. A service reaching for the trait itself imports it by name.
 
 pub use crate::{SnsPublish, SnsPublisher, SqsBroker, SqsPublish, SqsPublisher, SqsQueue};
+
+/// The include-site name for this broker's plain publish policy, [`SqsPublish`].
+///
+/// The policy vocabulary is uniform across broker crates: a concept keeps one name, with the
+/// broker prefix stripped, so a mount site reads the same whichever broker it is on. It is a
+/// manifest on the policy layer too - a concept name this prelude does not export is one this
+/// broker has no policy for. `Publish` is the whole of it here: SQS has no transactional send and
+/// no reply inbox, so there is no transactional or request policy to name.
+///
+/// [`SnsPublish`] is deliberately outside that vocabulary rather than a second `Publish`. It is
+/// not another form: it implements `PublishPolicy` for the very same `ConnectedSqsBroker`, brings
+/// no subscription descriptor of its own, and fans out to queues that ordinary [`SqsQueue`]
+/// subscriptions consume. So it is a second policy on one form, and keeping it prefixed is what
+/// says so - reaching for fan-out stays the deliberate choice it is.
+///
+/// The prefixed originals stay available at the crate root (and here) for a file that mixes both.
+///
+/// Not to be confused with the framework's `runtime::Publish`, which is the publish builder a
+/// call site chains; this is the policy value handed to `include` and the lifecycle hooks.
+pub use crate::SqsPublish as Publish;
 
 // Deliberately absent, and why:
 //

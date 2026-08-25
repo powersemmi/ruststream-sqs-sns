@@ -190,6 +190,23 @@ with the broker at startup. Naming a policy picks the destination kind:
 - `SnsPublish` pairs into `SnsPublisher`: publishes a notification to an SNS topic, named by ARN
   or by name (a name resolves through the idempotent `CreateTopic`).
 
+The prelude exports these under a policy vocabulary that is uniform across broker crates: a concept
+keeps one name with the broker prefix stripped, so a mount site reads the same whichever broker a
+service is on. Here that vocabulary is `Publish` (which is `SqsPublish`), and the examples use it.
+It is a manifest on the policy layer as well - a concept name the prelude does not export is one
+this broker has no policy for, which is why there is no transactional or request policy name: SQS
+has neither.
+
+`SnsPublish` sits outside that vocabulary on purpose rather than becoming a second `Publish`. It is
+not another form: it is a `PublishPolicy` for the very same connected broker, it brings no
+subscription descriptor of its own, and it fans out to queues that ordinary `SqsQueue` subscriptions
+consume. It is a second policy on one form, and the prefixed name is what says so - reaching for
+fan-out stays a deliberate departure from the default path. The prefixed originals remain at the
+crate root for a file that mixes both.
+
+(The framework's `runtime::Publish` is a different thing - the builder a call site chains; this is
+the policy value.)
+
 A publisher can also be taken directly from the broker before the application starts, with
 `SqsBroker::publisher()`, or from the connected form with `ConnectedSqsBroker::publisher()` and
 `ConnectedSqsBroker::sns_publisher()`. Either way it aliases the connection, and every publish
