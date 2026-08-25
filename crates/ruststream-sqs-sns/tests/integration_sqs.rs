@@ -7,6 +7,7 @@ use std::pin::pin;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use ruststream::runtime::PublishExt;
 use ruststream::{
     Broker, ConnectedBroker, Headers, IncomingMessage, OutgoingMessage, Publisher, Subscriber,
 };
@@ -263,6 +264,49 @@ async fn sns_fans_out_to_a_subscribed_queue() {
         .expect("delivery is ok");
     assert_eq!(message.payload(), b"notice");
     assert_eq!(message.headers().get_str("x-tenant"), Some("acme"));
+    message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_id_handle_sets_the_fifo_message_group() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = format!("{}.fifo", unique("group"));
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(5)),
+        )
+        .await
+        .expect("subscription opens");
+
+    connected
+        .publisher()
+        .with_group_id("user-42")
+        .raw(b"{\"id\":1}")
+        .to(&queue)
+        .publish()
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+
+    // The group the handle carried comes back on the same header the descriptor documents.
+    assert_eq!(
+        message.headers().get_str(PARTITION_KEY_HEADER),
+        Some("user-42")
+    );
     message.ack().await.expect("ack succeeds");
 
     connected.shutdown().await.expect("shutdown succeeds");

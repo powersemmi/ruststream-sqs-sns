@@ -11,11 +11,11 @@ transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
 [`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients, and nothing broker-specific leaks back into
 the framework.
 
-The crate is published on crates.io and tracks the released `ruststream` 0.6 line:
+The crate is published on crates.io and tracks the released `ruststream` 0.7 line:
 
 ```toml
-ruststream = { version = "0.6", features = ["macros", "json"] }
-ruststream-sqs-sns = "0.6"
+ruststream = { version = "0.7", features = ["macros", "json"] }
+ruststream-sqs-sns = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 

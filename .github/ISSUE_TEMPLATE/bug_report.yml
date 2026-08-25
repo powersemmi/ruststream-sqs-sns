@@ -27,7 +27,7 @@ body:
     attributes:
       label: RustStream version
       description: The `ruststream-sqs-sns` version, plus the `ruststream` version.
-      placeholder: "ruststream-sqs-sns 0.6.0, ruststream 0.6.0"
+      placeholder: "ruststream-sqs-sns 0.7.0, ruststream 0.7.0"
     validations:
       required: true
   - type: input

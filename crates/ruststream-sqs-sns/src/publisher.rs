@@ -1,6 +1,8 @@
 //! [`SqsPublisher`] (direct-to-queue) and [`SnsPublisher`] (topic fan-out), with their
 //! policies.
 
+use std::sync::Arc;
+
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
 
@@ -17,6 +19,7 @@ use crate::message::{ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes
 #[derive(Clone)]
 pub struct SqsPublisher {
     cell: CoreCell,
+    group: Option<String>,
 }
 
 impl std::fmt::Debug for SqsPublisher {
@@ -27,7 +30,40 @@ impl std::fmt::Debug for SqsPublisher {
 
 impl SqsPublisher {
     pub(crate) fn new(cell: CoreCell) -> Self {
-        Self { cell }
+        Self { cell, group: None }
+    }
+
+    /// Returns a handle whose sends carry `group` as the FIFO message group id.
+    ///
+    /// The handle aliases the same connection; only the group id differs. It exists because the
+    /// group is a per-message argument and the publish builder fills its headers position once:
+    /// a message type declaring a header contract spends that position on the contract value, so
+    /// the `partition-key` header is not reachable for it. A message that does name the header
+    /// still wins, the most specific level naming the group.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::runtime::PublishExt;
+    /// use ruststream_sqs_sns::SqsBroker;
+    ///
+    /// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// let publisher = SqsBroker::new().publisher();
+    /// publisher
+    ///     .with_group_id("user-42")
+    ///     .raw(b"{\"id\":1}")
+    ///     .to("orders.fifo")
+    ///     .publish()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_group_id(&self, group: impl Into<String>) -> Self {
+        Self {
+            cell: Arc::clone(&self.cell),
+            group: Some(group.into()),
+        }
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -41,6 +77,15 @@ impl SqsPublisher {
 /// extension-comparison lint; AWS itself only accepts the lowercase suffix.
 fn is_fifo(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with(".fifo")
+}
+
+/// The message group of one send. The message's own `partition-key` is the most specific level
+/// and wins; the handle's fixed group answers for the rest; FIFO requires a group, so a literal
+/// closes the ladder.
+fn resolve_group(from_message: Option<String>, fixed: Option<&str>) -> String {
+    from_message
+        .or_else(|| fixed.map(ToOwned::to_owned))
+        .unwrap_or_else(|| "default".to_owned())
 }
 
 /// A process-unique deduplication id: FIFO queues without content-based deduplication require
@@ -71,7 +116,7 @@ impl Publisher for SqsPublisher {
         }
         if is_fifo(msg.name()) || is_fifo(&url) {
             send = send
-                .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
+                .message_group_id(resolve_group(group, self.group.as_deref()))
                 .message_deduplication_id(dedup_id());
         }
         send.send()
@@ -117,6 +162,7 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
 #[derive(Clone)]
 pub struct SnsPublisher {
     cell: CoreCell,
+    group: Option<String>,
 }
 
 impl std::fmt::Debug for SnsPublisher {
@@ -127,7 +173,39 @@ impl std::fmt::Debug for SnsPublisher {
 
 impl SnsPublisher {
     pub(crate) fn new(cell: CoreCell) -> Self {
-        Self { cell }
+        Self { cell, group: None }
+    }
+
+    /// Returns a handle whose sends carry `group` as the FIFO message group id, for a FIFO
+    /// topic.
+    ///
+    /// The same per-message argument, and the same ladder, as
+    /// [`SqsPublisher::with_group_id`]: the message's own `partition-key` header wins, and this
+    /// handle answers for every message that does not name one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::runtime::PublishExt;
+    ///
+    /// # async fn demo(broker: ruststream_sqs_sns::ConnectedSqsBroker)
+    /// # -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// broker
+    ///     .sns_publisher()
+    ///     .with_group_id("user-42")
+    ///     .raw(b"shipped")
+    ///     .to("orders.fifo")
+    ///     .publish()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_group_id(&self, group: impl Into<String>) -> Self {
+        Self {
+            cell: Arc::clone(&self.cell),
+            group: Some(group.into()),
+        }
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -171,7 +249,7 @@ impl Publisher for SnsPublisher {
         }
         if is_fifo(&arn) {
             publish = publish
-                .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
+                .message_group_id(resolve_group(group, self.group.as_deref()))
                 .message_deduplication_id(dedup_id());
         }
         publish
@@ -205,5 +283,32 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
 
     async fn pair(self, connected: &ConnectedSqsBroker) -> Result<Self::Live, PairError> {
         Ok(connected.sns_publisher())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::broker::SqsBroker;
+
+    #[test]
+    fn a_group_id_handle_answers_for_messages_that_name_no_group() {
+        let publisher = SqsBroker::new().publisher().with_group_id("user-42");
+        assert_eq!(resolve_group(None, publisher.group.as_deref()), "user-42");
+    }
+
+    #[test]
+    fn the_messages_own_partition_key_wins_over_the_handle() {
+        let publisher = SqsBroker::new().publisher().with_group_id("user-42");
+        assert_eq!(
+            resolve_group(Some("user-7".to_owned()), publisher.group.as_deref()),
+            "user-7"
+        );
+    }
+
+    #[test]
+    fn a_plain_handle_falls_back_to_the_fifo_default_group() {
+        let publisher = SqsBroker::new().publisher();
+        assert_eq!(resolve_group(None, publisher.group.as_deref()), "default");
     }
 }

@@ -6,8 +6,8 @@ its `testing` feature. For framework concepts (writing subscribers, routing, cod
 see the [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
-ruststream = { version = "0.6", features = ["macros"] }
-ruststream-sqs-sns = "0.6"
+ruststream = { version = "0.7", features = ["macros"] }
+ruststream-sqs-sns = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -149,7 +149,9 @@ as the group id (`"default"` when the header is absent, since FIFO queues requir
 received message carries its group id back in the same header, so a service reads and writes one
 header regardless of which side of the queue it is on. `SqsMessage` also implements the
 framework's `Partitioned` capability over that header. The convention matches the in-memory
-broker's, so switching brokers does not change a service's headers.
+broker's, so switching brokers does not change a service's headers. A publisher can also carry
+the group for messages that name none, with
+[`with_group_id`](#per-message-arguments).
 
 Every FIFO send also carries a process-unique deduplication id. An explicit id wins over
 content-based deduplication, so two legitimate identical payloads are never collapsed into one by
@@ -171,6 +173,33 @@ A publisher can also be taken directly from the broker before the application st
 `SqsBroker::publisher()`, or from the connected form with `ConnectedSqsBroker::publisher()` and
 `ConnectedSqsBroker::sns_publisher()`. Either way it aliases the connection, and every publish
 after `shutdown` reports `SqsError::NotConnected`.
+
+### Per-message arguments
+
+RustStream 0.7 unified publishing behind one builder: `message(&value)` for a value, `raw(&bytes)`
+for bytes, then the positions the message leaves open (the codec, the headers, the destination) and
+one `publish()`. The builder itself is closed to broker crates, so an argument SQS takes per
+message and the framework does not know about arrives through a publisher adapter instead: a step
+on the publisher, before the builder starts, returning a handle that carries the argument and
+publishes through the same builder.
+
+`with_group_id` is that step. It is on `SqsPublisher` and `SnsPublisher`, and it fixes the FIFO
+message group id of every send through the handle:
+
+```rust
+publisher
+    .with_group_id("user-42")
+    .message(&order)
+    .with_headers(&meta)
+    .to("orders.fifo")
+    .publish()
+    .await?;
+```
+
+The group is otherwise the `partition-key` header, which stays the cross-broker spelling and wins
+when a message names it. The handle exists for the case the header cannot serve: the builder fills
+its headers position once, so a message type declaring a header contract spends that position on
+the contract value and has no room left for a transport header.
 
 ## SNS fan-out
 
