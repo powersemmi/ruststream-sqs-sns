@@ -187,13 +187,7 @@ publishes through the same builder.
 message group id of every send through the handle:
 
 ```rust
-publisher
-    .with_group_id("user-42")
-    .message(&order)
-    .with_headers(&meta)
-    .to("orders.fifo")
-    .publish()
-    .await?;
+--8<-- "crates/ruststream-sqs-sns/examples/sqs_fifo_group.rs:publish"
 ```
 
 The group is otherwise the `partition-key` header, which stays the cross-broker spelling and wins
