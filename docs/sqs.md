@@ -13,24 +13,11 @@ serde = { version = "1", features = ["derive"] }
 
 A service file imports `ruststream_sqs_sns::prelude::*` and nothing else from either crate: the
 glob carries the framework's own prelude along with this crate's broker, queue descriptor and
-publish types. The framework's prelude stops short of brokers on purpose, since which broker a
-service runs on is the one thing every service states for itself - and writing this import is that
-statement, because the broker is already named in the path. Code working below the handler surface
-(a raw codec, an `OutgoingMessage`, the `testing` broker) imports what it needs by name, and says
-by that import which layer it is on.
+publish types. Code working below the handler surface - a raw codec, an `OutgoingMessage`, the
+`testing` broker - imports what it needs by name.
 
-The glob is also a capability manifest: it carries the framework's capability traits this broker
-implements, and only those, so the [table below](#capabilities) is what the import brings with it.
-For SQS that set is empty. Most of the table is empty because the capability is genuinely missing,
-but `Partitioned` is a deliberate exception: the crate implements it, and the framework already
-surfaces the partition key through `IncomingMessage::partition_key`, which its own prelude brings
-and this crate's delivery overrides. Re-exporting the trait as well would put two applicable
-methods in scope and make the natural `msg.partition_key()` ambiguous, so a service that wants the
-trait by itself imports it by name.
-
-Everything the glob does carry is the framework's own item rather than an alias of it, so a service
-that runs on two brokers can glob both preludes and what they share resolves to a single item, with
-the compiler checking it.
+Everything the glob carries is the framework's own item rather than an alias of it, so a service
+that runs on two brokers can glob both preludes and what they share resolves to a single item.
 
 The crate's MSRV is 1.94, tracking the AWS SDK; the framework core stays at 1.85, and a dependent
 may exceed its dependency's floor.
@@ -190,19 +177,9 @@ with the broker at startup. Naming a policy picks the destination kind:
 - `SnsPublish` pairs into `SnsPublisher`: publishes a notification to an SNS topic, named by ARN
   or by name (a name resolves through the idempotent `CreateTopic`).
 
-The prelude exports these under a policy vocabulary that is uniform across broker crates: a concept
-keeps one name with the broker prefix stripped, so a mount site reads the same whichever broker a
-service is on. Here that vocabulary is `Publish` (which is `SqsPublish`), and the examples use it.
-It is a manifest on the policy layer as well - a concept name the prelude does not export is one
-this broker has no policy for, which is why there is no transactional or request policy name: SQS
-has neither.
-
-`SnsPublish` sits outside that vocabulary on purpose rather than becoming a second `Publish`. It is
-not another form: it is a `PublishPolicy` for the very same connected broker, it brings no
-subscription descriptor of its own, and it fans out to queues that ordinary `SqsQueue` subscriptions
-consume. It is a second policy on one form, and the prefixed name is what says so - reaching for
-fan-out stays a deliberate departure from the default path. The prefixed originals remain at the
-crate root for a file that mixes both.
+The prelude also exports `SqsPublish` as `Publish`, the name every broker crate gives the policy a
+mount site hands to `include` and the lifecycle hooks; the examples use it. `SnsPublish` keeps its
+own name. Both remain available under their prefixed names for a file that mixes them.
 
 (The framework's `runtime::Publish` is a different thing - the builder a call site chains; this is
 the policy value.)
@@ -214,26 +191,18 @@ after `shutdown` reports `SqsError::NotConnected`.
 
 ### Per-message arguments
 
-RustStream 0.7 unified publishing behind one builder: `message(&value)` for a value, `raw(&bytes)`
-for bytes, then the positions the message leaves open (the codec, the headers, the destination) and
-one `publish()`. That builder fills its headers position once, so a message type declaring a header
-contract spends the position on the contract value and has no room left for a transport header -
-which is where the FIFO message group id used to be the only thing a caller could not say.
-
-A publisher answers that with **base headers**: a map the handle carries, which the builder writes
-the call site's own headers over, key by key. `with_group_id` is the step that builds one. It is on
-`SqsPublisher` and `SnsPublisher`, and it fixes the FIFO message group id of every send through the
-handle:
+A publish builder fills its headers position once, so a message type declaring a header contract
+spends that position on the contract value. `with_group_id`, on `SqsPublisher` and `SnsPublisher`,
+carries the FIFO message group beside it as a **base header**: a map the handle holds, which the
+builder writes the call site's own headers over, key by key.
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_fifo_group.rs:publish"
 ```
 
-The group is still the `partition-key` header - the same cross-broker spelling `SqsMessage` reports
-back and `Partitioned` reads - so there is one name for the concept and not two. Because the call
-site is written over the base, a message that names `partition-key` itself wins, and a handle with
-no group adds nothing at all. Nothing of this reaches the wire twice: the send path pulls
-`partition-key` out into the native `MessageGroupId` rather than sending it as a message attribute.
+The group is the `partition-key` header, so a message that names `partition-key` itself wins and a
+handle with no group adds nothing. The send path pulls `partition-key` out into the native
+`MessageGroupId` rather than sending it as a message attribute.
 
 ## SNS fan-out
 

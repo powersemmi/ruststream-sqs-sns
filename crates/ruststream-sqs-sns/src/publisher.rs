@@ -35,12 +35,8 @@ impl SqsPublisher {
 
     /// Returns a handle whose sends carry `group` as the FIFO message group id.
     ///
-    /// The handle aliases the same connection; only the group differs. It exists because the
-    /// group is a per-message argument and the publish builder fills its headers position once:
-    /// a message type declaring a header contract spends that position on the contract value, so
-    /// the `partition-key` header is not reachable for it. The handle carries the group as a base
-    /// header instead, which the builder writes the call site's own headers over, so a message
-    /// that names `partition-key` still wins.
+    /// The handle aliases the same connection; only the group differs. It carries the group as a
+    /// base `partition-key` header, so a message that names `partition-key` itself wins.
     ///
     /// # Examples
     ///
@@ -80,9 +76,7 @@ fn is_fifo(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with(".fifo")
 }
 
-/// The one-entry base map a group-carrying handle publishes under. The group is the
-/// `partition-key` header and nothing else, so it reaches the send path through the same
-/// vocabulary a message that names the header itself uses.
+/// The one-entry base map a group-carrying handle publishes under.
 fn group_headers(group: impl Into<String>) -> Headers {
     let mut headers = Headers::new();
     headers.insert(PARTITION_KEY_HEADER, group.into());
@@ -116,8 +110,7 @@ impl Publisher for SqsPublisher {
             send = send.set_message_attributes(Some(attributes));
         }
         if is_fifo(msg.name()) || is_fifo(&url) {
-            // FIFO requires a group, so a literal closes the ladder the builder already
-            // resolved: this handle's base group, with the message's own header over it.
+            // FIFO rejects a send with no group, so the literal closes the ladder.
             send = send
                 .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
                 .message_deduplication_id(dedup_id());
@@ -186,9 +179,8 @@ impl SnsPublisher {
     /// Returns a handle whose sends carry `group` as the FIFO message group id, for a FIFO
     /// topic.
     ///
-    /// The same per-message argument, carried the same way, as
-    /// [`SqsPublisher::with_group_id`]: the group is a base `partition-key` header, and a
-    /// message that names the header itself writes over it.
+    /// The group travels as a base `partition-key` header, so a message that names
+    /// `partition-key` itself wins. See [`SqsPublisher::with_group_id`].
     ///
     /// # Examples
     ///
@@ -255,8 +247,7 @@ impl Publisher for SnsPublisher {
             publish = publish.message_attributes(ENCODING_ATTRIBUTE, marker);
         }
         if is_fifo(&arn) {
-            // FIFO requires a group, so a literal closes the ladder the builder already
-            // resolved: this handle's base group, with the message's own header over it.
+            // FIFO rejects a send with no group, so the literal closes the ladder.
             publish = publish
                 .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
                 .message_deduplication_id(dedup_id());
@@ -304,8 +295,6 @@ mod tests {
     use super::*;
     use crate::broker::SqsBroker;
 
-    /// The group reaches the send path as the documented header and nothing else, so the
-    /// builder can write a message's own `partition-key` over it.
     #[test]
     fn a_group_id_handle_publishes_under_a_base_partition_key() {
         let publisher = SqsBroker::new().publisher().with_group_id("user-42");
@@ -321,8 +310,6 @@ mod tests {
         assert_eq!(base.get_str(PARTITION_KEY_HEADER), Some("user-42"));
     }
 
-    /// A plain handle adds nothing, so a publish through it is byte-for-byte what it was
-    /// before the group step existed.
     #[test]
     fn a_plain_handle_carries_no_base() {
         assert!(SqsBroker::new().publisher().base_headers().is_none());

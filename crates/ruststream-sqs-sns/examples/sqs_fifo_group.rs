@@ -8,8 +8,7 @@ use std::io;
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// The message declares both where it goes and which headers travel with it, so a publish of
-/// it spends the builder's single headers position on the contract below.
+/// The message declares both where it goes and which headers travel with it.
 #[derive(Debug, Deserialize, Serialize, Outgoing)]
 #[outgoing(name = "orders-groups.fifo", headers = Shipment)]
 struct OrderPlaced {
@@ -33,9 +32,7 @@ async fn place(publisher: &SqsPublisher, order: &OrderPlaced) -> io::Result<()> 
     let meta = Shipment {
         carrier: "dhl".to_owned(),
     };
-    // Ordering is per customer, and the headers position is already spent on the contract, so
-    // the group rides as the handle's base `partition-key` header. The contract is written over
-    // that base rather than replacing it, which is why both reach the message.
+    // Ordering is per customer: the handle carries the group, the contract carries the headers.
     publisher
         .with_group_id(&order.customer)
         .message(order)

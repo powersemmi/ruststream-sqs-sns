@@ -302,7 +302,6 @@ async fn a_group_id_handle_sets_the_fifo_message_group() {
         .expect("stream is open")
         .expect("delivery is ok");
 
-    // The group the handle carried comes back on the same header the descriptor documents.
     assert_eq!(
         message.headers().get_str(PARTITION_KEY_HEADER),
         Some("user-42")
@@ -348,8 +347,6 @@ async fn a_messages_own_partition_key_wins_over_the_handles_group() {
         .expect("stream is open")
         .expect("delivery is ok");
 
-    // The call site is the most specific level naming the group, so it writes over the base
-    // the handle publishes under.
     assert_eq!(
         message.headers().get_str(PARTITION_KEY_HEADER),
         Some("user-7")
