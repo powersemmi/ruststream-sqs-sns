@@ -20,28 +20,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, msrv]
+        # The floor, what users build with, and the early warning. Releases in between add
+        # nothing: what fails on a later one fails on the floor too. Keep the floor in step
+        # with `rust-version` in the workspace manifest.
+        toolchain: [stable, beta, "1.94.1"]
+    # Installing a toolchain does not select it: `rust-toolchain.toml` outranks the rustup
+    # default the install action sets. RUSTUP_TOOLCHAIN outranks the file.
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      # The MSRV leg follows `rust-version` in Cargo.toml, so an MSRV bump is a one-line change.
-      - name: Resolve toolchain
-        id: toolchain
-        env:
-          TOOLCHAIN: ${{ matrix.toolchain }}
-        run: |
-          if [ "$TOOLCHAIN" = "msrv" ]; then
-            TOOLCHAIN="$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)"
-            test -n "$TOOLCHAIN"
-          fi
-          echo "toolchain=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
 
       - name: Cache cargo
@@ -55,20 +50,103 @@ jobs:
         if: matrix.toolchain == 'stable'
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # Advisory, not a gate: surfaces a lint added by the next clippy release six weeks
+      # before it turns the build red.
+      - name: cargo clippy (beta, advisory)
+        if: matrix.toolchain == 'beta'
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
       - name: cargo check (no default features)
         run: cargo check --workspace --no-default-features
 
       - name: cargo check (all features)
         run: cargo check --workspace --all-targets --all-features
 
+      # --no-fail-fast: a failing target must not hide failures in the targets behind it;
+      # the log then lists every red test, not just the first binary's.
       - name: cargo test (handler-stub only, no live broker)
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features --no-fail-fast
+
+      # The crate-root missing_docs deny covers item docs; this gate catches what rustc
+      # cannot: broken intra-doc links and redundant targets only rustdoc resolves.
+      - name: cargo doc
+        if: matrix.toolchain == 'stable'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps
+
+  features:
+    name: Each feature alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@v2.86.5
+        with:
+          tool: cargo-hack
+
+      # --no-dev-deps: a dev-dependency in scope masks a missing feature gate in the library.
+      # Here that is `ruststream` with conformance, testing, macros and json on, which would
+      # hide a `testing`-gated item reached from the default build.
+      - name: cargo hack check (each feature)
+        run: cargo hack check --workspace --each-feature --no-dev-deps
+
+  minimal-versions:
+    name: Minimal versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nightly (resolver only)
+        uses: dtolnay/rust-toolchain@nightly
+
+      # The floor, for the build step below. Keep the version in step with `rust-version` in
+      # the workspace manifest.
+      - name: Install the MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.1"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # The full flag rather than -Z direct-minimal-versions: the narrow one leaves the
+      # assembled graph unverified, and that is what a user builds. It costs a pinning list
+      # whenever a third-party manifest declares a bound looser than what it actually needs;
+      # add `cargo update -p <crate> --precise <version>` steps below when that happens, each
+      # with the reason and the condition for dropping it. The AWS SDK graph needs none today.
+      - name: Resolve minimal versions
+        run: cargo +nightly update -Z minimal-versions
+
+      # Minimum dependencies on the minimum compiler: the worst case a user can assemble.
+      # Resolution above needs nightly, so only this step drops to the floor.
+      - name: Build and test against minimal versions
+        env:
+          RUSTUP_TOOLCHAIN: "1.94.1"
+        run: |
+          cargo check --locked --workspace --all-targets --all-features
+          cargo test --locked --workspace --all-features --no-fail-fast
 
   broker-integration:
     name: Broker integration (LocalStack)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -112,7 +190,7 @@ jobs:
     name: Security scans
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -120,7 +198,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.86.5
         with:
           tool: cargo-deny
 
