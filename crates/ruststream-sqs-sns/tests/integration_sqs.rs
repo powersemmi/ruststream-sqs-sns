@@ -311,3 +311,50 @@ async fn a_group_id_handle_sets_the_fifo_message_group() {
 
     connected.shutdown().await.expect("shutdown succeeds");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_messages_own_partition_key_wins_over_the_handles_group() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = format!("{}.fifo", unique("groupwin"));
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(5)),
+        )
+        .await
+        .expect("subscription opens");
+
+    let mut headers = Headers::new();
+    headers.insert(PARTITION_KEY_HEADER, "user-7");
+    connected
+        .publisher()
+        .with_group_id("user-42")
+        .raw(b"{\"id\":2}")
+        .with_headers(headers)
+        .to(&queue)
+        .publish()
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+
+    // The call site is the most specific level naming the group, so it writes over the base
+    // the handle publishes under.
+    assert_eq!(
+        message.headers().get_str(PARTITION_KEY_HEADER),
+        Some("user-7")
+    );
+    message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}

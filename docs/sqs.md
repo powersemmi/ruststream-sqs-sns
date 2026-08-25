@@ -150,7 +150,7 @@ received message carries its group id back in the same header, so a service read
 header regardless of which side of the queue it is on. `SqsMessage` also implements the
 framework's `Partitioned` capability over that header. The convention matches the in-memory
 broker's, so switching brokers does not change a service's headers. A publisher can also carry
-the group for messages that name none, with
+that header for the messages that do not name it, with
 [`with_group_id`](#per-message-arguments).
 
 Every FIFO send also carries a process-unique deduplication id. An explicit id wins over
@@ -178,22 +178,24 @@ after `shutdown` reports `SqsError::NotConnected`.
 
 RustStream 0.7 unified publishing behind one builder: `message(&value)` for a value, `raw(&bytes)`
 for bytes, then the positions the message leaves open (the codec, the headers, the destination) and
-one `publish()`. The builder itself is closed to broker crates, so an argument SQS takes per
-message and the framework does not know about arrives through a publisher adapter instead: a step
-on the publisher, before the builder starts, returning a handle that carries the argument and
-publishes through the same builder.
+one `publish()`. That builder fills its headers position once, so a message type declaring a header
+contract spends the position on the contract value and has no room left for a transport header -
+which is where the FIFO message group id used to be the only thing a caller could not say.
 
-`with_group_id` is that step. It is on `SqsPublisher` and `SnsPublisher`, and it fixes the FIFO
-message group id of every send through the handle:
+A publisher answers that with **base headers**: a map the handle carries, which the builder writes
+the call site's own headers over, key by key. `with_group_id` is the step that builds one. It is on
+`SqsPublisher` and `SnsPublisher`, and it fixes the FIFO message group id of every send through the
+handle:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_fifo_group.rs:publish"
 ```
 
-The group is otherwise the `partition-key` header, which stays the cross-broker spelling and wins
-when a message names it. The handle exists for the case the header cannot serve: the builder fills
-its headers position once, so a message type declaring a header contract spends that position on
-the contract value and has no room left for a transport header.
+The group is still the `partition-key` header - the same cross-broker spelling `SqsMessage` reports
+back and `Partitioned` reads - so there is one name for the concept and not two. Because the call
+site is written over the base, a message that names `partition-key` itself wins, and a handle with
+no group adds nothing at all. Nothing of this reaches the wire twice: the send path pulls
+`partition-key` out into the native `MessageGroupId` rather than sending it as a message attribute.
 
 ## SNS fan-out
 

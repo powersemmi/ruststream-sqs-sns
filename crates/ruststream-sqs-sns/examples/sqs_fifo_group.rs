@@ -36,7 +36,8 @@ async fn place(publisher: &SqsPublisher, order: &OrderPlaced) -> io::Result<()> 
         carrier: "dhl".to_owned(),
     };
     // Ordering is per customer, and the headers position is already spent on the contract, so
-    // the group rides on the publisher instead of in a `partition-key` header.
+    // the group rides as the handle's base `partition-key` header. The contract is written over
+    // that base rather than replacing it, which is why both reach the message.
     publisher
         .with_group_id(&order.customer)
         .message(order)
