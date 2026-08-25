@@ -1,6 +1,8 @@
 //! [`SqsPublisher`] (direct-to-queue) and [`SnsPublisher`] (topic fan-out), with their
 //! policies.
 
+use std::future::{Future, ready};
+
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
 
@@ -102,8 +104,11 @@ pub struct SqsPublish;
 impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
     type Live = SqsPublisher;
 
-    async fn pair(self, connected: &ConnectedSqsBroker) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedSqsBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 
@@ -203,7 +208,10 @@ pub struct SnsPublish;
 impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
     type Live = SnsPublisher;
 
-    async fn pair(self, connected: &ConnectedSqsBroker) -> Result<Self::Live, PairError> {
-        Ok(connected.sns_publisher())
+    fn pair(
+        self,
+        connected: &ConnectedSqsBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.sns_publisher()))
     }
 }
