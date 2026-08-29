@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
-use ruststream::{Headers, OutgoingMessage, PairError, PublishPolicy, Publisher};
+use ruststream::{HeaderMap, OutgoingMessage, PairError, PublishPolicy, Publisher};
 
 use crate::broker::{ConnectedSqsBroker, Core, CoreCell};
 use crate::error::{SqsError, sdk_err};
@@ -19,7 +19,7 @@ use crate::message::{ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes
 #[derive(Clone)]
 pub struct SqsPublisher {
     cell: CoreCell,
-    base: Option<Headers>,
+    base: Option<HeaderMap>,
 }
 
 impl std::fmt::Debug for SqsPublisher {
@@ -77,8 +77,8 @@ fn is_fifo(name: &str) -> bool {
 }
 
 /// The one-entry base map a group-carrying handle publishes under.
-fn group_headers(group: impl Into<String>) -> Headers {
-    let mut headers = Headers::new();
+fn group_headers(group: impl Into<String>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
     headers.insert(PARTITION_KEY_HEADER, group.into());
     headers
 }
@@ -124,7 +124,7 @@ impl Publisher for SqsPublisher {
             })
     }
 
-    fn base_headers(&self) -> Option<&Headers> {
+    fn base_headers(&self) -> Option<&HeaderMap> {
         self.base.as_ref()
     }
 }
@@ -162,7 +162,7 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
 #[derive(Clone)]
 pub struct SnsPublisher {
     cell: CoreCell,
-    base: Option<Headers>,
+    base: Option<HeaderMap>,
 }
 
 impl std::fmt::Debug for SnsPublisher {
@@ -262,7 +262,7 @@ impl Publisher for SnsPublisher {
             })
     }
 
-    fn base_headers(&self) -> Option<&Headers> {
+    fn base_headers(&self) -> Option<&HeaderMap> {
         self.base.as_ref()
     }
 }

@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use futures::Stream;
 
 use ruststream::{
-    AckError, Headers, IncomingMessage, Partitioned, Subscriber, testing::Coordinator,
+    AckError, HeaderMap, IncomingMessage, Partitioned, Subscriber, testing::Coordinator,
 };
 
 use crate::PARTITION_KEY_HEADER;
@@ -138,11 +138,11 @@ impl IncomingMessage for SqsTestMessage {
             .unwrap_or_default()
     }
 
-    fn headers(&self) -> &Headers {
-        static EMPTY: OnceLock<Headers> = OnceLock::new();
+    fn headers(&self) -> &HeaderMap {
+        static EMPTY: OnceLock<HeaderMap> = OnceLock::new();
         self.delivery
             .as_ref()
-            .map_or_else(|| EMPTY.get_or_init(Headers::new), |d| &d.headers)
+            .map_or_else(|| EMPTY.get_or_init(HeaderMap::new), |d| &d.headers)
     }
 
     async fn ack(mut self) -> Result<(), AckError> {

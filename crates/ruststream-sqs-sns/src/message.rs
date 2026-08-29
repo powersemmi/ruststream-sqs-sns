@@ -15,7 +15,7 @@ use aws_sdk_sqs::types::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use ruststream::{AckError, Headers, IncomingMessage, Partitioned};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned};
 use tokio::task::JoinHandle;
 
 use crate::error::sdk_err;
@@ -44,7 +44,7 @@ pub(crate) const ENCODING_ATTRIBUTE: &str = "ruststream-payload-encoding";
 /// handler outliving the visibility timeout does not cause a concurrent redelivery.
 pub struct SqsMessage {
     payload: Bytes,
-    headers: Headers,
+    headers: HeaderMap,
     client: Client,
     queue_url: String,
     receipt: String,
@@ -132,7 +132,7 @@ impl IncomingMessage for SqsMessage {
         &self.payload
     }
 
-    fn headers(&self) -> &Headers {
+    fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
@@ -202,8 +202,8 @@ async fn extend_visibility(
     }
 }
 
-fn decode_message(message: &AwsMessage) -> (Bytes, Headers) {
-    let mut headers = Headers::new();
+fn decode_message(message: &AwsMessage) -> (Bytes, HeaderMap) {
+    let mut headers = HeaderMap::new();
     let mut base64_payload = false;
     if let Some(attributes) = message.message_attributes() {
         for (name, value) in attributes {
@@ -250,7 +250,7 @@ pub(crate) fn encode_body(payload: &[u8]) -> (String, bool) {
 /// Converts headers into SQS message attributes (String for UTF-8 values, Binary otherwise),
 /// pulling the partition key out for the FIFO group id.
 pub(crate) fn encode_attributes(
-    headers: &Headers,
+    headers: &HeaderMap,
     base64_marker: bool,
 ) -> (
     std::collections::HashMap<String, MessageAttributeValue>,
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn partition_key_header_becomes_the_group_id() {
-        let mut headers = Headers::new();
+        let mut headers = HeaderMap::new();
         headers.insert(PARTITION_KEY_HEADER, "user-42");
         headers.insert("x-tenant", "acme");
         let (attributes, group) = encode_attributes(&headers, false);

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use ruststream::runtime::PublishExt;
 use ruststream::{
-    Broker, ConnectedBroker, Headers, IncomingMessage, OutgoingMessage, Publisher, Subscriber,
+    Broker, ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, Subscriber,
 };
 use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsQueue};
 
@@ -57,7 +57,7 @@ async fn roundtrip_preserves_payload_headers_and_partition_key() {
         .await
         .expect("subscription opens");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/json");
     headers.insert("x-tenant", "acme");
     headers.insert(PARTITION_KEY_HEADER, "user-42");
@@ -249,7 +249,7 @@ async fn sns_fans_out_to_a_subscribed_queue() {
         .await
         .expect("queue subscribes to topic");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("x-tenant", "acme");
     let sns = connected.sns_publisher();
     sns.publish(OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers))
@@ -328,7 +328,7 @@ async fn a_messages_own_partition_key_wins_over_the_handles_group() {
         .await
         .expect("subscription opens");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert(PARTITION_KEY_HEADER, "user-7");
     connected
         .publisher()
