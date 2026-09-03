@@ -5,27 +5,28 @@
 
 use std::io;
 
-use ruststream::codec::{Codec, JsonCodec};
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::{Broker, ConnectedBroker, OutgoingMessage, Publisher, subscriber};
-use ruststream_sqs_sns::{SnsPublish, SqsBroker, SqsQueue};
+use ruststream::ConnectedBroker;
+use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
+/// The notification declares the topic it fans out from, so the publish call site names no
+/// destination and the generated document carries the channel.
+#[derive(Debug, Deserialize, Serialize, Outgoing)]
+#[outgoing(name = "orders-events")]
 struct OrderPlaced {
     id: u64,
 }
 
 #[subscriber(SqsQueue::new("billing").create_if_missing())]
-async fn bill(order: &OrderPlaced) -> HandlerResult {
+async fn bill(order: &OrderPlaced) -> HandlerOutcome {
     println!("billing got order {}", order.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 #[subscriber(SqsQueue::new("shipping").create_if_missing())]
-async fn ship(order: &OrderPlaced) -> HandlerResult {
+async fn ship(order: &OrderPlaced) -> HandlerOutcome {
     println!("shipping got order {}", order.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 fn broker() -> SqsBroker {
@@ -54,7 +55,7 @@ async fn wire_topology() -> io::Result<()> {
 // --8<-- [end:wiring]
 
 // --8<-- [start:app]
-#[ruststream::app]
+#[app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("sns-fanout", "0.1.0"))
         // Registration order is run order across both hook levels, so the wiring lands before
@@ -64,10 +65,8 @@ fn app() -> impl App {
             b.include(bill);
             b.include(ship);
             b.after_startup(SnsPublish, async move |sns| -> io::Result<()> {
-                let payload = JsonCodec
-                    .encode(&OrderPlaced { id: 1 })
-                    .map_err(io::Error::other)?;
-                sns.publish(OutgoingMessage::new("orders-events", payload.as_ref()))
+                sns.message(&OrderPlaced { id: 1 })
+                    .publish()
                     .await
                     .map_err(io::Error::other)
             });

@@ -43,13 +43,18 @@ impl SqsPublisher {
     ///
     /// ```
     /// use ruststream::runtime::PublishExt;
+    /// use ruststream::{Outgoing, Serialized};
     /// use ruststream_sqs_sns::SqsBroker;
+    ///
+    /// // The order is already encoded, so it names itself serialized and leaves byte for byte.
+    /// #[derive(Outgoing, Serialized)]
+    /// struct Order(Vec<u8>);
     ///
     /// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// let publisher = SqsBroker::new().publisher();
     /// publisher
     ///     .with_group_id("user-42")
-    ///     .raw(b"{\"id\":1}")
+    ///     .message(&Order(br#"{"id":1}"#.to_vec()))
     ///     .to("orders.fifo")
     ///     .publish()
     ///     .await?;
@@ -190,13 +195,19 @@ impl SnsPublisher {
     ///
     /// ```
     /// use ruststream::runtime::PublishExt;
+    /// use ruststream::{Outgoing, Serialized};
+    ///
+    /// // The notice is already a wire payload, so it names itself serialized and no codec
+    /// // runs on it.
+    /// #[derive(Outgoing, Serialized)]
+    /// struct Notice(Vec<u8>);
     ///
     /// # async fn demo(broker: ruststream_sqs_sns::ConnectedSqsBroker)
     /// # -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// broker
     ///     .sns_publisher()
     ///     .with_group_id("user-42")
-    ///     .raw(b"shipped")
+    ///     .message(&Notice(b"shipped".to_vec()))
     ///     .to("orders.fifo")
     ///     .publish()
     ///     .await?;

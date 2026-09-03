@@ -16,10 +16,15 @@
 //!
 //! use ruststream_sqs_sns::prelude::*;
 //!
+//! // A payload the service parses itself, so the glob really is the whole import list: a
+//! // decoded payload would add its own `serde` derive on top.
+//! #[derive(Deserialized)]
+//! struct Order<'a>(&'a [u8]);
+//!
 //! #[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)))]
-//! async fn handle(order: &[u8]) -> HandlerResult {
-//!     let _ = order.len();
-//!     HandlerResult::Ack
+//! async fn handle(order: &Order<'_>) -> HandlerOutcome {
+//!     let _ = order.0.len();
+//!     HandlerOutcome::ack()
 //! }
 //!
 //! #[app]

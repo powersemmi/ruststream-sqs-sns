@@ -9,11 +9,17 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use ruststream::runtime::PublishExt;
 use ruststream::{
-    Broker, ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, Subscriber,
+    Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, Publisher,
+    Serialized, Subscriber,
 };
 use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsQueue};
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The body the FIFO tests publish through the builder: bytes the test already holds encoded,
+/// so the type names itself serialized and no codec sits on the path.
+#[derive(Outgoing, Serialized)]
+struct Body(Vec<u8>);
 
 fn test_endpoint() -> Option<String> {
     match std::env::var("SQS_TEST_ENDPOINT") {
@@ -289,7 +295,7 @@ async fn a_group_id_handle_sets_the_fifo_message_group() {
     connected
         .publisher()
         .with_group_id("user-42")
-        .raw(b"{\"id\":1}")
+        .message(&Body(br#"{"id":1}"#.to_vec()))
         .to(&queue)
         .publish()
         .await
@@ -333,7 +339,7 @@ async fn a_messages_own_partition_key_wins_over_the_handles_group() {
     connected
         .publisher()
         .with_group_id("user-42")
-        .raw(b"{\"id\":2}")
+        .message(&Body(br#"{"id":2}"#.to_vec()))
         .with_headers(headers)
         .to(&queue)
         .publish()

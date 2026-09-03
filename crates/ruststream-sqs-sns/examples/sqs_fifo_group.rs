@@ -22,9 +22,9 @@ struct Shipment {
 }
 
 #[subscriber(SqsQueue::new("orders-groups.fifo").create_if_missing())]
-async fn handle(order: &OrderPlaced) -> HandlerResult {
+async fn handle(order: &OrderPlaced) -> HandlerOutcome {
     println!("order {} for {}", order.id, order.customer);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 // --8<-- [start:publish]
