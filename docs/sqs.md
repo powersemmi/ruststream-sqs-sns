@@ -30,7 +30,7 @@ that is not implemented does not compile at the mount site, rather than failing 
 | Capability | Native | Why |
 | --- | --- | --- |
 | `Subscribe` | yes | the connected broker resolves a queue by name, so `#[subscriber("orders")]` binds without a descriptor |
-| `BatchSubscriber` | no | `ReceiveMessage` returns up to ten messages per call, but each delivery is streamed and settled on its own; there is no batch handler surface |
+| `BatchSubscriber` | no | `ReceiveMessage` returns up to ten messages per call, but each delivery is streamed and settled on its own; a page handler mounts over the framework's own buffer instead (`.buffered(nonzero!(n), window)`), which closes a page by size or by a deadline |
 | `TransactionalPublisher` | no | SQS has no transactional send |
 | `OwnedTransactions` | no | SQS has no transactional send |
 | `RequestReply` | no | SQS has no reply inbox; a reply is an ordinary send to another queue |
@@ -121,9 +121,10 @@ Every settlement verb is a native SQS operation:
 
 | Handler outcome | SQS operation |
 | --- | --- |
-| `HandlerResult::Ack` | `DeleteMessage` |
-| `HandlerResult::retry()` | `ChangeMessageVisibility` to 0, so the message redelivers immediately |
-| `HandlerResult::drop()` | `DeleteMessage` |
+| `HandlerOutcome::ack()` | `DeleteMessage` |
+| `HandlerOutcome::retry()` | `ChangeMessageVisibility` to 0, so the message redelivers immediately |
+| `HandlerOutcome::retry_after(delay)` | `ChangeMessageVisibility` to the delay |
+| `HandlerOutcome::drop()` | `DeleteMessage` |
 
 Delayed redelivery is native as well: a negative acknowledgement carrying a delay
 (`IncomingMessage::nack_after`) sets the message's visibility to that delay, capped at the
@@ -237,6 +238,11 @@ or consumer reads the same message.
 The body is the one transport constraint. SQS bodies are text: a UTF-8 payload passes through
 untouched, and a payload that is not valid UTF-8 travels base64-encoded with a marker attribute
 and is decoded transparently on receive.
+
+A handler that parses the body itself - a queue fed by a producer outside this framework, a wire
+format with no `serde` model - takes the framework's byte lane instead of a decoded payload: a
+`#[derive(Deserialized)]` newtype over `&[u8]`, with no codec anywhere on the path. The base64
+hop above is already undone by then, so the handler sees the bytes the producer sent.
 
 ## Local development with LocalStack
 

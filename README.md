@@ -62,9 +62,9 @@ struct Order {
 }
 
 #[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)).batch(10))]
-async fn handle(order: &Order) -> HandlerResult {
+async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 #[app]
