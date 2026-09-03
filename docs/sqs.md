@@ -178,12 +178,11 @@ with the broker at startup. Naming a policy picks the destination kind:
 - `SnsPublish` pairs into `SnsPublisher`: publishes a notification to an SNS topic, named by ARN
   or by name (a name resolves through the idempotent `CreateTopic`).
 
-The prelude also exports `SqsPublish` as `Publish`, the name every broker crate gives the policy a
-mount site hands to `include` and the lifecycle hooks; the examples use it. `SnsPublish` keeps its
-own name. Both remain available under their prefixed names for a file that mixes them.
-
-(The framework's `runtime::Publish` is a different thing - the builder a call site chains; this is
-the policy value.)
+Both policies keep their prefixed names in the prelude, and that is the name a mount site or a
+lifecycle hook writes. The bare name `Publish` is the framework's: it is the capability an injected
+publisher is bound by (`Out<impl Publish>`), and a policy aliased onto it in this crate's prelude
+would shadow the framework's trait rather than sit beside it, since an explicit re-export wins over
+the glob.
 
 A publisher can also be taken directly from the broker before the application starts, with
 `SqsBroker::publisher()`, or from the connected form with `ConnectedSqsBroker::publisher()` and

@@ -6,8 +6,9 @@
 //! Everything re-exported here is the framework's own item, so a service on two brokers may glob
 //! both preludes and what they share resolves to one item.
 //!
-//! [`Publish`] is this crate's publish policy; the framework's `runtime::Publish` is the publish
-//! builder, a different type.
+//! The publish policies keep their prefixed names, [`SqsPublish`] and [`SnsPublish`]. The bare
+//! capability names belong to the framework - `Publish` is the bound a handler body writes on an
+//! injected publisher - and an alias here would win over the glob rather than sit beside it.
 //!
 //! # Examples
 //!
@@ -41,7 +42,3 @@ pub use ruststream::prelude::*;
 // `msg.partition_key()` on a delivery ambiguous (E0034).
 
 pub use crate::{SnsPublish, SnsPublisher, SqsBroker, SqsPublish, SqsPublisher, SqsQueue};
-
-/// The publish policy a mount site hands to `include` and the lifecycle hooks, [`SqsPublish`]
-/// under the name every broker crate gives it.
-pub use crate::SqsPublish as Publish;

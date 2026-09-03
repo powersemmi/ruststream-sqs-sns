@@ -52,7 +52,7 @@ fn service() -> impl App {
             .region("us-east-1"),
         |b| {
             b.include(handle);
-            b.after_startup(Publish, async move |sqs| -> io::Result<()> {
+            b.after_startup(SqsPublish, async move |sqs| -> io::Result<()> {
                 let order = OrderPlaced {
                     id: 1,
                     customer: "acme".to_owned(),
