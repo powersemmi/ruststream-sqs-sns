@@ -1,19 +1,24 @@
 //! The shape of the crate prelude, pinned.
 //!
-//! The glob carries the framework's own prelude, and the bare capability names in it stay the
-//! framework's. A publish policy re-exported under one of those names would win over the glob
-//! silently - an explicit re-export beats a glob import - and only a use site like the bound
-//! below would report it, as `E0404: expected trait, found struct`.
+//! A service writes two kinds of file, and each globs one prelude. A handler file globs the
+//! framework's, where the capability names are the framework's traits. A routes file globs this
+//! one, where the uniform mount-site names are this broker's policy values. Both spellings below
+//! have to resolve through this glob: the framework's capability, because the glob carries the
+//! framework's prelude, and the policy under the uniform name, because this crate aliases it
+//! there.
 
 use ruststream_sqs_sns::prelude::*;
 
-/// `Publish` is the framework's slot capability, the bound a handler body writes on an injected
-/// publisher. This crate's policies keep their prefixed names so it stays reachable.
-fn _publish_is_the_frameworks_slot_capability<T: Publish>() {}
+/// The framework's publish capability still reaches a routes file through this glob: the bound an
+/// injected publisher carries, which a handler file names on the framework's prelude instead.
+fn _p<T: Publisher>() {}
 
 #[test]
-fn the_publish_policies_keep_their_prefixed_names() {
-    // Both policies are unit structs, so naming them is the whole construction; what is under
-    // test is that the prefixed names are the ones the glob resolves.
-    let _ = (SqsPublish, SnsPublish);
+fn the_uniform_mount_site_name_is_this_brokers_policy() {
+    // The value a mount site or a lifecycle hook hands over. The policy is a unit struct, so
+    // naming it is the whole construction, and the annotation is what pins the alias down: a
+    // trait under this name would not be accepted in type position.
+    let _: Publish = Publish;
+    // Fan-out is the departure from the default, so it keeps its own name beside the uniform one.
+    let _ = SnsPublish;
 }

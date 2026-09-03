@@ -6,9 +6,12 @@
 //! Everything re-exported here is the framework's own item, so a service on two brokers may glob
 //! both preludes and what they share resolves to one item.
 //!
-//! The publish policies keep their prefixed names, [`SqsPublish`] and [`SnsPublish`]. The bare
-//! capability names belong to the framework - `Publish` is the bound a handler body writes on an
-//! injected publisher - and an alias here would win over the glob rather than sit beside it.
+//! A service writes two kinds of file, and this glob is for one of them. A handler file names the
+//! capabilities it needs and globs the framework's prelude alone, so `Publisher` there is the
+//! framework's trait, the bound an injected publisher carries. A routes file names the broker it
+//! mounts on and globs this one, where [`Publish`] is the value a mount site or a lifecycle hook
+//! hands over. The two vocabularies never meet in one file, which is what keeps the uniform
+//! mount-site name free for the policy.
 //!
 //! # Examples
 //!
@@ -42,3 +45,8 @@ pub use ruststream::prelude::*;
 // `msg.partition_key()` on a delivery ambiguous (E0034).
 
 pub use crate::{SnsPublish, SnsPublisher, SqsBroker, SqsPublish, SqsPublisher, SqsQueue};
+
+/// The publish policy a mount site hands to `include` and the lifecycle hooks, [`SqsPublish`]
+/// under the name every broker crate gives it. `SnsPublish` keeps its own name: fan-out is the
+/// departure from the default, not the mount site's default choice.
+pub use crate::SqsPublish as Publish;
