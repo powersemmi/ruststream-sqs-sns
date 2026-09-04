@@ -16,6 +16,9 @@
 //!   partition key.
 //! - SNS appears only as a publisher (fan-out to queues and other endpoints), as a distinct
 //!   [`SnsPublish`] policy.
+//! - Bodies are text, and what the service will not take as text (binary, and equally the
+//!   valid-UTF-8 control characters a binary codec emits) travels base64-encoded and decodes
+//!   transparently on receive.
 
 #![forbid(unsafe_code)]
 

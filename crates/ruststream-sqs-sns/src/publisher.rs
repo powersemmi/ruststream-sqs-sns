@@ -4,12 +4,15 @@
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 use ruststream::{HeaderMap, OutgoingMessage, PairError, PublishPolicy, Publisher};
 
 use crate::broker::{ConnectedSqsBroker, Core, CoreCell};
 use crate::error::{SqsError, sdk_err};
-use crate::message::{ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body};
+use crate::message::{
+    ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body, is_service_text,
+};
 
 /// Publishes messages directly to SQS queues (name or URL as the destination).
 ///
@@ -240,15 +243,24 @@ impl Publisher for SnsPublisher {
         let mut publish = core.sns.publish().topic_arn(&arn).message(body);
         let mut group = None;
         for (name, value) in msg.headers().iter() {
-            let text = String::from_utf8_lossy(value).into_owned();
             if name == PARTITION_KEY_HEADER {
-                group = Some(text);
+                group = Some(String::from_utf8_lossy(value).into_owned());
                 continue;
             }
-            let attribute = SnsAttributeValue::builder()
-                .data_type("String")
-                .string_value(text)
-                .build();
+            // The same split the SQS side makes, for the same reason: a value the service
+            // refuses as text travels as binary rather than being mangled or rejected. A
+            // `HeaderMap` value is bytes on both sides, so a subscriber reads back what was
+            // written either way.
+            let attribute = match std::str::from_utf8(value) {
+                Ok(text) if is_service_text(text) => SnsAttributeValue::builder()
+                    .data_type("String")
+                    .string_value(text)
+                    .build(),
+                _ => SnsAttributeValue::builder()
+                    .data_type("Binary")
+                    .binary_value(Blob::new(value))
+                    .build(),
+            };
             if let Ok(attribute) = attribute {
                 publish = publish.message_attributes(name, attribute);
             }

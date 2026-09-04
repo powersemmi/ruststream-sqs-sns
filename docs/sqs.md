@@ -270,13 +270,18 @@ exist because the subscriptions opened them, and publishes one notification thro
 
 ## Payloads and headers
 
-Headers travel as SQS message attributes, one attribute per header: `String` for values that are
-valid UTF-8 and `Binary` for the rest. No envelope format is invented, so any other SQS producer
-or consumer reads the same message.
+Headers travel as SQS message attributes, one attribute per header: `String` for values the
+service carries as text and `Binary` for the rest. No envelope format is invented, so any other
+SQS producer or consumer reads the same message. A header value is bytes on both sides of the
+framework's `HeaderMap`, so which of the two types carried it is invisible to a service.
 
-The body is the one transport constraint. SQS bodies are text: a UTF-8 payload passes through
-untouched, and a payload that is not valid UTF-8 travels base64-encoded with a marker attribute
-and is decoded transparently on receive.
+The body is the one transport constraint. SQS bodies are text, and the service's idea of text is
+narrower than UTF-8: the C0 control characters other than tab, newline and carriage return are
+rejected, as are the two non-characters at the end of the basic plane. A payload that fits passes
+through untouched; anything else - a binary payload, and equally a valid-UTF-8 one carrying those
+characters, which is what a binary codec often emits - travels base64-encoded with a marker
+attribute and is decoded transparently on receive. The same rule chooses the attribute type for a
+header value, so a publish is never rejected for carrying bytes the service dislikes.
 
 A handler that parses the body itself - a queue fed by a producer outside this framework, a wire
 format with no `serde` model - takes the framework's byte lane instead of a decoded payload: a

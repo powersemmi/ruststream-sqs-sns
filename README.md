@@ -32,7 +32,7 @@
 - **Native pages.** `ReceiveMessage` is already a paging call, so a page handler's `batch(n)` becomes `MaxNumberOfMessages` and one receive is one page - nothing buffers on the client. A size above the protocol's ten is clamped to ten, with a log line, rather than refused.
 - **FIFO ordering as the partition key.** On `.fifo` destinations the `partition-key` header becomes the message group id (and comes back as the same header), with a unique deduplication id per send. `publisher.with_group_id("user-42")` carries that header as a publisher base, and a message naming the header itself wins over it.
 - **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
-- **Text bodies.** SQS bodies are text: UTF-8 payloads pass through untouched, binary payloads travel base64-encoded with a marker attribute and decode transparently on receive.
+- **Text bodies.** SQS bodies are text, and the service's idea of text is narrower than UTF-8: a payload it accepts passes through untouched, and anything else - binary, or valid UTF-8 carrying control characters - travels base64-encoded with a marker attribute and decodes transparently on receive. The same rule picks `String` or `Binary` for each header attribute.
 - **In-process test broker** (feature `testing`). `SqsTestBroker` reproduces core routing with no server, implements `ruststream::testing::TestableBroker`, and passes the framework's conformance suite in process.
 
 ## Install
