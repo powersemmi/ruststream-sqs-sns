@@ -1,13 +1,12 @@
 //! Handler-surface checks against the in-process transport.
 //!
-//! The two forms this crate's documentation promises on a queue that neither batches natively
-//! nor carries a structured body: a page assembled by the framework's own buffer, and the byte
-//! lane a service reads a text body through.
+//! The two forms this crate's documentation promises on a queue whose bodies are text: a page
+//! bounded by the size its mount site named, and the byte lane a service reads that body
+//! through.
 
 #![cfg(feature = "testing")]
 
 use std::sync::Mutex;
-use std::time::Duration;
 
 use ruststream::testing::TestApp;
 use ruststream::{Outgoing, Serialized};
@@ -25,8 +24,9 @@ struct Wire(Vec<u8>);
 
 static PAGES: Mutex<Vec<Vec<Vec<u8>>>> = Mutex::new(Vec::new());
 
-/// A page handler. SQS delivers and settles one message at a time, so the page comes from the
-/// framework's buffer named at the mount site rather than from the transport.
+/// A page handler. The size is the mount site's, and the subscription is opened to it: on the
+/// real broker it becomes `MaxNumberOfMessages`, and in process the framework's buffer honours
+/// the same bound.
 #[subscriber]
 async fn drain(frames: &[Frame<'_>]) -> HandlerOutcome {
     PAGES
@@ -37,18 +37,14 @@ async fn drain(frames: &[Frame<'_>]) -> HandlerOutcome {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_page_handler_mounts_over_the_frameworks_buffer() {
+async fn a_page_handler_opens_its_subscription_at_the_size_it_named() {
     let broker = SqsTestBroker::new();
     // A producer handle taken before the app is built: the harness's own injection drives each
     // publish to a standstill, which would close a page per message and say nothing about the
     // size bound this test is here for.
     let producer = broker.publisher();
     let app = RustStream::new(AppInfo::new("pages", "0.1.0")).with_broker(broker, |b| {
-        b.include(
-            drain
-                .name("orders")
-                .buffered(nonzero!(2), Duration::from_millis(500)),
-        );
+        b.include(drain.name("orders").batch(nonzero!(2)));
     });
 
     let tb = TestApp::start(app).await.expect("the app starts");
@@ -65,10 +61,11 @@ async fn a_page_handler_mounts_over_the_frameworks_buffer() {
     tb.broker::<SqsTestBroker>()
         .subscriber("orders")
         .assert_called_once()
+        .assert_page_sizes(&[2])
         .settled(HandlerOutcome::ack());
     assert_eq!(
         PAGES.lock().expect("page log").as_slice(),
         &[vec![b"first".to_vec(), b"second".to_vec()]],
-        "the buffer closed one page at its size limit, and the bytes crossed untouched",
+        "one page closed at the size the mount named, and the bytes crossed untouched",
     );
 }

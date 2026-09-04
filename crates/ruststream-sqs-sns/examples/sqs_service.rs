@@ -14,7 +14,7 @@ struct Order {
     id: u64,
 }
 
-#[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)).batch(10))]
+#[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)))]
 async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
     HandlerOutcome::ack()

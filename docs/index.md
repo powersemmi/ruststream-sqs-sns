@@ -3,8 +3,8 @@
 **`ruststream-sqs-sns`** is the Amazon SQS broker for the
 [RustStream](https://powersemmi.github.io/ruststream/) messaging framework, with SNS fan-out
 publishing. It covers long polling, visibility-based retries and dead-lettering through the
-queue's redrive policy, FIFO message groups, and ships an in-process test broker under its
-`testing` feature.
+queue's redrive policy, native pages over `ReceiveMessage`, FIFO message groups, and ships an
+in-process test broker under its `testing` feature.
 
 Handlers, routers, codecs, and middleware come from the framework; this crate supplies the
 transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 
 <div class="grid cards" markdown>
 
-- :material-aws: **[SQS guide](sqs.md)** - queue descriptors, settlement, FIFO groups, SNS fan-out, and testing.
+- :material-aws: **[SQS guide](sqs.md)** - queue descriptors, settlement, pages, FIFO groups, SNS fan-out, and testing.
 - :material-book-open-variant: **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
 - :material-language-rust: **[API reference](https://docs.rs/ruststream-sqs-sns)** - the crate's rustdoc on docs.rs.
 

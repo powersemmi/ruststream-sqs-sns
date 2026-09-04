@@ -30,7 +30,7 @@ that is not implemented does not compile at the mount site, rather than failing 
 | Capability | Native | Why |
 | --- | --- | --- |
 | `Subscribe` | yes | the connected broker resolves a queue by name, so `#[subscriber("orders")]` binds without a descriptor |
-| `BatchSubscriber` | no | `ReceiveMessage` returns up to ten messages per call, but each delivery is streamed and settled on its own; a page handler mounts over the framework's own buffer instead (`.buffered(nonzero!(n), window)`), which closes a page by size or by a deadline |
+| `BatchSubscriber` | yes | `ReceiveMessage` is already a paging call: the page size becomes `MaxNumberOfMessages`, and one receive is one page (see [Pages](#pages)) |
 | `TransactionalPublisher` | no | SQS has no transactional send |
 | `OwnedTransactions` | no | SQS has no transactional send |
 | `RequestReply` | no | SQS has no reply inbox; a reply is an ordinary send to another queue |
@@ -77,13 +77,15 @@ explicit on it:
 | Method | Meaning | Default |
 | --- | --- | --- |
 | `wait(Duration)` | long-polling wait per receive call, capped at the protocol's 20 seconds | 20 seconds |
-| `batch(i32)` | messages per receive call, within the protocol range `1..=10` | 10 |
 | `visibility(Duration)` | visibility timeout requested per receive, within `1s..=12h` | the queue's configured timeout |
 | `create_if_missing()` | create the queue on subscribe when it does not exist | off |
 
-A descriptor is validated before any I/O: an empty name, a wait above 20 seconds, a batch outside
-`1..=10`, or a visibility outside `1s..=12h` fails with `SqsError::InvalidQueue` at subscribe time,
-without a call to AWS.
+How many messages one receive call asks for is not on this list. That is the page size, and it
+belongs to the registration rather than to the queue: a page handler names it at the mount site
+with `batch(n)`, and a single-message handler has none (see [Pages](#pages)).
+
+A descriptor is validated before any I/O: an empty name, a wait above 20 seconds, or a visibility
+outside `1s..=12h` fails with `SqsError::InvalidQueue` at subscribe time, without a call to AWS.
 
 `SqsQueue` implements `SubscriptionSource`, so it sits inline in the `#[subscriber(..)]`
 decorator, and the queue is named either by URL or by name (resolved through `GetQueueUrl` and
@@ -104,16 +106,50 @@ Logical destination names map onto valid SQS queue names by replacing every char
 `[A-Za-z0-9_-]` with `-`; a `.fifo` suffix survives the mapping. Subscribers and publishers share
 that mapping, so a dotted framework name stays routable.
 
+The same options are also reachable at the mount site, in this crate's own vocabulary, through
+the `SqsSubscription` trait the prelude carries. That is where they go when the registration
+names a page size first, because the framework's own steps come first in a chain:
+
+```rust
+--8<-- "crates/ruststream-sqs-sns/examples/sqs_pages.rs:mount"
+```
+
 `create_if_missing` is meant for local development and tests, where the queue is not provisioned
 ahead of the process; a name ending in `.fifo` creates a FIFO queue with content-based
 deduplication. Production queues are usually managed as infrastructure.
 
 A subscription is a stream fed by a background pump that long-polls `ReceiveMessage`. Its channel
-holds one batch, so the pump never polls ahead of what the handler drains. Dropping the subscriber
-stops the pump; messages it had already delivered and that were never settled redeliver once their
-visibility lapses. Receive failures surface as items on the stream: a queue that does not exist
-ends the stream, and any other failure backs off for a second so a persistent error cannot spin
-the loop.
+holds one page, so the pump never runs more than one receive ahead of what the handler drains.
+Dropping the stream stops the pump; messages it had already delivered and that were never settled
+redeliver once their visibility lapses. Receive failures surface as items on the stream: a queue
+that does not exist ends the stream, and any other failure backs off for a second so a persistent
+error cannot spin the loop.
+
+## Pages
+
+`ReceiveMessage` returns up to ten messages per round trip, so pages are the transport's own: a
+page handler names one number at the mount site, that number becomes `MaxNumberOfMessages`, and
+one receive call is one page. Nothing buffers on the client, and nothing is split or merged on
+the way to the handler.
+
+```rust
+--8<-- "crates/ruststream-sqs-sns/examples/sqs_pages.rs:handler"
+```
+
+The mount site owes such a handler its size, and the queue options chain after it, as in the
+example above. A page may come back shorter than the size whenever that is all the queue had -
+`ReceiveMessage` makes no promise to fill a call - and it is never empty: a long poll that timed
+out yields no page at all rather than an empty one.
+
+A size above ten is clamped to ten, and the clamp is logged once for the subscription. The
+framework's contract already allows a shorter page than the one asked for, so clamping keeps a
+handler mounted with `batch(nonzero!(50))` portable across brokers, where refusing would make
+this one stricter than the contract it implements.
+
+A single-message handler has no page. It still rides a full receive call - SQS bills per request,
+not per message, so the subscription asks for the protocol maximum and hands the messages over
+one at a time. How many of them a handler processes at once is `workers(n)`, which is a framework
+setting rather than a queue one.
 
 ## Settlement and deferred retry
 
@@ -255,6 +291,7 @@ recipes around it:
 ```bash
 just brokers-up                 # start LocalStack on 127.0.0.1:4566
 cargo run --example sqs_service
+cargo run --example sqs_pages
 cargo run --example sns_fanout
 just brokers-down
 ```
@@ -289,4 +326,8 @@ connected form implements `ruststream::testing::TestableBroker`, so the same bro
 
 It routes by exact queue name and does not simulate SQS product behaviour: visibility timing,
 redelivery, redrive dead-lettering, FIFO ordering, and SNS fan-out are covered by the live suite
-against LocalStack instead.
+against LocalStack instead. Pages are the one place the two transports differ inside: the router
+hands over one delivery at a time, so the test broker assembles pages with the framework's own
+client-side buffer while the real subscriber gets them from `ReceiveMessage`. The mount site is
+the same either way - it names a size and gets pages of at most that - which is what makes a page
+handler testable in process at all.

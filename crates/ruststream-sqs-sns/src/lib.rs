@@ -7,6 +7,9 @@
 //! - Deleting a message is the acknowledgement, zeroing its visibility is the requeue, and a
 //!   retry with a delay sets the visibility timeout to that delay - the framework's deferred
 //!   retry is native, not emulated.
+//! - Pages are native too: `ReceiveMessage` already asks for up to ten messages per round trip,
+//!   so the page size a registration names becomes `MaxNumberOfMessages` and one receive call
+//!   is one page.
 //! - A handler outliving the visibility timeout is protected by crate-owned background
 //!   extension for as long as it holds the message.
 //! - The queue's redrive policy provides dead-lettering; FIFO message group ids map onto the
@@ -30,5 +33,5 @@ pub use broker::{ConnectedSqsBroker, SqsBroker};
 pub use error::SqsError;
 pub use message::{PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER, SqsMessage};
 pub use publisher::{SnsPublish, SnsPublisher, SqsPublish, SqsPublisher};
-pub use queue::SqsQueue;
+pub use queue::{SqsQueue, SqsSubscription};
 pub use subscriber::SqsSubscriber;

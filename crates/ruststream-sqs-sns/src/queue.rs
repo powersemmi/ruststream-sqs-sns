@@ -1,12 +1,15 @@
-//! [`SqsQueue`]: the subscription descriptor.
+//! [`SqsQueue`]: the subscription descriptor, and [`SqsSubscription`]: its mount-site spelling.
 //!
-//! The polling parameters that decide cost and latency are explicit: `wait` (long polling),
-//! `batch` (messages per receive call), and `visibility` (the redelivery timeout the crate
-//! keeps extending while a handler holds a message).
+//! The polling parameters that decide cost and latency are explicit: `wait` (long polling) and
+//! `visibility` (the redelivery timeout the crate keeps extending while a handler holds a
+//! message). How many messages one receive call asks for is not among them - that is the page
+//! size, which a page handler names at the mount site with `batch(n)` and the subscriber maps
+//! onto `MaxNumberOfMessages`.
 
 use std::time::Duration;
 
 use ruststream::SubscriptionSource;
+use ruststream::runtime::{Declared, SubscriberBuilder, SubscriberSettings};
 
 use crate::broker::ConnectedSqsBroker;
 use crate::error::SqsError;
@@ -27,16 +30,17 @@ const MAX_WAIT: Duration = Duration::from_secs(20);
 ///
 /// let source = SqsQueue::new("orders")
 ///     .wait(Duration::from_secs(20))
-///     .batch(10)
 ///     .visibility(Duration::from_secs(30));
 /// # let _ = source;
 /// ```
+///
+/// The same options are also reachable at the mount site through [`SqsSubscription`], which is
+/// where they go when the registration names a page size first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub struct SqsQueue {
     queue: String,
     wait: Duration,
-    batch: i32,
     visibility: Option<Duration>,
     create_if_missing: bool,
 }
@@ -47,7 +51,6 @@ impl SqsQueue {
         Self {
             queue: queue.into(),
             wait: MAX_WAIT,
-            batch: 10,
             visibility: None,
             create_if_missing: false,
         }
@@ -57,12 +60,6 @@ impl SqsQueue {
     /// values above it are rejected before any I/O.
     pub fn wait(mut self, wait: Duration) -> Self {
         self.wait = wait;
-        self
-    }
-
-    /// Messages per receive call (1..=10, the protocol cap). Defaults to 10.
-    pub fn batch(mut self, batch: i32) -> Self {
-        self.batch = batch;
         self
     }
 
@@ -91,10 +88,6 @@ impl SqsQueue {
         self.wait
     }
 
-    pub(crate) fn batch_value(&self) -> i32 {
-        self.batch
-    }
-
     pub(crate) fn visibility_value(&self) -> Option<Duration> {
         self.visibility
     }
@@ -111,11 +104,6 @@ impl SqsQueue {
         if self.wait > MAX_WAIT {
             return Err(SqsError::InvalidQueue(
                 "wait exceeds the 20 second long-polling cap".into(),
-            ));
-        }
-        if !(1..=10).contains(&self.batch) {
-            return Err(SqsError::InvalidQueue(
-                "batch must be within 1..=10 (the receive cap)".into(),
             ));
         }
         if let Some(visibility) = self.visibility
@@ -141,6 +129,66 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
     }
 }
 
+/// The queue options in mount-site spelling, for a registration whose source is an
+/// [`SqsQueue`].
+///
+/// The framework's own steps come first - the name builds the source, and `batch(n)` names the
+/// page size - and these chain after them, in this crate's vocabulary. The bound on the source
+/// type is what keeps them off a builder for another broker.
+///
+/// The trait is in the [prelude](crate::prelude); a file that does not glob it imports the
+/// trait to reach the methods, as with any extension trait.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use ruststream_sqs_sns::prelude::*;
+/// # #[derive(Deserialized)]
+/// # struct Order<'a>(&'a [u8]);
+///
+/// #[subscriber(SqsQueue::new("orders"))]
+/// async fn reconcile(orders: &[Order<'_>]) -> HandlerOutcome {
+///     let _ = orders.len();
+///     HandlerOutcome::ack()
+/// }
+///
+/// # fn wire() {
+/// let _mountable = reconcile.batch(nonzero!(6)).wait(Duration::from_secs(20));
+/// # }
+/// ```
+pub trait SqsSubscription: Sized {
+    /// Long-polling wait per receive call. See [`SqsQueue::wait`].
+    #[must_use]
+    fn wait(self, wait: Duration) -> Self;
+
+    /// The visibility timeout requested per receive. See [`SqsQueue::visibility`].
+    #[must_use]
+    fn visibility(self, visibility: Duration) -> Self;
+
+    /// Creates the queue on subscribe when it is missing. See [`SqsQueue::create_if_missing`].
+    #[must_use]
+    fn create_if_missing(self) -> Self;
+}
+
+impl<Def, State, DefCodec> SqsSubscription for SubscriberBuilder<Def, SqsQueue, State, DefCodec>
+where
+    Def: Declared,
+{
+    fn wait(self, wait: Duration) -> Self {
+        self.map_source(|source| source.wait(wait))
+    }
+
+    fn visibility(self, visibility: Duration) -> Self {
+        self.map_source(|source| source.visibility(visibility))
+    }
+
+    fn create_if_missing(self) -> Self {
+        self.map_source(SqsQueue::create_if_missing)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,13 +210,15 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_batch_is_rejected_before_io() {
+    fn out_of_range_visibility_is_rejected_before_io() {
         assert!(matches!(
-            SqsQueue::new("q").batch(11).validate(),
+            SqsQueue::new("q").visibility(Duration::ZERO).validate(),
             Err(SqsError::InvalidQueue(_))
         ));
         assert!(matches!(
-            SqsQueue::new("q").batch(0).validate(),
+            SqsQueue::new("q")
+                .visibility(Duration::from_hours(13))
+                .validate(),
             Err(SqsError::InvalidQueue(_))
         ));
     }

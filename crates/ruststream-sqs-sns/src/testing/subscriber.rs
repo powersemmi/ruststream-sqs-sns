@@ -1,12 +1,15 @@
 //! [`SqsTestSubscriber`] and [`SqsTestMessage`].
 
 use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use futures::Stream;
 
 use ruststream::{
-    AckError, HeaderMap, IncomingMessage, Partitioned, Subscriber, testing::Coordinator,
+    AckError, BatchSubscriber, BufferedSubscriber, HeaderMap, IncomingMessage, Partitioned,
+    Subscriber, testing::Coordinator,
 };
 
 use crate::PARTITION_KEY_HEADER;
@@ -14,19 +17,21 @@ use crate::error::SqsError;
 use crate::testing::broker::TestState;
 use crate::testing::router::{Delivery, DeliveryReceiver, DeliverySender, SubscriptionId};
 
+/// How long a partial page waits for company. The in-process router hands over one delivery at a
+/// time, so the page is assembled on the client, and the window has to outlast the gap between
+/// two publishes a test writes back to back - which is what makes a page in a test deterministic
+/// rather than a race with the dispatch loop.
+const PAGE_WINDOW: Duration = Duration::from_millis(100);
+
 /// Subscriber returned by [`ConnectedSqsTestBroker`](crate::testing::ConnectedSqsTestBroker).
 ///
 /// Dropping it unregisters the subscription, so handlers stop receiving as soon as their task
 /// finishes.
-pub struct SqsTestSubscriber {
-    state: Arc<TestState>,
-    id: SubscriptionId,
-    rx: DeliveryReceiver,
-    requeue: DeliverySender,
-    /// A clone of the broker's harness coordinator, threaded into each yielded message so a
-    /// requeue re-counts and a consumed delivery decrements. `None` outside a harness run.
-    coordinator: Option<Coordinator>,
-}
+///
+/// The real subscriber pages on the wire, one `ReceiveMessage` per page; the in-process router
+/// has no such call, so pages here are assembled by the framework's own client-side buffer. The
+/// mount site reads the same either way: it names a size and gets pages of at most that.
+pub struct SqsTestSubscriber(BufferedSubscriber<Deliveries>);
 
 impl std::fmt::Debug for SqsTestSubscriber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,23 +47,63 @@ impl SqsTestSubscriber {
         requeue: DeliverySender,
         coordinator: Option<Coordinator>,
     ) -> Self {
-        Self {
-            state,
-            id,
-            rx,
-            requeue,
-            coordinator,
-        }
+        Self(
+            BufferedSubscriber::new(Deliveries {
+                state,
+                id,
+                rx,
+                requeue,
+                coordinator,
+            })
+            .max_wait(PAGE_WINDOW),
+        )
     }
 }
 
-impl Drop for SqsTestSubscriber {
+impl Subscriber for SqsTestSubscriber {
+    type Message = SqsTestMessage;
+    type Error = SqsError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
+        self.0.stream()
+    }
+}
+
+impl BatchSubscriber for SqsTestSubscriber {
+    type Batch = Vec<SqsTestMessage>;
+
+    fn batches(
+        &mut self,
+        size: NonZeroUsize,
+    ) -> impl Stream<Item = Result<Self::Batch, SqsError>> + Send + '_ {
+        self.0.batches(size)
+    }
+}
+
+/// The one-at-a-time delivery lane the buffer above pages: the subscription's own channel.
+struct Deliveries {
+    state: Arc<TestState>,
+    id: SubscriptionId,
+    rx: DeliveryReceiver,
+    requeue: DeliverySender,
+    /// A clone of the broker's harness coordinator, threaded into each yielded message so a
+    /// requeue re-counts and a consumed delivery decrements. `None` outside a harness run.
+    coordinator: Option<Coordinator>,
+}
+
+impl std::fmt::Debug for Deliveries {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deliveries").finish_non_exhaustive()
+    }
+}
+
+impl Drop for Deliveries {
     fn drop(&mut self) {
         self.state.router.unsubscribe(self.id);
     }
 }
 
-impl Subscriber for SqsTestSubscriber {
+impl Subscriber for Deliveries {
     type Message = SqsTestMessage;
     type Error = SqsError;
 

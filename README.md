@@ -28,7 +28,8 @@
 - **Lazy startup contract.** `SqsBroker::new()` is synchronous and does no I/O (region and credentials resolve from the environment on connect; `from_config` takes a prebuilt `SdkConfig`; `endpoint` + `test_credentials` target a local stack); the runtime connects once at startup, so the broker composes with `#[ruststream::app]`.
 - **Native settlement.** `ack` deletes the message, `nack(requeue = true)` zeroes its visibility, and `retry_after(delay)` sets the visibility to the delay - the framework's deferred retry is the transport's own verb, not an emulation. `nack(requeue = false)` deletes: poison routing belongs to the queue's redrive policy, and the receive count is surfaced as a header.
 - **Crate-owned visibility extension.** A handler outliving the visibility timeout is protected: the crate keeps extending the visibility of every in-flight message for as long as the handler holds it.
-- **Explicit polling settings.** `SqsQueue::new("orders").wait(20s).batch(10).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default. Logical destination names map onto SQS queue names by replacing characters SQS forbids with `-` (a `.fifo` suffix survives).
+- **Explicit polling settings.** `SqsQueue::new("orders").wait(20s).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default, and are equally reachable at the mount site through the `SqsSubscription` trait. Logical destination names map onto SQS queue names by replacing characters SQS forbids with `-` (a `.fifo` suffix survives).
+- **Native pages.** `ReceiveMessage` is already a paging call, so a page handler's `batch(n)` becomes `MaxNumberOfMessages` and one receive is one page - nothing buffers on the client. A size above the protocol's ten is clamped to ten, with a log line, rather than refused.
 - **FIFO ordering as the partition key.** On `.fifo` destinations the `partition-key` header becomes the message group id (and comes back as the same header), with a unique deduplication id per send. `publisher.with_group_id("user-42")` carries that header as a publisher base, and a message naming the header itself wins over it.
 - **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
 - **Text bodies.** SQS bodies are text: UTF-8 payloads pass through untouched, binary payloads travel base64-encoded with a marker attribute and decode transparently on receive.
@@ -61,7 +62,7 @@ struct Order {
     id: u64,
 }
 
-#[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)).batch(10))]
+#[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)))]
 async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
     HandlerOutcome::ack()
@@ -97,7 +98,7 @@ SQS behaviour itself (visibility, redelivery, FIFO, SNS fan-out) is covered by t
 ruststream-sqs-sns/
 ├── crates/
 │   └── ruststream-sqs-sns/     the published crate
-│       └── examples/           runnable sqs_* / sns_* examples
+│       └── examples/           runnable sqs_* / sns_* examples (service, pages, FIFO, fan-out)
 ├── docker-compose.test.yml     LocalStack for the live suite
 └── Cargo.toml                  workspace
 ```
