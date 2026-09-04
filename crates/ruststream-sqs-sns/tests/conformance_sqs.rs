@@ -30,7 +30,7 @@ async fn sqs_test_broker_passes_conformance_suite() {
 // would bind one concrete lifetime.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_test_broker_honours_the_page_size() {
+async fn the_test_broker_honours_the_batch_size() {
     capabilities::batches(
         SqsTestBroker::new,
         |name| Name::new(name.to_owned()),
@@ -39,12 +39,12 @@ async fn the_test_broker_honours_the_page_size() {
     .await;
 }
 
-/// The page size against the real service, where it is `MaxNumberOfMessages` rather than a
+/// The batch size against the real service, where it is `MaxNumberOfMessages` rather than a
 /// client-side buffer: the suite opens the subscription smaller than the run, so a receive that
-/// ignored the size would come back with a page too long.
+/// ignored the size would come back with a batch too long.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sqs_honours_the_page_size() {
+async fn sqs_honours_the_batch_size() {
     let Some(endpoint) = test_endpoint() else {
         return;
     };

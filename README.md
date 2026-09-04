@@ -29,7 +29,7 @@
 - **Native settlement.** `ack` deletes the message, `nack(requeue = true)` zeroes its visibility, and `retry_after(delay)` sets the visibility to the delay - the framework's deferred retry is the transport's own verb, not an emulation. `nack(requeue = false)` deletes: poison routing belongs to the queue's redrive policy, and the receive count is surfaced as a header.
 - **Crate-owned visibility extension.** A handler outliving the visibility timeout is protected: the crate keeps extending the visibility of every in-flight message for as long as the handler holds it.
 - **Explicit polling settings.** `SqsQueue::new("orders").wait(20s).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default, and are equally reachable at the mount site through the `SqsSubscription` trait. Logical destination names map onto SQS queue names by replacing characters SQS forbids with `-` (a `.fifo` suffix survives).
-- **Native pages.** `ReceiveMessage` is already a paging call, so a page handler's `batch(n)` becomes `MaxNumberOfMessages` and one receive is one page - nothing buffers on the client. A size above the protocol's ten is clamped to ten, with a log line, rather than refused.
+- **Native batches.** `ReceiveMessage` is already a batching call, so a batch handler's `batch(n)` becomes `MaxNumberOfMessages` and one receive is one batch - nothing buffers on the client. A size above the protocol's ten is clamped to ten, with a log line, rather than refused.
 - **FIFO ordering as the partition key.** On `.fifo` destinations the `partition-key` header becomes the message group id (and comes back as the same header), with a unique deduplication id per send. `publisher.with_group_id("user-42")` carries that header as a publisher base, and a message naming the header itself wins over it.
 - **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
 - **Text bodies.** SQS bodies are text, and the service's idea of text is narrower than UTF-8: a payload it accepts passes through untouched, and anything else - binary, or valid UTF-8 carrying control characters - travels base64-encoded with a marker attribute and decodes transparently on receive. The same rule picks `String` or `Binary` for each header attribute.
@@ -98,7 +98,7 @@ SQS behaviour itself (visibility, redelivery, FIFO, SNS fan-out) is covered by t
 ruststream-sqs-sns/
 ├── crates/
 │   └── ruststream-sqs-sns/     the published crate
-│       └── examples/           runnable sqs_* / sns_* examples (service, pages, FIFO, fan-out)
+│       └── examples/           runnable sqs_* / sns_* examples (service, batches, FIFO, fan-out)
 ├── docker-compose.test.yml     LocalStack for the live suite
 └── Cargo.toml                  workspace
 ```

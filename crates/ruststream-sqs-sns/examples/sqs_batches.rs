@@ -1,8 +1,8 @@
-//! Pages: one handler call per `ReceiveMessage`, so a batch of orders costs one round trip
+//! Batches: one handler call per `ReceiveMessage`, so a batch of orders costs one round trip
 //! each way.
 //!
 //! Run a local stack first (`just brokers-up`), then:
-//! `cargo run --example sqs_pages`
+//! `cargo run --example sqs_batches`
 
 use std::io;
 use std::time::Duration;
@@ -11,18 +11,18 @@ use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Outgoing)]
-#[outgoing(name = "orders-pages")]
+#[outgoing(name = "orders-batches")]
 struct Order {
     id: u64,
 }
 
 // --8<-- [start:handler]
-/// A page handler: the slice is one `ReceiveMessage` worth of orders, settled as a whole. It
+/// A batch handler: the slice is one `ReceiveMessage` worth of orders, settled as a whole. It
 /// holds at most the size the mount site names, and as few as one when that is all the queue
 /// had at the moment of the call.
-#[subscriber(SqsQueue::new("orders-pages"))]
+#[subscriber(SqsQueue::new("orders-batches"))]
 async fn reconcile(orders: &[Order]) -> HandlerOutcome {
-    println!("reconciling a page of {} orders", orders.len());
+    println!("reconciling a batch of {} orders", orders.len());
     HandlerOutcome::ack()
 }
 // --8<-- [end:handler]
@@ -30,7 +30,7 @@ async fn reconcile(orders: &[Order]) -> HandlerOutcome {
 // --8<-- [start:mount]
 #[app]
 fn service() -> impl App {
-    RustStream::new(AppInfo::new("orders-pages", "0.1.0")).with_broker(
+    RustStream::new(AppInfo::new("orders-batches", "0.1.0")).with_broker(
         SqsBroker::new()
             .endpoint("http://localhost:4566")
             .test_credentials()

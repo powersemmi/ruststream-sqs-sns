@@ -1,6 +1,6 @@
 //! Handler-surface checks against the in-process transport.
 //!
-//! The two forms this crate's documentation promises on a queue whose bodies are text: a page
+//! The two forms this crate's documentation promises on a queue whose bodies are text: a batch
 //! bounded by the size its mount site named, and the byte lane a service reads that body
 //! through.
 
@@ -22,28 +22,28 @@ struct Frame<'a>(&'a [u8]);
 #[derive(Outgoing, Serialized)]
 struct Wire(Vec<u8>);
 
-static PAGES: Mutex<Vec<Vec<Vec<u8>>>> = Mutex::new(Vec::new());
+static BATCHES: Mutex<Vec<Vec<Vec<u8>>>> = Mutex::new(Vec::new());
 
-/// A page handler. The size is the mount site's, and the subscription is opened to it: on the
+/// A batch handler. The size is the mount site's, and the subscription is opened to it: on the
 /// real broker it becomes `MaxNumberOfMessages`, and in process the framework's buffer honours
 /// the same bound.
 #[subscriber]
 async fn drain(frames: &[Frame<'_>]) -> HandlerOutcome {
-    PAGES
+    BATCHES
         .lock()
-        .expect("page log")
+        .expect("batch log")
         .push(frames.iter().map(|frame| frame.0.to_vec()).collect());
     HandlerOutcome::ack()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_page_handler_opens_its_subscription_at_the_size_it_named() {
+async fn a_batch_handler_opens_its_subscription_at_the_size_it_named() {
     let broker = SqsTestBroker::new();
     // A producer handle taken before the app is built: the harness's own injection drives each
-    // publish to a standstill, which would close a page per message and say nothing about the
+    // publish to a standstill, which would close a batch per message and say nothing about the
     // size bound this test is here for.
     let producer = broker.publisher();
-    let app = RustStream::new(AppInfo::new("pages", "0.1.0")).with_broker(broker, |b| {
+    let app = RustStream::new(AppInfo::new("batches", "0.1.0")).with_broker(broker, |b| {
         b.include(drain.name("orders").batch(nonzero!(2)));
     });
 
@@ -56,16 +56,16 @@ async fn a_page_handler_opens_its_subscription_at_the_size_it_named() {
             .await
             .expect("publish succeeds");
     }
-    tb.settle().await.expect("the page settles");
+    tb.settle().await.expect("the batch settles");
 
     tb.broker::<SqsTestBroker>()
         .subscriber("orders")
         .assert_called_once()
-        .assert_page_sizes(&[2])
+        .assert_batch_sizes(&[2])
         .settled(HandlerOutcome::ack());
     assert_eq!(
-        PAGES.lock().expect("page log").as_slice(),
+        BATCHES.lock().expect("batch log").as_slice(),
         &[vec![b"first".to_vec(), b"second".to_vec()]],
-        "one page closed at the size the mount named, and the bytes crossed untouched",
+        "one batch closed at the size the mount named, and the bytes crossed untouched",
     );
 }

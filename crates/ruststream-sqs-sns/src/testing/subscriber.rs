@@ -17,20 +17,21 @@ use crate::error::SqsError;
 use crate::testing::broker::TestState;
 use crate::testing::router::{Delivery, DeliveryReceiver, DeliverySender, SubscriptionId};
 
-/// How long a partial page waits for company. The in-process router hands over one delivery at a
-/// time, so the page is assembled on the client, and the window has to outlast the gap between
-/// two publishes a test writes back to back - which is what makes a page in a test deterministic
-/// rather than a race with the dispatch loop.
-const PAGE_WINDOW: Duration = Duration::from_millis(100);
+/// How long a partial batch waits for company. The in-process router hands over one delivery at
+/// a time, so the batch is assembled on the client, and the window has to outlast the gap
+/// between two publishes a test writes back to back - which is what makes a batch in a test
+/// deterministic rather than a race with the dispatch loop.
+const BATCH_WINDOW: Duration = Duration::from_millis(100);
 
 /// Subscriber returned by [`ConnectedSqsTestBroker`](crate::testing::ConnectedSqsTestBroker).
 ///
 /// Dropping it unregisters the subscription, so handlers stop receiving as soon as their task
 /// finishes.
 ///
-/// The real subscriber pages on the wire, one `ReceiveMessage` per page; the in-process router
-/// has no such call, so pages here are assembled by the framework's own client-side buffer. The
-/// mount site reads the same either way: it names a size and gets pages of at most that.
+/// The real subscriber batches on the wire, one `ReceiveMessage` per batch; the in-process
+/// router has no such call, so batches here are assembled by the framework's own client-side
+/// buffer. The mount site reads the same either way: it names a size and gets batches of at most
+/// that.
 pub struct SqsTestSubscriber(BufferedSubscriber<Deliveries>);
 
 impl std::fmt::Debug for SqsTestSubscriber {
@@ -55,7 +56,7 @@ impl SqsTestSubscriber {
                 requeue,
                 coordinator,
             })
-            .max_wait(PAGE_WINDOW),
+            .max_wait(BATCH_WINDOW),
         )
     }
 }
@@ -80,7 +81,7 @@ impl BatchSubscriber for SqsTestSubscriber {
     }
 }
 
-/// The one-at-a-time delivery lane the buffer above pages: the subscription's own channel.
+/// The one-at-a-time delivery lane the buffer above batches: the subscription's own channel.
 struct Deliveries {
     state: Arc<TestState>,
     id: SubscriptionId,

@@ -1,12 +1,12 @@
 //! [`SqsSubscriber`]: a stream of deliveries backed by a long-polling pump task.
 //!
-//! `ReceiveMessage` is already a paging call - `MaxNumberOfMessages` asks for up to ten messages
-//! per round trip - so pages are native here: the page size a registration names becomes that
-//! parameter, and one receive call is one page. A single-message subscription rides the same
-//! call at the protocol maximum and hands the messages over one at a time, because SQS bills per
-//! request rather than per message.
+//! `ReceiveMessage` is already a batching call - `MaxNumberOfMessages` asks for up to ten
+//! messages per round trip - so batches are native here: the batch size a registration names
+//! becomes that parameter, and one receive call is one batch. A single-message subscription
+//! rides the same call at the protocol maximum and hands the messages over one at a time,
+//! because SQS bills per request rather than per message.
 //!
-//! The pump forwards whole pages into a channel that holds one, so it never runs more than one
+//! The pump forwards whole batches into a channel that holds one, so it never runs more than one
 //! receive ahead of what the consumer drains; settlement goes straight through the SDK client
 //! carried by each message (no round trip). Cancelling the in-flight long poll happens only when
 //! the stream is dropped, where the cost (one closed HTTP connection) does not matter.
@@ -30,7 +30,7 @@ use crate::queue::SqsQueue;
 const DEFAULT_VISIBILITY: Duration = Duration::from_secs(30);
 
 /// The protocol cap on `MaxNumberOfMessages`: one `ReceiveMessage` returns at most ten
-/// messages, whatever a page size asks for.
+/// messages, whatever a batch size asks for.
 const RECEIVE_CAP: usize = 10;
 
 /// The receive size as the SDK spells it. The clamp is what makes the conversion exact, and
@@ -77,13 +77,13 @@ impl SqsSubscriber {
     }
 
     /// Starts a pump asking for `size` messages per receive (clamped to the protocol cap) and
-    /// returns the page channel.
+    /// returns the batch channel.
     ///
     /// The pump lives as long as the receiver: the returned stream owns it, and dropping the
     /// stream closes the channel, which ends the pump on its next select. Because `stream` and
     /// `batches` borrow the subscriber mutably, at most one pump runs per subscription.
     fn pump(&self, size: usize) -> mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>> {
-        // One page in flight, so the pump stays exactly one receive ahead of the consumer.
+        // One batch in flight, so the pump stays exactly one receive ahead of the consumer.
         let (tx, rx) = mpsc::channel(1);
         tokio::spawn(pump(
             self.client.clone(),
@@ -107,8 +107,8 @@ struct Receive {
     visibility: Option<Duration>,
 }
 
-/// Turns a page channel into the stream shape both lanes are built from.
-fn pages(
+/// Turns a batch channel into the stream shape both lanes are built from.
+fn batch_stream(
     mut rx: mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>>,
 ) -> impl Stream<Item = Result<Vec<SqsMessage>, SqsError>> + Send {
     futures::stream::poll_fn(move |cx| rx.poll_recv(cx))
@@ -122,8 +122,8 @@ impl Subscriber for SqsSubscriber {
         // A single-message subscription still receives a whole call's worth: SQS charges per
         // request, so asking for the protocol maximum and handing the messages over one at a
         // time costs a tenth of what one receive per message would.
-        pages(self.pump(RECEIVE_CAP)).flat_map(|page| {
-            futures::stream::iter(match page {
+        batch_stream(self.pump(RECEIVE_CAP)).flat_map(|batch| {
+            futures::stream::iter(match batch {
                 Ok(messages) => messages.into_iter().map(Ok).collect(),
                 Err(err) => vec![Err(err)],
             })
@@ -131,14 +131,14 @@ impl Subscriber for SqsSubscriber {
     }
 }
 
-/// Pages are the transport's own: the size a registration names becomes `MaxNumberOfMessages`,
-/// and one `ReceiveMessage` call is one page.
+/// Batches are the transport's own: the size a registration names becomes
+/// `MaxNumberOfMessages`, and one `ReceiveMessage` call is one batch.
 ///
 /// `ReceiveMessage` returns at most ten messages, so a larger size is clamped to ten rather than
-/// refused: the framework's contract already lets a page come back shorter than it was asked
+/// refused: the framework's contract already lets a batch come back shorter than it was asked
 /// for, and refusing would make this broker stricter than the contract - a handler mounted with
-/// `batch(nonzero!(50))` on a broker whose pages go that high would stop compiling its way onto
-/// SQS. The clamp is logged once per subscription so it is not silent.
+/// `batch(nonzero!(50))` on a broker whose batches go that high would stop compiling its way
+/// onto SQS. The clamp is logged once per subscription so it is not silent.
 impl BatchSubscriber for SqsSubscriber {
     type Batch = Vec<SqsMessage>;
 
@@ -152,10 +152,10 @@ impl BatchSubscriber for SqsSubscriber {
                 queue_url = %self.queue_url,
                 requested,
                 delivered = RECEIVE_CAP,
-                "sqs receives at most 10 messages per call; pages are capped at that",
+                "sqs receives at most 10 messages per call; batches are capped at that",
             );
         }
-        pages(self.pump(requested))
+        batch_stream(self.pump(requested))
     }
 }
 
@@ -188,7 +188,7 @@ async fn pump(
 
         match received {
             Ok(output) => {
-                let page: Vec<SqsMessage> = output
+                let batch: Vec<SqsMessage> = output
                     .messages()
                     .iter()
                     .filter_map(|message| {
@@ -202,12 +202,12 @@ async fn pump(
                         ))
                     })
                     .collect();
-                // A long poll that timed out has no page to deliver, and an empty one would
-                // break the "a page is never empty" half of the contract.
-                if page.is_empty() {
+                // A long poll that timed out has no batch to deliver, and an empty one would
+                // break the "a batch is never empty" half of the contract.
+                if batch.is_empty() {
                     continue;
                 }
-                if out.send(Ok(page)).await.is_err() {
+                if out.send(Ok(batch)).await.is_err() {
                     return;
                 }
             }

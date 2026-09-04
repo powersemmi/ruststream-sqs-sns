@@ -7,9 +7,9 @@
 //! - Deleting a message is the acknowledgement, zeroing its visibility is the requeue, and a
 //!   retry with a delay sets the visibility timeout to that delay - the framework's deferred
 //!   retry is native, not emulated.
-//! - Pages are native too: `ReceiveMessage` already asks for up to ten messages per round trip,
-//!   so the page size a registration names becomes `MaxNumberOfMessages` and one receive call
-//!   is one page.
+//! - Batches are native too: `ReceiveMessage` already asks for up to ten messages per round
+//!   trip, so the batch size a registration names becomes `MaxNumberOfMessages` and one receive
+//!   call is one batch.
 //! - A handler outliving the visibility timeout is protected by crate-owned background
 //!   extension for as long as it holds the message.
 //! - The queue's redrive policy provides dead-lettering; FIFO message group ids map onto the

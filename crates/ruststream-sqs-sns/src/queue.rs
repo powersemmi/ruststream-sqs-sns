@@ -2,8 +2,8 @@
 //!
 //! The polling parameters that decide cost and latency are explicit: `wait` (long polling) and
 //! `visibility` (the redelivery timeout the crate keeps extending while a handler holds a
-//! message). How many messages one receive call asks for is not among them - that is the page
-//! size, which a page handler names at the mount site with `batch(n)` and the subscriber maps
+//! message). How many messages one receive call asks for is not among them - that is the batch
+//! size, which a batch handler names at the mount site with `batch(n)` and the subscriber maps
 //! onto `MaxNumberOfMessages`.
 
 use std::time::Duration;
@@ -35,7 +35,7 @@ const MAX_WAIT: Duration = Duration::from_secs(20);
 /// ```
 ///
 /// The same options are also reachable at the mount site through [`SqsSubscription`], which is
-/// where they go when the registration names a page size first.
+/// where they go when the registration names a batch size first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub struct SqsQueue {
@@ -133,7 +133,7 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
 /// [`SqsQueue`].
 ///
 /// The framework's own steps come first - the name builds the source, and `batch(n)` names the
-/// page size - and these chain after them, in this crate's vocabulary. The bound on the source
+/// batch size - and these chain after them, in this crate's vocabulary. The bound on the source
 /// type is what keeps them off a builder for another broker.
 ///
 /// The trait is in the [prelude](crate::prelude); a file that does not glob it imports the
