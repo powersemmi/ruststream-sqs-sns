@@ -89,7 +89,8 @@ outside `1s..=12h` fails with `SqsError::InvalidQueue` at subscribe time, withou
 
 `SqsQueue` implements `SubscriptionSource`, so it sits inline in the `#[subscriber(..)]`
 decorator, and the queue is named either by URL or by name (resolved through `GetQueueUrl` and
-cached):
+cached). The examples add `create_if_missing()` because they run against a local stack with
+nothing provisioned; a production service leaves it off:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_service.rs:handler"

@@ -14,7 +14,13 @@ struct Order {
     id: u64,
 }
 
-#[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)))]
+// The local stack this example runs against has nothing provisioned, so the descriptor opens the
+// queue itself. A production service drops that step and takes the queue from its infrastructure.
+#[subscriber(
+    SqsQueue::new("orders")
+        .wait(Duration::from_secs(20))
+        .create_if_missing()
+)]
 async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
     HandlerOutcome::ack()
