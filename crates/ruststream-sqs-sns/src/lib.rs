@@ -15,7 +15,7 @@
 //! - The queue's redrive policy provides dead-lettering; FIFO message group ids map onto the
 //!   partition key.
 //! - SNS appears only as a publisher (fan-out to queues and other endpoints), as a distinct
-//!   [`SnsPublish`] policy.
+//!   [`SnsPublish`] policy a mount site binds with `.out(Reply, SnsPublish)`.
 //! - Bodies are text, and what the service will not take as text (binary, and equally the
 //!   valid-UTF-8 control characters a binary codec emits) travels base64-encoded and decodes
 //!   transparently on receive.

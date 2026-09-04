@@ -141,6 +141,11 @@ impl Publisher for SqsPublisher {
 /// The publish policy for [`SqsPublisher`]: pure declaration, constructible anywhere, paired
 /// with the connected broker by the runtime after `connect`.
 ///
+/// It is also the broker's [`DefaultPublish`](ruststream::DefaultPublish) policy, so a
+/// `publish("dest")` handler whose mount binds no reply position of its own replies through it,
+/// and `.out(Reply, SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
+/// changes the answer.
+///
 /// # Examples
 ///
 /// ```
@@ -297,13 +302,36 @@ impl Publisher for SnsPublisher {
 /// The publish policy for [`SnsPublisher`]: names the SNS fan-out mode as a distinct policy
 /// type, so direct queue publishing and topic fan-out never mix silently.
 ///
+/// A handler names where its reply goes; the mount site names who takes it there, by binding the
+/// reply position to this policy instead of the broker's default [`SqsPublish`].
+///
 /// # Examples
 ///
 /// ```
-/// use ruststream_sqs_sns::SnsPublish;
+/// use ruststream_sqs_sns::prelude::*;
+/// use serde::{Deserialize, Serialize};
 ///
-/// let policy = SnsPublish::default();
-/// # let _ = policy;
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize)]
+/// struct OrderPlaced {
+///     id: u64,
+/// }
+///
+/// #[subscriber("orders", publish("orders-events"))]
+/// async fn accept(order: &Order) -> OrderPlaced {
+///     OrderPlaced { id: order.id }
+/// }
+///
+/// // Without the step the reply would ride `SqsPublish` and land on a queue named
+/// // `orders-events`; with it the same reply fans out from the topic of that name.
+/// fn routes() -> impl RouterDef<SqsBroker> {
+///     Router::new().include(accept).out(Reply, SnsPublish).build()
+/// }
+/// # let _ = routes;
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use]

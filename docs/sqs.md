@@ -210,9 +210,24 @@ with the broker at startup. Naming a policy picks the destination kind:
 
 - `SqsPublish` pairs into `SqsPublisher`: sends directly to a queue, named by URL or by name. It
   is also the broker's default publish policy, so a `#[subscriber(.., publish("dest"))]` handler
-  mounted without an explicit publisher sends through it.
+  mounted with no policy of its own sends through it.
 - `SnsPublish` pairs into `SnsPublisher`: publishes a notification to an SNS topic, named by ARN
   or by name (a name resolves through the idempotent `CreateTopic`).
+
+A handler names where its reply goes; the mount site names who takes it there. `.out(Reply,
+policy)` is the verb that binds it: `Reply` is the marker for the value a `publish("dest")`
+handler returns, and the steps after the call (`.codec(..)`, `.transform(..)`) ride the position
+it named. A mount that names no policy keeps `SqsPublish`, so a queue-to-queue service writes
+`b.include(handler)` and nothing more; sending the same reply to a topic instead is one step on
+the chain:
+
+```rust
+--8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:reply"
+```
+
+The mount that binds it is in [SNS fan-out](#sns-fan-out). Because the policy is a value, it is
+equally the argument to the lifecycle hooks (`b.after_startup(Publish, ..)`), which is where a
+service publishes outside a handler.
 
 The prelude also exports `SqsPublish` as `Publish`, the name every broker crate gives the policy a
 mount site hands to `include` and the lifecycle hooks; the examples use it. `SnsPublish` keeps its
@@ -261,8 +276,8 @@ of inside an SNS envelope:
 Topology administration runs on the broker's own lifecycle ladder rather than through the
 application builder: in production the topic and its subscriptions are provisioned as
 infrastructure. The example wires them from an `after_startup` hook, where the queues already
-exist because the subscriptions opened them, and publishes one notification through the
-`SnsPublish` policy:
+exist because the subscriptions opened them, then places one order on a queue and lets the
+handler's reply fan out - `.out(Reply, SnsPublish)` is the whole of the fan-out wiring:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:app"
