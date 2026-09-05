@@ -22,7 +22,7 @@ aws-config = "1.10"
 # rustls-webpki 0.101); the modern hyper-1/rustls-0.23 stack comes from default-https-client.
 aws-sdk-sqs = { version = "1.105", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-sns = { version = "1.107", default-features = false, features = ["default-https-client", "rt-tokio"] }
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 futures = "0.3"
 thiserror = "2"
