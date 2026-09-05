@@ -1,12 +1,18 @@
 //! [`SqsPublisher`] (direct-to-queue) and [`SnsPublisher`] (topic fan-out), with their
 //! policies.
 
+use std::future::{Future, ready};
+use std::sync::Arc;
+
+use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
+use ruststream::{HeaderMap, OutgoingMessage, PairError, PublishPolicy, Publisher};
 
 use crate::broker::{ConnectedSqsBroker, Core, CoreCell};
 use crate::error::{SqsError, sdk_err};
-use crate::message::{ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body};
+use crate::message::{
+    ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body, is_service_text,
+};
 
 /// Publishes messages directly to SQS queues (name or URL as the destination).
 ///
@@ -17,6 +23,7 @@ use crate::message::{ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes
 #[derive(Clone)]
 pub struct SqsPublisher {
     cell: CoreCell,
+    base: Option<HeaderMap>,
 }
 
 impl std::fmt::Debug for SqsPublisher {
@@ -27,7 +34,42 @@ impl std::fmt::Debug for SqsPublisher {
 
 impl SqsPublisher {
     pub(crate) fn new(cell: CoreCell) -> Self {
-        Self { cell }
+        Self { cell, base: None }
+    }
+
+    /// Returns a handle whose sends carry `group` as the FIFO message group id.
+    ///
+    /// The handle aliases the same connection; only the group differs. It carries the group as a
+    /// base `partition-key` header, so a message that names `partition-key` itself wins.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::runtime::PublishExt;
+    /// use ruststream::{Outgoing, Serialized};
+    /// use ruststream_sqs_sns::SqsBroker;
+    ///
+    /// // The order is already encoded, so it names itself serialized and leaves byte for byte.
+    /// #[derive(Outgoing, Serialized)]
+    /// struct Order(Vec<u8>);
+    ///
+    /// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// let publisher = SqsBroker::new().publisher();
+    /// publisher
+    ///     .with_group_id("user-42")
+    ///     .message(&Order(br#"{"id":1}"#.to_vec()))
+    ///     .to("orders.fifo")
+    ///     .publish()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_group_id(&self, group: impl Into<String>) -> Self {
+        Self {
+            cell: Arc::clone(&self.cell),
+            base: Some(group_headers(group)),
+        }
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -41,6 +83,13 @@ impl SqsPublisher {
 /// extension-comparison lint; AWS itself only accepts the lowercase suffix.
 fn is_fifo(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with(".fifo")
+}
+
+/// The one-entry base map a group-carrying handle publishes under.
+fn group_headers(group: impl Into<String>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(PARTITION_KEY_HEADER, group.into());
+    headers
 }
 
 /// A process-unique deduplication id: FIFO queues without content-based deduplication require
@@ -70,6 +119,7 @@ impl Publisher for SqsPublisher {
             send = send.set_message_attributes(Some(attributes));
         }
         if is_fifo(msg.name()) || is_fifo(&url) {
+            // FIFO rejects a send with no group, so the literal closes the ladder.
             send = send
                 .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
                 .message_deduplication_id(dedup_id());
@@ -82,10 +132,19 @@ impl Publisher for SqsPublisher {
                 source: sdk_err(&e),
             })
     }
+
+    fn base_headers(&self) -> Option<&HeaderMap> {
+        self.base.as_ref()
+    }
 }
 
 /// The publish policy for [`SqsPublisher`]: pure declaration, constructible anywhere, paired
 /// with the connected broker by the runtime after `connect`.
+///
+/// It is also the broker's [`DefaultPublish`](ruststream::DefaultPublish) policy, so a
+/// `publish("dest")` handler whose mount binds no reply position of its own replies through it,
+/// and `.out(Reply, SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
+/// changes the answer.
 ///
 /// # Examples
 ///
@@ -102,8 +161,11 @@ pub struct SqsPublish;
 impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
     type Live = SqsPublisher;
 
-    async fn pair(self, connected: &ConnectedSqsBroker) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedSqsBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 
@@ -117,6 +179,7 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
 #[derive(Clone)]
 pub struct SnsPublisher {
     cell: CoreCell,
+    base: Option<HeaderMap>,
 }
 
 impl std::fmt::Debug for SnsPublisher {
@@ -127,7 +190,44 @@ impl std::fmt::Debug for SnsPublisher {
 
 impl SnsPublisher {
     pub(crate) fn new(cell: CoreCell) -> Self {
-        Self { cell }
+        Self { cell, base: None }
+    }
+
+    /// Returns a handle whose sends carry `group` as the FIFO message group id, for a FIFO
+    /// topic.
+    ///
+    /// The group travels as a base `partition-key` header, so a message that names
+    /// `partition-key` itself wins. See [`SqsPublisher::with_group_id`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::runtime::PublishExt;
+    /// use ruststream::{Outgoing, Serialized};
+    ///
+    /// // The notice is already a wire payload, so it names itself serialized and no codec
+    /// // runs on it.
+    /// #[derive(Outgoing, Serialized)]
+    /// struct Notice(Vec<u8>);
+    ///
+    /// # async fn demo(broker: ruststream_sqs_sns::ConnectedSqsBroker)
+    /// # -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// broker
+    ///     .sns_publisher()
+    ///     .with_group_id("user-42")
+    ///     .message(&Notice(b"shipped".to_vec()))
+    ///     .to("orders.fifo")
+    ///     .publish()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_group_id(&self, group: impl Into<String>) -> Self {
+        Self {
+            cell: Arc::clone(&self.cell),
+            base: Some(group_headers(group)),
+        }
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -148,15 +248,24 @@ impl Publisher for SnsPublisher {
         let mut publish = core.sns.publish().topic_arn(&arn).message(body);
         let mut group = None;
         for (name, value) in msg.headers().iter() {
-            let text = String::from_utf8_lossy(value).into_owned();
             if name == PARTITION_KEY_HEADER {
-                group = Some(text);
+                group = Some(String::from_utf8_lossy(value).into_owned());
                 continue;
             }
-            let attribute = SnsAttributeValue::builder()
-                .data_type("String")
-                .string_value(text)
-                .build();
+            // The same split the SQS side makes, for the same reason: a value the service
+            // refuses as text travels as binary rather than being mangled or rejected. A
+            // `HeaderMap` value is bytes on both sides, so a subscriber reads back what was
+            // written either way.
+            let attribute = match std::str::from_utf8(value) {
+                Ok(text) if is_service_text(text) => SnsAttributeValue::builder()
+                    .data_type("String")
+                    .string_value(text)
+                    .build(),
+                _ => SnsAttributeValue::builder()
+                    .data_type("Binary")
+                    .binary_value(Blob::new(value))
+                    .build(),
+            };
             if let Ok(attribute) = attribute {
                 publish = publish.message_attributes(name, attribute);
             }
@@ -170,6 +279,7 @@ impl Publisher for SnsPublisher {
             publish = publish.message_attributes(ENCODING_ATTRIBUTE, marker);
         }
         if is_fifo(&arn) {
+            // FIFO rejects a send with no group, so the literal closes the ladder.
             publish = publish
                 .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
                 .message_deduplication_id(dedup_id());
@@ -183,18 +293,45 @@ impl Publisher for SnsPublisher {
                 source: sdk_err(&e),
             })
     }
+
+    fn base_headers(&self) -> Option<&HeaderMap> {
+        self.base.as_ref()
+    }
 }
 
 /// The publish policy for [`SnsPublisher`]: names the SNS fan-out mode as a distinct policy
 /// type, so direct queue publishing and topic fan-out never mix silently.
 ///
+/// A handler names where its reply goes; the mount site names who takes it there, by binding the
+/// reply position to this policy instead of the broker's default [`SqsPublish`].
+///
 /// # Examples
 ///
 /// ```
-/// use ruststream_sqs_sns::SnsPublish;
+/// use ruststream_sqs_sns::prelude::*;
+/// use serde::{Deserialize, Serialize};
 ///
-/// let policy = SnsPublish::default();
-/// # let _ = policy;
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize)]
+/// struct OrderPlaced {
+///     id: u64,
+/// }
+///
+/// #[subscriber("orders", publish("orders-events"))]
+/// async fn accept(order: &Order) -> OrderPlaced {
+///     OrderPlaced { id: order.id }
+/// }
+///
+/// // Without the step the reply would ride `SqsPublish` and land on a queue named
+/// // `orders-events`; with it the same reply fans out from the topic of that name.
+/// fn routes() -> impl RouterDef<SqsBroker> {
+///     Router::new().include(accept).out(Reply, SnsPublish).build()
+/// }
+/// # let _ = routes;
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use]
@@ -203,7 +340,41 @@ pub struct SnsPublish;
 impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
     type Live = SnsPublisher;
 
-    async fn pair(self, connected: &ConnectedSqsBroker) -> Result<Self::Live, PairError> {
-        Ok(connected.sns_publisher())
+    fn pair(
+        self,
+        connected: &ConnectedSqsBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.sns_publisher()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::broker::SqsBroker;
+
+    #[test]
+    fn a_group_id_handle_publishes_under_a_base_partition_key() {
+        let publisher = SqsBroker::new().publisher().with_group_id("user-42");
+        let base = publisher.base_headers().expect("the handle carries a base");
+        assert_eq!(base.get_str(PARTITION_KEY_HEADER), Some("user-42"));
+        assert_eq!(base.len(), 1);
+    }
+
+    #[test]
+    fn the_sns_handle_carries_the_same_base() {
+        let publisher = SnsPublisher::new(CoreCell::default()).with_group_id("user-42");
+        let base = publisher.base_headers().expect("the handle carries a base");
+        assert_eq!(base.get_str(PARTITION_KEY_HEADER), Some("user-42"));
+    }
+
+    #[test]
+    fn a_plain_handle_carries_no_base() {
+        assert!(SqsBroker::new().publisher().base_headers().is_none());
+        assert!(
+            SnsPublisher::new(CoreCell::default())
+                .base_headers()
+                .is_none()
+        );
     }
 }

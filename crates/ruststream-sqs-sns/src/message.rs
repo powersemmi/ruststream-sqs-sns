@@ -1,9 +1,9 @@
 //! [`SqsMessage`] and the mapping between `RustStream` headers and SQS message attributes.
 //!
-//! Message attributes carry headers directly (String for UTF-8 values, Binary otherwise) - no
-//! envelope format is invented. The one transport constraint is the body: SQS bodies are text,
-//! so a payload that is not valid UTF-8 travels base64-encoded with a marker attribute, and is
-//! decoded transparently on receive.
+//! Message attributes carry headers directly (String for values the service takes as text,
+//! Binary otherwise) - no envelope format is invented. The one transport constraint is the
+//! body: SQS bodies are text, and a payload the service will not take as text travels
+//! base64-encoded with a marker attribute, decoded transparently on receive.
 
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use aws_sdk_sqs::types::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use ruststream::{AckError, Headers, IncomingMessage, Partitioned};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned};
 use tokio::task::JoinHandle;
 
 use crate::error::sdk_err;
@@ -44,7 +44,7 @@ pub(crate) const ENCODING_ATTRIBUTE: &str = "ruststream-payload-encoding";
 /// handler outliving the visibility timeout does not cause a concurrent redelivery.
 pub struct SqsMessage {
     payload: Bytes,
-    headers: Headers,
+    headers: HeaderMap,
     client: Client,
     queue_url: String,
     receipt: String,
@@ -132,7 +132,7 @@ impl IncomingMessage for SqsMessage {
         &self.payload
     }
 
-    fn headers(&self) -> &Headers {
+    fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
@@ -202,8 +202,8 @@ async fn extend_visibility(
     }
 }
 
-fn decode_message(message: &AwsMessage) -> (Bytes, Headers) {
-    let mut headers = Headers::new();
+fn decode_message(message: &AwsMessage) -> (Bytes, HeaderMap) {
+    let mut headers = HeaderMap::new();
     let mut base64_payload = false;
     if let Some(attributes) = message.message_attributes() {
         for (name, value) in attributes {
@@ -238,19 +238,42 @@ fn decode_message(message: &AwsMessage) -> (Bytes, Headers) {
     (payload, headers)
 }
 
-/// Encodes a payload into an SQS body: UTF-8 passes through, anything else travels base64 with
-/// the marker attribute. Returns the body and whether the marker must be set.
-pub(crate) fn encode_body(payload: &[u8]) -> (String, bool) {
-    std::str::from_utf8(payload).map_or_else(
-        |_| (BASE64.encode(payload), true),
-        |text| (text.to_owned(), false),
-    )
+/// Whether `text` is something the service will carry as text.
+///
+/// SQS and SNS accept a narrower set than UTF-8 in bodies and attribute values: the C0 control
+/// characters other than tab, newline and carriage return are rejected, as are the two
+/// non-characters at the end of the basic plane. A Rust `char` is never a surrogate, so that
+/// half of the service's rule cannot be violated here.
+pub(crate) fn is_service_text(text: &str) -> bool {
+    text.chars().all(|c| {
+        matches!(c, '\t' | '\n' | '\r')
+            || ('\u{20}'..='\u{d7ff}').contains(&c)
+            || ('\u{e000}'..='\u{fffd}').contains(&c)
+            || c >= '\u{10000}'
+    })
 }
 
-/// Converts headers into SQS message attributes (String for UTF-8 values, Binary otherwise),
-/// pulling the partition key out for the FIFO group id.
+/// Encodes a payload into an SQS body: text the service accepts passes through, anything else
+/// travels base64 with the marker attribute. Returns the body and whether the marker must be
+/// set.
+///
+/// "Anything else" is wider than "not UTF-8": a binary codec's output is often valid UTF-8 and
+/// still carries control bytes the service refuses, and a rejected send is a worse answer than
+/// a transparently encoded one.
+pub(crate) fn encode_body(payload: &[u8]) -> (String, bool) {
+    match std::str::from_utf8(payload) {
+        Ok(text) if is_service_text(text) => (text.to_owned(), false),
+        _ => (BASE64.encode(payload), true),
+    }
+}
+
+/// Converts headers into SQS message attributes (String for values the service carries as text,
+/// Binary otherwise), pulling the partition key out for the FIFO group id.
+///
+/// A `HeaderMap` value is bytes on both sides of the wire, so the choice between the two
+/// attribute types is invisible to a service: what it wrote is what it reads back.
 pub(crate) fn encode_attributes(
-    headers: &Headers,
+    headers: &HeaderMap,
     base64_marker: bool,
 ) -> (
     std::collections::HashMap<String, MessageAttributeValue>,
@@ -263,20 +286,16 @@ pub(crate) fn encode_attributes(
             group = Some(String::from_utf8_lossy(value).into_owned());
             continue;
         }
-        let attribute = std::str::from_utf8(value).map_or_else(
-            |_| {
-                MessageAttributeValue::builder()
-                    .data_type("Binary")
-                    .binary_value(Blob::new(value))
-                    .build()
-            },
-            |text| {
-                MessageAttributeValue::builder()
-                    .data_type("String")
-                    .string_value(text)
-                    .build()
-            },
-        );
+        let attribute = match std::str::from_utf8(value) {
+            Ok(text) if is_service_text(text) => MessageAttributeValue::builder()
+                .data_type("String")
+                .string_value(text)
+                .build(),
+            _ => MessageAttributeValue::builder()
+                .data_type("Binary")
+                .binary_value(Blob::new(value))
+                .build(),
+        };
         if let Ok(attribute) = attribute {
             attributes.insert(name.to_owned(), attribute);
         }
@@ -311,9 +330,46 @@ mod tests {
         assert_eq!(BASE64.decode(body).expect("valid base64"), raw);
     }
 
+    /// The bytes a binary codec emits are often valid UTF-8 and still carry control characters
+    /// the service refuses in a body. Sending them raw is a rejected publish, so they take the
+    /// base64 lane too.
+    #[test]
+    fn utf8_the_service_refuses_travels_base64_as_well() {
+        let raw = 0u32.to_be_bytes();
+        assert!(
+            std::str::from_utf8(&raw).is_ok(),
+            "the sample is valid UTF-8"
+        );
+        let (body, marker) = encode_body(&raw);
+        assert!(marker);
+        assert_eq!(BASE64.decode(body).expect("valid base64"), raw);
+    }
+
+    #[test]
+    fn whitespace_the_service_accepts_stays_text() {
+        let (body, marker) = encode_body(b"a\tb\r\nc");
+        assert!(!marker);
+        assert_eq!(body, "a\tb\r\nc");
+    }
+
+    /// A header value the service refuses as text becomes a binary attribute rather than a
+    /// rejected send; the map is bytes on both sides, so nothing changes for a service.
+    #[test]
+    fn header_values_the_service_refuses_become_binary_attributes() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-trace", Bytes::from_static(&[0u8, 1, 2, 3]));
+        let (attributes, _) = encode_attributes(&headers, false);
+        let attribute = attributes.get("x-trace").expect("the header is carried");
+        assert_eq!(attribute.data_type(), "Binary");
+        assert_eq!(
+            attribute.binary_value().expect("a binary value").as_ref(),
+            [0u8, 1, 2, 3]
+        );
+    }
+
     #[test]
     fn partition_key_header_becomes_the_group_id() {
-        let mut headers = Headers::new();
+        let mut headers = HeaderMap::new();
         headers.insert(PARTITION_KEY_HEADER, "user-42");
         headers.insert("x-tenant", "acme");
         let (attributes, group) = encode_attributes(&headers, false);
