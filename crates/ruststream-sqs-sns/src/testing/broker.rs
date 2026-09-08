@@ -1,6 +1,7 @@
 //! [`SqsTestBroker`]: the in-process transport and its connected form.
 
 use std::future::{Future, ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
@@ -16,16 +17,32 @@ use crate::publisher::group_headers;
 use crate::testing::router::AddressRouter;
 use crate::testing::subscriber::SqsTestSubscriber;
 
-/// Shared state of one in-process broker: the router plus the harness coordinator.
+/// Shared state of one in-process broker: the router, the harness coordinator, and whether the
+/// transport has been shut down.
 #[derive(Debug, Default)]
 pub(crate) struct TestState {
     pub(crate) router: AddressRouter,
     coordinator: OnceLock<Coordinator>,
+    /// The same runtime flag the real broker keeps, for the same reason: handles that alias the
+    /// connection - a publisher handed out earlier, a clone of the connected form - outlive the
+    /// consuming `shutdown` the ladder makes unrepresentable for the owner, and must report a
+    /// dead transport rather than route into a cleared router.
+    closed: AtomicBool,
 }
 
 impl TestState {
     fn coordinator(&self) -> Option<&Coordinator> {
         self.coordinator.get()
+    }
+
+    /// `Ok` while the transport is live, [`SqsError::NotConnected`] once it has shut down -
+    /// mirroring `Core::ensure_open` on the real broker, so a test sees the error a service
+    /// would see.
+    fn ensure_open(&self) -> Result<(), SqsError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(SqsError::NotConnected);
+        }
+        Ok(())
     }
 
     pub(crate) fn publish(&self, name: &str, payload: Bytes, headers: HeaderMap) {
@@ -86,6 +103,20 @@ impl ConnectedSqsTestBroker {
     pub fn publisher(&self) -> SqsTestPublisher {
         SqsTestPublisher::new(Arc::clone(&self.state))
     }
+
+    /// Opens one subscription, or reports the closed transport. Split out so the [`Subscribe`]
+    /// impl stays a `ready(..)`: the in-process transport never awaits.
+    fn open(&self, name: &str) -> Result<SqsTestSubscriber, SqsError> {
+        self.state.ensure_open()?;
+        let (id, requeue, rx) = self.state.router.subscribe(name.to_owned());
+        Ok(SqsTestSubscriber::new(
+            Arc::clone(&self.state),
+            id,
+            rx,
+            requeue,
+            self.state.coordinator().cloned(),
+        ))
+    }
 }
 
 impl ConnectedBroker for ConnectedSqsTestBroker {
@@ -93,6 +124,9 @@ impl ConnectedBroker for ConnectedSqsTestBroker {
     type Closed = ();
 
     fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
+        // Flag before clearing, so a handle racing the teardown reports the closed transport
+        // rather than finding an empty router and reporting success.
+        self.state.closed.store(true, Ordering::Release);
         self.state.router.clear();
         ready(Ok(()))
     }
@@ -102,14 +136,7 @@ impl Subscribe for ConnectedSqsTestBroker {
     type Subscriber = SqsTestSubscriber;
 
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
-        let (id, requeue, rx) = self.state.router.subscribe(name.to_owned());
-        ready(Ok(SqsTestSubscriber::new(
-            Arc::clone(&self.state),
-            id,
-            rx,
-            requeue,
-            self.state.coordinator().cloned(),
-        )))
+        ready(self.open(name))
     }
 }
 
@@ -186,18 +213,25 @@ impl SqsTestPublisher {
             base: Some(group_headers(group)),
         }
     }
+
+    /// Routes one message, or reports the closed transport. Split out so the [`Publisher`] impl
+    /// stays a `ready(..)`: the in-process transport never awaits.
+    fn route(&self, msg: &OutgoingMessage<'_>) -> Result<(), SqsError> {
+        self.state.ensure_open()?;
+        self.state.publish(
+            msg.name(),
+            Bytes::copy_from_slice(msg.payload()),
+            msg.headers().clone(),
+        );
+        Ok(())
+    }
 }
 
 impl Publisher for SqsTestPublisher {
     type Error = SqsError;
 
     fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
-        self.state.publish(
-            msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
-        );
-        ready(Ok(()))
+        ready(self.route(&msg))
     }
 
     fn base_headers(&self) -> Option<&HeaderMap> {
