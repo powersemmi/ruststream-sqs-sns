@@ -352,6 +352,14 @@ test exercises the wiring the service actually runs instead of a bare-name stand
 options stop at the descriptor, though: in process there is no long poll for `wait` to bound, no
 redelivery clock for `visibility` to arm, and no queue for `create_if_missing` to create.
 
+The publish half matches. `SqsPublish` and `SnsPublish` pair against the stand-in too, and it
+names `SqsPublish` as its default policy, so `.out(Reply, Publish)` and the default reply of a
+`publish(..)` handler both mount as written - there is no test-only policy to swap in, and the
+live publisher a startup hook or an injected slot receives carries the same surface,
+`with_group_id` included. Both policies pair into the one `SqsTestPublisher`, because the router
+has no topic to fan out from: a test proves the reply took the destination the policy names, not
+that SNS delivered it onward to the queues subscribed to that topic.
+
 It routes by exact queue name and does not simulate SQS product behaviour: visibility timing,
 redelivery, redrive dead-lettering, FIFO ordering, and SNS fan-out are covered by the live suite
 against LocalStack instead. Batches are the one place the two transports differ inside: the

@@ -13,6 +13,8 @@ use crate::error::{SqsError, sdk_err};
 use crate::message::{
     ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body, is_service_text,
 };
+#[cfg(feature = "testing")]
+use crate::testing::{ConnectedSqsTestBroker, SqsTestPublisher};
 
 /// Publishes messages directly to SQS queues (name or URL as the destination).
 ///
@@ -86,7 +88,7 @@ fn is_fifo(name: &str) -> bool {
 }
 
 /// The one-entry base map a group-carrying handle publishes under.
-fn group_headers(group: impl Into<String>) -> HeaderMap {
+pub(crate) fn group_headers(group: impl Into<String>) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(PARTITION_KEY_HEADER, group.into());
     headers
@@ -164,6 +166,22 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
     fn pair(
         self,
         connected: &ConnectedSqsBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
+    }
+}
+
+/// The same policy against the in-process stand-in, so a routes file's `.out(Reply, Publish)`
+/// mounts on [`SqsTestBroker`](crate::testing::SqsTestBroker) as written. It is the stand-in's
+/// [`DefaultPublish`](ruststream::DefaultPublish) policy too, so a `publish("dest")` handler
+/// that binds nothing replies through it there as well.
+#[cfg(feature = "testing")]
+impl PublishPolicy<ConnectedSqsTestBroker> for SqsPublish {
+    type Live = SqsTestPublisher;
+
+    fn pair(
+        self,
+        connected: &ConnectedSqsTestBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
     }
@@ -345,6 +363,26 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
         connected: &ConnectedSqsBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.sns_publisher()))
+    }
+}
+
+/// Fan-out against the in-process stand-in, so `.out(Reply, SnsPublish)` mounts there as
+/// written.
+///
+/// Both policies pair into the one [`SqsTestPublisher`], because the router has no topic to
+/// fan out from: a message reaches the subscriptions on the destination it names, whichever
+/// policy carried it. So a test here proves the reply took the destination the SNS policy names,
+/// not that SNS delivered it onward to the queues subscribed to that topic - that is
+/// `subscribe_queue_to_topic`'s job and the live suite asserts it.
+#[cfg(feature = "testing")]
+impl PublishPolicy<ConnectedSqsTestBroker> for SnsPublish {
+    type Live = SqsTestPublisher;
+
+    fn pair(
+        self,
+        connected: &ConnectedSqsTestBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 
