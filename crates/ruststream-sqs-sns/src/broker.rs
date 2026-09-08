@@ -6,6 +6,7 @@
 //! application is still being assembled, before `connect` runs.
 
 use std::collections::HashMap;
+use std::future::{Future, ready};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -419,11 +420,11 @@ impl ConnectedBroker for ConnectedSqsBroker {
     type Error = SqsError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<(), Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
         // The SDK clients have no close/flush; requests are synchronous per call, so marking
         // the shared state closed is the whole teardown. Aliased handles error afterwards.
         self.core.closed.store(true, Ordering::Release);
-        Ok(())
+        ready(Ok(()))
     }
 }
 

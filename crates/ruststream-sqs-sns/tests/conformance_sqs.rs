@@ -6,7 +6,8 @@
 
 #![cfg(feature = "testing")]
 
-use ruststream::conformance::harness;
+use ruststream::Name;
+use ruststream::conformance::{capabilities, harness};
 use ruststream_sqs_sns::testing::SqsTestBroker;
 use ruststream_sqs_sns::{SqsBroker, SqsQueue};
 
@@ -23,6 +24,41 @@ fn test_endpoint() -> Option<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sqs_test_broker_passes_conformance_suite() {
     harness::run_suite(SqsTestBroker::new).await;
+}
+
+// The closures below cannot become method paths: their bounds are higher-ranked, so a bare path
+// would bind one concrete lifetime.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_test_broker_honours_the_batch_size() {
+    capabilities::batches(
+        SqsTestBroker::new,
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
+/// The batch size against the real service, where it is `MaxNumberOfMessages` rather than a
+/// client-side buffer: the suite opens the subscription smaller than the run, so a receive that
+/// ignored the size would come back with a batch too long.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sqs_honours_the_batch_size() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    capabilities::batches(
+        || {
+            SqsBroker::new()
+                .endpoint(endpoint.clone())
+                .test_credentials()
+                .region("us-east-1")
+        },
+        |name| SqsQueue::new(name).create_if_missing(),
+        |connected| connected.publisher(),
+    )
+    .await;
 }
 
 // `make_source` / `make_publisher` must stay closures: their bounds are higher-ranked

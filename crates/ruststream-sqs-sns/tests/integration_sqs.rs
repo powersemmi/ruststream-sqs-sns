@@ -7,12 +7,19 @@ use std::pin::pin;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use ruststream::runtime::PublishExt;
 use ruststream::{
-    Broker, ConnectedBroker, Headers, IncomingMessage, OutgoingMessage, Publisher, Subscriber,
+    Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, Publisher,
+    Serialized, Subscriber,
 };
 use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsQueue};
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The body the FIFO tests publish through the builder: bytes the test already holds encoded,
+/// so the type names itself serialized and no codec sits on the path.
+#[derive(Outgoing, Serialized)]
+struct Body(Vec<u8>);
 
 fn test_endpoint() -> Option<String> {
     match std::env::var("SQS_TEST_ENDPOINT") {
@@ -56,7 +63,7 @@ async fn roundtrip_preserves_payload_headers_and_partition_key() {
         .await
         .expect("subscription opens");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/json");
     headers.insert("x-tenant", "acme");
     headers.insert(PARTITION_KEY_HEADER, "user-42");
@@ -248,7 +255,7 @@ async fn sns_fans_out_to_a_subscribed_queue() {
         .await
         .expect("queue subscribes to topic");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("x-tenant", "acme");
     let sns = connected.sns_publisher();
     sns.publish(OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers))
@@ -263,6 +270,93 @@ async fn sns_fans_out_to_a_subscribed_queue() {
         .expect("delivery is ok");
     assert_eq!(message.payload(), b"notice");
     assert_eq!(message.headers().get_str("x-tenant"), Some("acme"));
+    message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_id_handle_sets_the_fifo_message_group() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = format!("{}.fifo", unique("group"));
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(5)),
+        )
+        .await
+        .expect("subscription opens");
+
+    connected
+        .publisher()
+        .with_group_id("user-42")
+        .message(&Body(br#"{"id":1}"#.to_vec()))
+        .to(&queue)
+        .publish()
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+
+    assert_eq!(
+        message.headers().get_str(PARTITION_KEY_HEADER),
+        Some("user-42")
+    );
+    message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_messages_own_partition_key_wins_over_the_handles_group() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = format!("{}.fifo", unique("groupwin"));
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(5)),
+        )
+        .await
+        .expect("subscription opens");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(PARTITION_KEY_HEADER, "user-7");
+    connected
+        .publisher()
+        .with_group_id("user-42")
+        .message(&Body(br#"{"id":2}"#.to_vec()))
+        .with_headers(headers)
+        .to(&queue)
+        .publish()
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+
+    assert_eq!(
+        message.headers().get_str(PARTITION_KEY_HEADER),
+        Some("user-7")
+    );
     message.ack().await.expect("ack succeeds");
 
     connected.shutdown().await.expect("shutdown succeeds");
