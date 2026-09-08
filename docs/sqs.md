@@ -345,6 +345,13 @@ connected form implements `ruststream::testing::TestableBroker`, so the same bro
 `ruststream::testing::expect_published`. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
+`SqsQueue` is a subscription source for it as well, so the declaration a service ships mounts
+unchanged: `#[subscriber(SqsQueue::new("orders").wait(..))]` and the mount-site settings that
+chain onto it work against `SqsTestBroker` the same way they work against `SqsBroker`, and the
+test exercises the wiring the service actually runs instead of a bare-name stand-in of it. The
+options stop at the descriptor, though: in process there is no long poll for `wait` to bound, no
+redelivery clock for `visibility` to arm, and no queue for `create_if_missing` to create.
+
 It routes by exact queue name and does not simulate SQS product behaviour: visibility timing,
 redelivery, redrive dead-lettering, FIFO ordering, and SNS fan-out are covered by the live suite
 against LocalStack instead. Batches are the one place the two transports differ inside: the

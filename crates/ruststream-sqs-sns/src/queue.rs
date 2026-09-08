@@ -8,12 +8,16 @@
 
 use std::time::Duration;
 
+#[cfg(feature = "testing")]
+use ruststream::Subscribe;
 use ruststream::SubscriptionSource;
 use ruststream::runtime::{Declared, SubscriberBuilder, SubscriberSettings};
 
 use crate::broker::ConnectedSqsBroker;
 use crate::error::SqsError;
 use crate::subscriber::SqsSubscriber;
+#[cfg(feature = "testing")]
+use crate::testing::{ConnectedSqsTestBroker, SqsTestSubscriber};
 
 /// The protocol cap on long polling.
 const MAX_WAIT: Duration = Duration::from_secs(20);
@@ -126,6 +130,37 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
 
     async fn subscribe(self, connected: &ConnectedSqsBroker) -> Result<SqsSubscriber, SqsError> {
         connected.subscribe_queue(self).await
+    }
+}
+
+/// The same descriptor against the in-process stand-in, so the declaration a service ships
+/// mounts on [`SqsTestBroker`](crate::testing::SqsTestBroker) as written, with no second
+/// descriptor type and no rewrite at the mount site.
+///
+/// The stand-in routes by exact queue name, which is what this descriptor already resolves to.
+/// The rest of it stops here, and deliberately: `wait` has no long poll to bound (a delivery
+/// arrives the moment it is published), `visibility` has no redelivery clock to arm (an
+/// unsettled message is not handed out again in process), and `create_if_missing` has nothing
+/// to create (the router registers the address on subscribe). So a test on this broker proves
+/// that the wiring, the codec and the handler agree; it cannot prove redelivery after a lapsed
+/// visibility, or what a long poll costs. Those hold against SQS itself, and the live suite is
+/// where they are asserted.
+#[cfg(feature = "testing")]
+impl SubscriptionSource<ConnectedSqsTestBroker> for SqsQueue {
+    type Subscriber = SqsTestSubscriber;
+
+    fn name(&self) -> &str {
+        self.queue()
+    }
+
+    async fn subscribe(
+        self,
+        connected: &ConnectedSqsTestBroker,
+    ) -> Result<SqsTestSubscriber, SqsError> {
+        // Validated in process too: a descriptor SQS would refuse must not pass a test that
+        // never reaches SQS.
+        self.validate()?;
+        connected.subscribe(self.queue()).await
     }
 }
 
