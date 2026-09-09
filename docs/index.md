@@ -2,16 +2,16 @@
 
 **`ruststream-sqs-sns`** is the Amazon SQS broker for the
 [RustStream](https://powersemmi.github.io/ruststream/) messaging framework, with SNS fan-out
-publishing. It covers long polling, visibility-based retries and dead-lettering through the
-queue's redrive policy, native batches over `ReceiveMessage`, FIFO message groups, and ships an
-in-process test broker under its `testing` feature.
+publishing. A subscriber long-polls its queue and can take native batches over `ReceiveMessage`.
+Retries run through the message's visibility timeout, and dead-lettering through the queue's
+redrive policy. You can set a message group when you publish to a FIFO queue, and read it back
+from the message you receive.
 
-Handlers, routers, codecs, and middleware come from the framework; this crate supplies the
-transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
-[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients, and nothing broker-specific leaks back into
-the framework.
+The transport is built on the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
+[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients. The `testing` feature ships an in-process
+test broker.
 
-The crate is published on crates.io and tracks the released `ruststream` 0.7 line:
+The crate tracks the released `ruststream` 0.7 line:
 
 ```toml
 ruststream = { version = "0.7", features = ["macros", "json"] }
@@ -35,7 +35,5 @@ serde = { version = "1", features = ["derive"] }
 
 ## How this site relates to the RustStream docs
 
-This site documents the SQS broker only. Framework concepts that apply to every broker (writing
-subscribers, publishing, routing, codecs, middleware, observability, the CLI) live in the
-[RustStream documentation](https://powersemmi.github.io/ruststream/). The pages here cover what is
-specific to SQS and SNS and link back to the framework docs where the two meet.
+This site covers SQS and SNS. Framework concepts that apply to every broker live in the
+[RustStream documentation](https://powersemmi.github.io/ruststream/).
