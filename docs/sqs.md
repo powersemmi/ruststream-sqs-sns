@@ -210,17 +210,20 @@ constructed anywhere - in a router, in configuration, at a mount site - and the 
 with the broker at startup. Naming a policy picks the destination kind:
 
 - `SqsPublish` pairs into `SqsPublisher`: sends directly to a queue, named by URL or by name. It
-  is also the broker's default publish policy, so a `#[subscriber(.., publish("dest"))]` handler
-  mounted with no policy of its own sends through it.
+  is also the broker's default publish policy, so a replying handler mounted with no policy of
+  its own sends through it.
 - `SnsPublish` pairs into `SnsPublisher`: publishes a notification to an SNS topic, named by ARN
   or by name (a name resolves through the idempotent `CreateTopic`).
 
-A handler names where its reply goes; the mount site names who takes it there. `.out(Reply,
-policy)` is the verb that binds it: `Reply` is the marker for the value a `publish("dest")`
-handler returns, and the steps after the call (`.codec(..)`, `.transform(..)`) ride the position
-it named. A mount that names no policy keeps `SqsPublish`, so a queue-to-queue service writes
-`b.include(handler)` and nothing more; sending the same reply to a topic instead is one step on
-the chain:
+The reply type declares where the reply goes: `#[outgoing(name = "..")]` on it is the
+destination. A reply type that declares none takes the destination the `publish("..")` clause
+supplies.
+
+The mount site names who takes it there. `.out(Reply, policy)` is the verb that binds it: `Reply`
+is the marker for the value a replying handler returns, and the steps after the call
+(`.codec(..)`, `.transform(..)`) ride the position it named. A mount that names no policy keeps
+`SqsPublish`, so a queue-to-queue service writes `b.include(handler)` and nothing more; sending
+the same reply to a topic instead is one step on the chain:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:reply"

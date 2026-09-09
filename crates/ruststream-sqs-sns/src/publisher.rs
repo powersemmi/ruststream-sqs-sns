@@ -141,9 +141,9 @@ impl Publisher for SqsPublisher {
 /// The publish policy for [`SqsPublisher`]: pure declaration, constructible anywhere, paired
 /// with the connected broker by the runtime after `connect`.
 ///
-/// It is also the broker's [`DefaultPublish`](ruststream::DefaultPublish) policy, so a
-/// `publish("dest")` handler whose mount binds no reply position of its own replies through it,
-/// and `.out(Reply, SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
+/// It is also the broker's [`DefaultPublish`](ruststream::DefaultPublish) policy, so a replying
+/// handler whose mount binds no reply position of its own replies through it, and
+/// `.out(Reply, SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
 /// changes the answer.
 ///
 /// # Examples
@@ -302,8 +302,10 @@ impl Publisher for SnsPublisher {
 /// The publish policy for [`SnsPublisher`]: names the SNS fan-out mode as a distinct policy
 /// type, so direct queue publishing and topic fan-out never mix silently.
 ///
-/// A handler names where its reply goes; the mount site names who takes it there, by binding the
-/// reply position to this policy instead of the broker's default [`SqsPublish`].
+/// A reply names where it goes; the mount site names who takes it there, by binding the reply
+/// position to this policy instead of the broker's default [`SqsPublish`]. The destination itself
+/// reads the same on both policies: a name is a queue name under [`SqsPublish`] and a topic name
+/// here, whether the reply type declares it or the mount site supplies it.
 ///
 /// # Examples
 ///
@@ -316,7 +318,8 @@ impl Publisher for SnsPublisher {
 ///     id: u64,
 /// }
 ///
-/// #[derive(Serialize)]
+/// // The reply type declares no destination of its own, so it takes the one the clause names.
+/// #[derive(Serialize, Outgoing)]
 /// struct OrderPlaced {
 ///     id: u64,
 /// }
