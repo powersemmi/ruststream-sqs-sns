@@ -11,14 +11,12 @@ use ruststream::conformance::{capabilities, harness};
 use ruststream_sqs_sns::testing::SqsTestBroker;
 use ruststream_sqs_sns::{SqsBroker, SqsQueue};
 
+mod live;
+
+/// The stack these checks run against, or `None` to skip. Under `RUSTSTREAM_REQUIRE_LIVE` a
+/// missing endpoint fails instead of skipping.
 fn test_endpoint() -> Option<String> {
-    match std::env::var("SQS_TEST_ENDPOINT") {
-        Ok(endpoint) if !endpoint.is_empty() => Some(endpoint),
-        _ => {
-            eprintln!("SQS_TEST_ENDPOINT is not set; skipping the live conformance check");
-            None
-        }
-    }
+    live::endpoint("SQS_TEST_ENDPOINT")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

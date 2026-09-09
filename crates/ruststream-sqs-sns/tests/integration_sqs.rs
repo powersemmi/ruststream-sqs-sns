@@ -21,14 +21,12 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Outgoing, Serialized)]
 struct Body(Vec<u8>);
 
+mod live;
+
+/// The stack these tests run against, or `None` to skip. Under `RUSTSTREAM_REQUIRE_LIVE` a
+/// missing endpoint fails instead of skipping.
 fn test_endpoint() -> Option<String> {
-    match std::env::var("SQS_TEST_ENDPOINT") {
-        Ok(endpoint) if !endpoint.is_empty() => Some(endpoint),
-        _ => {
-            eprintln!("SQS_TEST_ENDPOINT is not set; skipping the live integration test");
-            None
-        }
-    }
+    live::endpoint("SQS_TEST_ENDPOINT")
 }
 
 async fn connect(endpoint: &str) -> ConnectedSqsBroker {
