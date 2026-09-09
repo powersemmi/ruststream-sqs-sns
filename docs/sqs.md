@@ -315,9 +315,11 @@ CI runs the same suite against LocalStack on every change.
 ## Testing
 
 The `testing` feature ships `SqsTestBroker`: an in-process broker that reproduces the crate's core
-routing with no server and no network, on the same ladder as the real one. Build the application
-on it and the `TestApp` harness drives your real handlers, codecs and middleware: publish an input,
-then assert on what a handler received and on what it published downstream. See
+routing with no server and no network, on the same ladder as the real one. It lives in the crate's
+`testing` module, which a test file imports by name: `use ruststream_sqs_sns::testing::SqsTestBroker;`.
+Build the application on it and the `TestApp` harness drives your real handlers, codecs and
+middleware: publish an input, then assert on what a handler received and on what it published
+downstream. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
 It routes by exact queue name. What belongs to SQS itself (visibility timing, redelivery,
