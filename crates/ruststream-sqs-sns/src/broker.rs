@@ -141,6 +141,25 @@ impl std::fmt::Debug for Core {
 
 pub(crate) type CoreCell = Arc<OnceCell<Arc<Core>>>;
 
+/// The host and optional port of a configured endpoint, which is what a server description
+/// carries.
+///
+/// An endpoint is an operator's URL, and the generated document is shared: a scheme is noise
+/// there, and credentials written into the URL must not travel with it. The three cuts are
+/// ordered, because a path may itself contain an `@` - taking the credentials out of
+/// `https://host/a@b` before the path is gone would leave `b` as the host.
+fn endpoint_host(endpoint: &str) -> &str {
+    let after_scheme = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, rest)| rest);
+    let authority = after_scheme
+        .find(['/', '?', '#'])
+        .map_or(after_scheme, |end| &after_scheme[..end]);
+    authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host)
+}
+
 /// Maps a logical destination name onto a valid SQS queue name: characters outside
 /// `[A-Za-z0-9_-]` become `-` (SQS forbids them), and a `.fifo` suffix survives. Subscribers
 /// and publishers share this mapping, so dotted framework names stay routable.
@@ -291,10 +310,14 @@ impl Broker for SqsBroker {
 
 impl DescribeServer for SqsBroker {
     fn describe_server(&self) -> ServerSpec {
+        // An endpoint that carries no host at all (an empty override) says nothing about where
+        // clients connect, so the public service is the honest answer for the document.
         let host = self
             .endpoint
-            .clone()
-            .unwrap_or_else(|| "sqs.amazonaws.com".to_owned());
+            .as_deref()
+            .map(endpoint_host)
+            .filter(|host| !host.is_empty())
+            .unwrap_or("sqs.amazonaws.com");
         ServerSpec::new(host, "sqs")
     }
 }
@@ -438,4 +461,69 @@ impl Subscribe for ConnectedSqsBroker {
 
 impl DefaultPublish for ConnectedSqsBroker {
     type Policy = SqsPublish;
+}
+
+#[cfg(test)]
+mod tests {
+    use ruststream::DescribeServer;
+
+    use super::SqsBroker;
+
+    /// The host a description carries for `endpoint`.
+    fn described(endpoint: &str) -> String {
+        SqsBroker::new()
+            .endpoint(endpoint)
+            .describe_server()
+            .host
+            .expect("a configured endpoint describes a host")
+    }
+
+    #[test]
+    fn a_description_carries_the_host_and_port_of_every_endpoint_form() {
+        assert_eq!(described("http://localstack:4566"), "localstack:4566");
+        assert_eq!(described("localstack:4566"), "localstack:4566");
+        assert_eq!(
+            described("https://sqs.eu-west-1.amazonaws.com"),
+            "sqs.eu-west-1.amazonaws.com"
+        );
+        assert_eq!(
+            described("http://localstack:4566/queues/"),
+            "localstack:4566"
+        );
+        assert_eq!(
+            described("http://user:pass@localstack:4566"),
+            "localstack:4566"
+        );
+    }
+
+    #[test]
+    fn a_description_carries_neither_a_scheme_nor_credentials() {
+        for endpoint in [
+            "http://localstack:4566",
+            "localstack:4566",
+            "https://sqs.eu-west-1.amazonaws.com",
+            "http://localstack:4566/queues/",
+            "http://user:pass@localstack:4566",
+        ] {
+            let host = described(endpoint);
+            assert!(
+                !host.contains("://") && !host.contains('@'),
+                "the description of {endpoint:?} published {host:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_that_carries_an_at_sign_is_not_mistaken_for_credentials() {
+        // The cuts are ordered for this case: taking the credentials out first would leave the
+        // tail of the path as the host.
+        assert_eq!(described("https://localstack:4566/a@b"), "localstack:4566");
+    }
+
+    #[test]
+    fn the_public_service_is_described_when_no_endpoint_is_configured() {
+        let described = SqsBroker::new().describe_server();
+        assert_eq!(described.host.as_deref(), Some("sqs.amazonaws.com"));
+        assert_eq!(described.protocol, "sqs");
+    }
 }
