@@ -33,7 +33,7 @@
 - **FIFO ordering as the partition key.** On `.fifo` destinations the `partition-key` header becomes the message group id (and comes back as the same header), with a unique deduplication id per send. `publisher.with_group_id("user-42")` carries that header as a publisher base, and a message naming the header itself wins over it.
 - **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); a handler's reply takes it with one mount step, `.out(Reply, SnsPublish)`, and `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
 - **Text bodies.** SQS bodies are text, and the service's idea of text is narrower than UTF-8: a payload it accepts passes through untouched, and anything else - binary, or valid UTF-8 carrying control characters - travels base64-encoded with a marker attribute and decodes transparently on receive. The same rule picks `String` or `Binary` for each header attribute. A handler that parses the body itself takes the framework's byte lane (`#[derive(Deserialized)]` over `&[u8]`, no codec on the path) and sees the bytes the producer sent: the base64 hop is already undone by then.
-- **In-process test broker** (feature `testing`). `SqsTestBroker` reproduces this crate's core routing with no server, so a service's handlers run under the framework's `TestApp` harness, and the framework's conformance suite passes against it in process.
+- **In-process test broker** (feature `testing`). `SqsTestBroker` reproduces this crate's core routing with no server, so a service's handlers run under the framework's `TestApp` harness, and it answers the way the real queues do, which the crate's own tests hold it to.
 
 ## Install
 
@@ -63,12 +63,13 @@ struct PlaceOrder {
     id: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Outgoing, Serialize)]
 struct OrderPlaced {
     id: u64,
 }
 
-// The handler names where its reply goes; the mount site names who takes it there.
+// The reply type names no destination of its own, so it takes the clause's; the mount site
+// names who takes it there.
 #[subscriber(
     SqsQueue::new("orders").wait(Duration::from_secs(20)),
     publish("orders-events")
@@ -106,7 +107,7 @@ struct PlaceOrder {
     id: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Outgoing, Serialize, PartialEq)]
 struct OrderPlaced {
     id: u64,
 }
