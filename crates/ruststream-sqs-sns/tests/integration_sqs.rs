@@ -6,6 +6,8 @@
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
+use aws_config::{BehaviorVersion, Region};
+use aws_sdk_sqs::types::QueueAttributeName;
 use futures::StreamExt;
 use ruststream::runtime::PublishExt;
 use ruststream::{
@@ -359,5 +361,94 @@ async fn a_messages_own_partition_key_wins_over_the_handles_group() {
     );
     message.ack().await.expect("ack succeeds");
 
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// The visibility timeout the operator configures on the queue in this test. Short, so a
+/// handler that outlives it does so within a test's patience; nothing else about the number
+/// matters.
+const OPERATOR_VISIBILITY: Duration = Duration::from_secs(2);
+
+/// How long the handler holds the delivery: several times the queue's timeout, so an extender
+/// that re-armed anything but the queue's own value would have let the message back out.
+const HOLD: Duration = Duration::from_secs(6);
+
+/// Provisions a queue whose visibility timeout is not the SQS default, the way an operator
+/// would, and returns its name.
+///
+/// The timeout is set in its own call rather than as a create attribute, so a rerun against a
+/// stack that still holds the queue configures it instead of colliding with it.
+async fn queue_with_visibility(endpoint: &str, name: &str, visibility: Duration) -> String {
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .endpoint_url(endpoint)
+        .region(Region::new("us-east-1"))
+        .test_credentials()
+        .load()
+        .await;
+    let client = aws_sdk_sqs::Client::new(&config);
+    let url = client
+        .create_queue()
+        .queue_name(name)
+        .send()
+        .await
+        .expect("the operator's queue is created")
+        .queue_url()
+        .expect("CreateQueue returns the URL")
+        .to_owned();
+    client
+        .set_queue_attributes()
+        .queue_url(url)
+        .attributes(
+            QueueAttributeName::VisibilityTimeout,
+            visibility.as_secs().to_string(),
+        )
+        .send()
+        .await
+        .expect("the operator sets the visibility timeout");
+    name.to_owned()
+}
+
+// A subscription that names no visibility of its own must hold its deliveries under the queue's
+// configured timeout. The crate used to re-arm a hard-coded 30 seconds every 15 instead, which on
+// a queue configured for less handed the message back to the queue while the handler still held
+// it, and on a queue configured for more silently shortened what the operator set. The clock
+// tells the two apart: with the queue's own value the extender re-arms inside the window, so
+// nothing redelivers while the delivery is alive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_delivery_rides_the_queues_own_visibility_timeout() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let queue = queue_with_visibility(&endpoint, &unique("visibility"), OPERATOR_VISIBILITY).await;
+    let connected = connect(&endpoint).await;
+
+    // No `visibility(..)` on the descriptor: the queue's setting is the one under test.
+    let mut subscriber = connected
+        .subscribe_queue(SqsQueue::new(&queue).wait(Duration::from_secs(1)))
+        .await
+        .expect("subscription opens");
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new(&queue, b"held".as_slice()))
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let held = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(held.payload(), b"held");
+
+    // The handler is still working: the delivery stays unsettled and alive for the whole hold.
+    let redelivered = tokio::time::timeout(HOLD, stream.next()).await;
+    assert!(
+        redelivered.is_err(),
+        "the queue took the message back while it was still held, so the extension did not \
+         ride the queue's own visibility timeout",
+    );
+
+    held.ack().await.expect("ack succeeds");
     connected.shutdown().await.expect("shutdown succeeds");
 }
