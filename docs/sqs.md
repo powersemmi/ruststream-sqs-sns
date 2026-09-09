@@ -337,8 +337,8 @@ that a publisher created before shutdown errors afterwards.
 
 Every conformance suite this crate's capabilities justify runs twice: once against the in-process
 stand-in and once against the stack. The lifecycle ladder and `capabilities::batches` have both
-legs; the routing suite is in process only, because it drives the `TestableBroker` surface no live
-broker has. `request_reply`, `transactions`, `owned_transactions` and `seeking` have no leg at all
+legs; the routing suite is in process only. `request_reply`, `transactions`, `owned_transactions`
+and `seeking` have no leg at all
 here - SQS offers no request-reply channel, no transactions and no cursor to seek, so the crate
 implements none of those capabilities and their suites do not apply.
 
@@ -347,11 +347,7 @@ implements none of those capabilities and their suites do not apply.
 The `testing` feature ships `SqsTestBroker`: an in-process broker that reproduces the crate's core
 routing with no server and no network. It follows the same ladder as the real broker - including
 the part that only shows after teardown, where a publisher that aliased the connection reports
-`NotConnected` rather than routing into a cleared router - and its connected form implements
-`ruststream::testing::TestableBroker`, so the same broker drives the
-`TestApp` harness and the framework's conformance suite in process; inject traffic with
-`broker.inject(OutgoingMessage::new(..))` and assert on published output with the free
-`ruststream::testing::expect_published`. See
+`NotConnected` rather than routing into a cleared router - and it drives the `TestApp` harness. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
 `SqsQueue` is a subscription source for it as well, so the declaration a service ships mounts

@@ -77,18 +77,7 @@ fn service() -> impl App {
 
 ## Test it
 
-The `testing` feature runs handlers against an in-process SQS stand-in - no server, same routing, same ladder, same `SqsQueue` descriptor and the same publish policies, so a routes file mounts on it as written. Inject a message as an external producer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
-
-```rust
-use ruststream::{Broker, OutgoingMessage};
-use ruststream::testing::{TestableBroker, expect_published};
-use ruststream_sqs_sns::testing::SqsTestBroker;
-
-let broker = SqsTestBroker::new().connect().await?;
-broker.inject(OutgoingMessage::new("orders", br#"{"id":1}"#));
-let confirmations =
-    expect_published(&broker, "confirmations", 1, std::time::Duration::from_secs(1)).await;
-```
+The `testing` feature runs handlers against an in-process SQS stand-in - no server, same routing, same ladder, same `SqsQueue` descriptor and the same publish policies, so a routes file mounts on it as written.
 
 SQS behaviour itself (visibility, redelivery, FIFO, SNS fan-out) is covered by the env-gated live suite instead: `just test-brokers` starts LocalStack and runs the integration tests plus the framework conformance lifecycle against it.
 

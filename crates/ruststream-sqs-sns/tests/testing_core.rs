@@ -24,7 +24,7 @@ struct Order {
 }
 
 /// What a reply-shaped handler hands back.
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Outgoing, Serialize)]
 struct OrderPlaced {
     id: u64,
 }
