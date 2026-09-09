@@ -185,6 +185,11 @@ moment the message is settled or dropped, so it never holds a message invisible 
 is done, and a failed extension is logged at debug level and retried on the next tick. Handler
 duration is thus bounded by the process, not by the queue's timeout.
 
+The value it re-arms is the one the delivery is held under: what the descriptor named, or the
+queue's own visibility timeout when the descriptor named none. That timeout is read from the
+queue once, when the subscription opens, so a subscription that names none needs
+`sqs:GetQueueAttributes` on its queue and refuses to open without it.
+
 An unsettled drop stops the extension without any further call, and the message redelivers when
 its current visibility lapses, which is the at-least-once contract.
 
