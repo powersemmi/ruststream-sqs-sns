@@ -33,7 +33,7 @@ capability the broker does not implement is a compile error at the mount site.
 | `TransactionalPublisher` | no | SQS has no transactional send |
 | `OwnedTransactions` | no | SQS has no transactional send |
 | `RequestReply` | no | SQS has no reply inbox; a reply is an ordinary send to another queue |
-| `Partitioned` | yes | the `partition-key` header is the FIFO message group id, in both directions (see [FIFO message groups](#fifo-message-groups)) |
+| `Partitioned` | yes | a delivery reports its FIFO message group id as the `partition-key` header, and a publish reads its own group from that header (see [FIFO message groups](#fifo-message-groups)) |
 | `Seekable` / `Positioned` | no | a queue keeps no cursor to move; messages that outlive their attempts are recovered from the redrive policy's dead-letter queue |
 | `DescribeServer` | yes | `SqsBroker` reports the host and port it connects to, and the `sqs` protocol, into the AsyncAPI document the framework generates |
 
@@ -98,8 +98,11 @@ Mount it on the broker:
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_service.rs:app"
 ```
 
-The plain string form `#[subscriber("orders")]` takes the descriptor's defaults. A queue name the
-service uses need not be a legal SQS name: on the way to SQS every character outside
+The plain string form `#[subscriber("orders")]` takes the descriptor's defaults. `#[subscriber(SqsQueue)]`
+fixes the kind and leaves the name to the mount site, `b.include(handler.name("orders"))`, which
+is how one handler definition serves two queues.
+
+A queue name the service uses need not be a legal SQS name: on the way to SQS every character outside
 `[A-Za-z0-9_-]` becomes `-`, and a `.fifo` suffix survives. Subscriptions and queue publishes
 share that mapping, so a dotted framework name stays routable on a queue.
 
@@ -159,6 +162,12 @@ Deferred retry is native as well: `retry_after(delay)` sets the message's visibi
 capped at the protocol's 12 hours. The message waits in place and redelivers on the same queue
 with its receive count intact, since nothing is republished and no copy is made.
 
+The framework's own fallback, which republishes a delayed copy, therefore never runs here. It is
+still wired: a queue answers where a deferred copy would go with its own name, so a scope built
+with `BrokerScope::retry_via` starts on this broker instead of refusing to. A queue fed by an SNS
+topic answers the same way - the copy reaches the queue directly and skips the fan-out, which is
+what a redelivery of that one subscription means.
+
 SQS has no discard short of deletion, so poison-message routing belongs to the queue's redrive
 policy: after `maxReceiveCount` deliveries SQS moves the message to the dead-letter queue itself.
 A handler reads that count in the `sqs-receive-count` header (`RECEIVE_COUNT_HEADER`), the
@@ -181,15 +190,24 @@ visibility lapses, which is the at-least-once contract.
 
 ## FIFO message groups
 
-On a `.fifo` destination the `partition-key` header is the message group id. A publish sends it as
-the group id, and sends `"default"` when the message names no such header, since a FIFO queue
-requires one. A delivery arrives with its group id in the same header, so a service reads and
-writes one header on either side of the queue. A publisher handle can supply the group for the
-messages that do not name it, with [`with_group_id`](#per-message-arguments).
+On a `.fifo` destination every send carries a message group id, because a FIFO queue requires one.
+Name it per message with the [`group_id`](#per-message-settings) step, or fix it for a whole
+publish position on the policy: `Publish::default().group_id("orders")`. A delivery arrives with
+its group in the `partition-key` header, which is also the header a message may name its own group
+in - the spelling that travels unchanged to every other broker. A send that names none at all goes
+under `"default"`.
 
-Every FIFO send also supplies a deduplication id, unique within the process. An explicit id takes
-precedence over content-based deduplication, so two identical payloads sent on purpose are never
-collapsed into one.
+Three answers can be in play at once, and they resolve from the most specific: the call's own
+step, then the message's `partition-key` header, then the group the mount site fixed.
+
+Every FIFO send also supplies a deduplication id, unique within the process, unless the call names
+one with the `deduplication_id` step. An explicit id takes precedence over content-based
+deduplication, so two identical payloads sent on purpose are never collapsed into one.
+
+Both settings are FIFO settings. Naming either for a standard queue or topic is a publish error
+(`SqsError::NotFifo`): the ordering the caller asked for would not happen there, and a value
+dropped in silence is the worse answer. A `partition-key` header is not an ask of this broker, so
+a standard queue keeps ignoring it.
 
 ## Publishing
 
@@ -217,8 +235,8 @@ topic instead is one step on the chain:
 ```
 
 The mount that binds it is in [SNS fan-out](#sns-fan-out). The same policy value goes to the
-lifecycle hooks, `b.after_startup(Publish, ..)`, which is where a service publishes outside a
-handler.
+lifecycle hooks, `b.after_startup(Publish::default(), ..)`, which is where a service publishes
+outside a handler.
 
 The prelude also exports `SqsPublish` as `Publish`, the name every broker crate gives the policy
 that a mount site and the lifecycle hooks take; the examples write it. `SnsPublish` keeps its own
@@ -230,19 +248,37 @@ application starts, `ConnectedSqsBroker::publisher()` and `ConnectedSqsBroker::s
 from the connected form. Each shares the broker's connection, and every publish after `shutdown`
 returns `SqsError::NotConnected`.
 
-### Per-message arguments
+### Per-message settings
 
-A publish builder fills its headers position once, and a message type that declares a header
-contract spends that position on the contract value. `with_group_id` puts the FIFO message group
-beside it, as a **base header**: a map the publisher handle holds, and the call site's own headers
-are written over it key by key. Both `SqsPublisher` and `SnsPublisher` have it.
+What one message may differ from the next in is `SqsPublishOptions`: a message group id and a
+deduplication id, both optional. The publish builder takes them as steps, from the
+`SqsPublishSteps` trait the prelude exports:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_fifo_group.rs:publish"
 ```
 
-The group is the `partition-key` header, so a message that names `partition-key` itself wins. On
-the way out that header becomes the native `MessageGroupId` rather than a message attribute.
+A step is a position on the builder, not a wrapper around the publisher, so the publish it
+finishes still encodes with the codec the mount site named and runs the transforms that mount
+named. The same steps are on every publish surface: an injected `Out` slot, a publisher a
+lifecycle hook is handed, a publisher taken from the broker.
+
+A handler body that names a step is the one place a handler file imports this crate's prelude
+instead of the framework's, and it bounds the slot it publishes through on the options type:
+
+```rust
+async fn ship(
+    order: &Order,
+    Out(shipments): Out<impl Publisher<Options = SqsPublishOptions>, Shipments>,
+) -> HandlerOutcome
+```
+
+What the call leaves alone is what the mount site fixed:
+`.out(Shipments, Publish::default().group_id("orders"))`. A reply adjusts nothing, because it has
+no call site - the policy bound to the `Reply` position is its whole answer.
+
+On the way out the group becomes the native `MessageGroupId` rather than a message attribute, and
+the delivery carries it back in the `partition-key` header.
 
 ## SNS fan-out
 
@@ -261,7 +297,7 @@ Topology administration runs on the broker's own lifecycle ladder rather than th
 application builder; in production the topic and its subscriptions are provisioned as
 infrastructure. The example wires them from an `after_startup` hook, where the queues already
 exist because the subscriptions opened them, then places one order on a queue and lets the
-handler's reply fan out. `.out(Reply, SnsPublish)` is the whole of the fan-out wiring:
+handler's reply fan out. `.out(Reply, SnsPublish::default())` is the whole of the fan-out wiring:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:app"
@@ -341,8 +377,12 @@ descriptor: in process there is no long poll for `wait` to bound, no redelivery 
 `visibility` to arm, and no queue for `create_if_missing` to create.
 
 The publish half matches. `SqsPublish` and `SnsPublish` pair against the stand-in, which names
-`SqsPublish` as its default policy, so `.out(Reply, Publish)` and the default reply of a
-`publish(..)` handler mount as written. Both policies pair into the one `SqsTestPublisher`,
+`SqsPublish` as its default policy, so `.out(Reply, Publish::default())` and the default reply of
+a `publish(..)` handler mount as written. The per-message settings arrive there too: a step a body
+names reaches the stand-in's publisher as it reaches the real one, the harness records it
+(`tb.out::<Shipments>().assert_called_once().with_options(..)`), and the resolved group is
+delivered in the `partition-key` header exactly as SQS delivers it. Both policies pair into the
+one `SqsTestPublisher`,
 because the router has no topic to fan out from: a test proves the reply took the destination the
 policy names, not that SNS delivered it onward to the queues subscribed to that topic.
 

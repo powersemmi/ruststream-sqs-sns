@@ -4,8 +4,8 @@
 [RustStream](https://powersemmi.github.io/ruststream/) messaging framework, with SNS fan-out
 publishing. A subscriber long-polls its queue and can take native batches over `ReceiveMessage`.
 Retries run through the message's visibility timeout, and dead-lettering through the queue's
-redrive policy. You can set a message group when you publish to a FIFO queue, and read it back
-from the message you receive.
+redrive policy. You set a message group per publish to a FIFO queue, or fix one for a whole
+publish position, and read it back from the message you receive.
 
 The transport is built on the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
 [`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients. The `testing` feature ships an in-process
