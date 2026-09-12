@@ -266,6 +266,7 @@ lifecycle hook is handed, a publisher taken from the broker.
 A handler body that names a step is the one place a handler file imports this crate's prelude
 instead of the framework's, and it bounds the slot it publishes through on the options type:
 
+<!-- inline-rust: the signature alone is the point here; a compiled snippet would drag in the slot marker, the payload type and a body that says nothing -->
 ```rust
 async fn ship(
     order: &Order,
