@@ -343,15 +343,35 @@ The same suite runs in CI: the integration tests plus the framework's conformanc
 which walks `new` -> `connect` -> subscribe -> publish -> receive -> ack -> `shutdown` and asserts
 that a publisher created before shutdown errors afterwards.
 
+Every conformance suite this crate's capabilities justify runs twice: once against the in-process
+stand-in and once against the stack. The lifecycle ladder and `capabilities::batches` have both
+legs; the routing suite is in process only. `request_reply`, `transactions`, `owned_transactions`
+and `seeking` have no leg at all
+here - SQS offers no request-reply channel, no transactions and no cursor to seek, so the crate
+implements none of those capabilities and their suites do not apply.
+
 ## Testing
 
 The `testing` feature ships `SqsTestBroker`: an in-process broker that reproduces the crate's core
-routing with no server and no network. It follows the same ladder as the real broker, and its
-connected form implements `ruststream::testing::TestableBroker`, so the same broker drives the
-`TestApp` harness and the framework's conformance suite in process; inject traffic with
-`broker.inject(OutgoingMessage::new(..))` and assert on published output with the free
-`ruststream::testing::expect_published`. See
+routing with no server and no network. It follows the same ladder as the real broker - including
+the part that only shows after teardown, where a publisher that aliased the connection reports
+`NotConnected` rather than routing into a cleared router - and it drives the `TestApp` harness. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
+
+`SqsQueue` is a subscription source for it as well, so the declaration a service ships mounts
+unchanged: `#[subscriber(SqsQueue::new("orders").wait(..))]` and the mount-site settings that
+chain onto it work against `SqsTestBroker` the same way they work against `SqsBroker`, and the
+test exercises the wiring the service actually runs instead of a bare-name stand-in of it. The
+options stop at the descriptor, though: in process there is no long poll for `wait` to bound, no
+redelivery clock for `visibility` to arm, and no queue for `create_if_missing` to create.
+
+The publish half matches. `SqsPublish` and `SnsPublish` pair against the stand-in too, and it
+names `SqsPublish` as its default policy, so `.out(Reply, Publish)` and the default reply of a
+`publish(..)` handler both mount as written - there is no test-only policy to swap in, and the
+live publisher a startup hook or an injected slot receives carries the same surface,
+`with_group_id` included. Both policies pair into the one `SqsTestPublisher`, because the router
+has no topic to fan out from: a test proves the reply took the destination the policy names, not
+that SNS delivered it onward to the queues subscribed to that topic.
 
 It routes by exact queue name and does not simulate SQS product behaviour: visibility timing,
 redelivery, redrive dead-lettering, FIFO ordering, and SNS fan-out are covered by the live suite
