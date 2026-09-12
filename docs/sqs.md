@@ -18,7 +18,7 @@ glob re-exports the framework's own prelude together with this crate's broker, q
 publish policies and publishers. The framework's items come through unchanged, so a service that
 runs on two brokers globs both preludes and what they share resolves to a single item.
 
-The crate's MSRV is 1.94, tracking the AWS SDK; the framework core stays at 1.88, and a dependent
+The crate's MSRV is 1.94.1, tracking the AWS SDK; the framework core stays at 1.88, and a dependent
 crate may sit above its dependency's floor.
 
 ## Capabilities
@@ -311,6 +311,10 @@ for the rest. No envelope format is invented, so any other SQS producer or consu
 message. A header value is bytes on both sides of the framework's `HeaderMap`, so which of the two
 attribute types carried it is invisible to a service.
 
+`partition-key` is the one header that never becomes an attribute. A FIFO destination sends it as
+the native `MessageGroupId` and a delivery carries it back; a standard destination drops it, so a
+standard queue neither forwards it nor returns it.
+
 The body is the one transport constraint. SQS bodies are text, and what counts as text there is
 narrower than UTF-8: the C0 control characters other than tab, newline and carriage return are
 refused, and so are the two non-characters at the end of the basic plane. A payload SQS accepts
@@ -333,6 +337,7 @@ recipes around it:
 just brokers-up                 # start LocalStack on 127.0.0.1:4566
 cargo run --example sqs_service
 cargo run --example sqs_batches
+cargo run --example sqs_fifo_group
 cargo run --example sns_fanout
 just brokers-down
 ```

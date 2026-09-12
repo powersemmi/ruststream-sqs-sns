@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 prelude，连同本 crate 的 Broker、队列描述符、发布策略和发布者一起重新导出。框架的条目原样通过，
 因此跑在两个 Broker 上的服务把两个 prelude 都 glob 进来，两边共有的部分解析到同一个条目。
 
-本 crate 的 MSRV 是 1.94，跟随 AWS SDK；框架核心停在 1.88，依赖方 crate 可以高于它所依赖的那个
+本 crate 的 MSRV 是 1.94.1，跟随 AWS SDK；框架核心停在 1.88，依赖方 crate 可以高于它所依赖的那个
 下限。
 
 ## 能力 { #capabilities }
@@ -273,6 +273,9 @@ SNS 只以发布者的身份出现：它的投递目标是队列和 HTTP 端点�
 任何信封格式，因此其他任何 SQS 的生产方或消费方都能读同一条消息。消息头的值在框架 `HeaderMap` 的
 两侧都是字节，因此是哪一种属性类型承载了它，对服务不可见。
 
+`partition-key` 是唯一不会变成属性的消息头。以 `.fifo` 结尾的目的地把它作为原生的
+`MessageGroupId` 发出，投递时再带回来；普通目的地把它丢掉，因此普通队列既不转发它，也不返回它。
+
 消息体是传输上唯一的约束。SQS 的消息体是文本，而那里算作文本的范围比 UTF-8 更窄：除制表符、
 换行符和回车符之外的 C0 控制字符不在其列，基本平面末尾的两个非字符也不在其列。SQS 接受的载荷原样
 通过。其余的一切都以 base64 编码，并带上一个标记属性，接收时再解码回来：二进制载荷是这样，带着
@@ -292,6 +295,7 @@ base64 那一步到这时已经撤销，因此处理器看到的就是生产方�
 just brokers-up                 # 在 127.0.0.1:4566 上启动 LocalStack
 cargo run --example sqs_service
 cargo run --example sqs_batches
+cargo run --example sqs_fifo_group
 cargo run --example sns_fanout
 just brokers-down
 ```
