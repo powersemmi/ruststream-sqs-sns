@@ -14,7 +14,9 @@ use ruststream::{
     Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, Publisher,
     Serialized, Subscriber,
 };
-use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsQueue};
+use ruststream_sqs_sns::{
+    ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsPublishSteps, SqsQueue,
+};
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -69,7 +71,10 @@ async fn roundtrip_preserves_payload_headers_and_partition_key() {
     headers.insert(PARTITION_KEY_HEADER, "user-42");
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, b"{\"id\":1}".as_slice()).with_headers(headers))
+        .publish(
+            OutgoingMessage::new(&queue, b"{\"id\":1}".as_slice()).with_headers(headers),
+            None,
+        )
         .await
         .expect("publish succeeds");
 
@@ -111,7 +116,7 @@ async fn binary_payloads_survive_the_text_body() {
     let raw = [0u8, 159, 146, 150, 255];
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, raw.as_slice()))
+        .publish(OutgoingMessage::new(&queue, raw.as_slice()), None)
         .await
         .expect("publish succeeds");
 
@@ -145,7 +150,7 @@ async fn nack_with_requeue_redelivers() {
         .expect("subscription opens");
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, b"again".as_slice()))
+        .publish(OutgoingMessage::new(&queue, b"again".as_slice()), None)
         .await
         .expect("publish succeeds");
 
@@ -195,7 +200,7 @@ async fn nack_after_delays_the_redelivery() {
         .expect("subscription opens");
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, b"not-yet".as_slice()))
+        .publish(OutgoingMessage::new(&queue, b"not-yet".as_slice()), None)
         .await
         .expect("publish succeeds");
 
@@ -258,9 +263,12 @@ async fn sns_fans_out_to_a_subscribed_queue() {
     let mut headers = HeaderMap::new();
     headers.insert("x-tenant", "acme");
     let sns = connected.sns_publisher();
-    sns.publish(OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers))
-        .await
-        .expect("sns publish succeeds");
+    sns.publish(
+        OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers),
+        None,
+    )
+    .await
+    .expect("sns publish succeeds");
 
     let mut stream = pin!(subscriber.stream());
     let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
@@ -275,8 +283,11 @@ async fn sns_fans_out_to_a_subscribed_queue() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
+/// The step on the publish builder reaches the queue as the FIFO message group id: SQS reports
+/// it back on the delivery, and this is the only place that can be shown at all - the in-process
+/// stand-in has no message groups.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_group_id_handle_sets_the_fifo_message_group() {
+async fn a_group_id_step_sets_the_fifo_message_group() {
     let Some(endpoint) = test_endpoint() else {
         return;
     };
@@ -294,9 +305,9 @@ async fn a_group_id_handle_sets_the_fifo_message_group() {
 
     connected
         .publisher()
-        .with_group_id("user-42")
         .message(&Body(br#"{"id":1}"#.to_vec()))
         .to(&queue)
+        .group_id("user-42")
         .publish()
         .await
         .expect("publish succeeds");
@@ -317,8 +328,10 @@ async fn a_group_id_handle_sets_the_fifo_message_group() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
+/// The step is this broker's own word for the group, so it wins over the portable
+/// `partition-key` header a service sets for every broker it publishes to.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_messages_own_partition_key_wins_over_the_handles_group() {
+async fn a_group_id_step_wins_over_the_messages_partition_key() {
     let Some(endpoint) = test_endpoint() else {
         return;
     };
@@ -335,13 +348,13 @@ async fn a_messages_own_partition_key_wins_over_the_handles_group() {
         .expect("subscription opens");
 
     let mut headers = HeaderMap::new();
-    headers.insert(PARTITION_KEY_HEADER, "user-7");
+    headers.insert(PARTITION_KEY_HEADER, "user-42");
     connected
         .publisher()
-        .with_group_id("user-42")
         .message(&Body(br#"{"id":2}"#.to_vec()))
         .with_headers(headers)
         .to(&queue)
+        .group_id("user-7")
         .publish()
         .await
         .expect("publish succeeds");
@@ -427,7 +440,7 @@ async fn a_held_delivery_rides_the_queues_own_visibility_timeout() {
         .expect("subscription opens");
     connected
         .publisher()
-        .publish(OutgoingMessage::new(&queue, b"held".as_slice()))
+        .publish(OutgoingMessage::new(&queue, b"held".as_slice()), None)
         .await
         .expect("publish succeeds");
 

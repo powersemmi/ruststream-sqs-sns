@@ -84,10 +84,10 @@ fn app() -> impl App {
         .with_broker(broker(), |b| {
             // One verb binds the reply position: the marker names which publish the policy is
             // for, and `SnsPublish` names the fan-out.
-            b.include(accept).out(Reply, SnsPublish);
+            b.include(accept).out(Reply, SnsPublish::default());
             b.include(bill);
             b.include(ship);
-            b.after_startup(Publish, async move |sqs| -> io::Result<()> {
+            b.after_startup(Publish::default(), async move |sqs| -> io::Result<()> {
                 sqs.message(&PlaceOrder { id: 1 })
                     .publish()
                     .await

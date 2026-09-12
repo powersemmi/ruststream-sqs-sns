@@ -64,6 +64,58 @@ async fn ship(order: &Order) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
+/// The other spelling: the definition fixes the kind and the mount site names the queue, which
+/// is what lets one handler run against two queues.
+#[subscriber(SqsQueue)]
+async fn audit(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::ack()
+}
+
+/// The slot both bodies below publish through, so the harness records what each publish asked
+/// for.
+#[derive(OutSlot)]
+#[publishes(Order)]
+struct Shipments;
+
+/// A body that adjusts a per-message setting: it names this crate's step, so it bounds its slot
+/// on this crate's options type.
+#[subscriber(SqsQueue::new("dispatch"))]
+async fn dispatch(
+    order: &Order,
+    Out(shipments): Out<impl Publisher<Options = SqsPublishOptions>, Shipments>,
+) -> HandlerOutcome {
+    if shipments
+        .message(order)
+        .to("shipments.fifo")
+        .group_id("user-9")
+        .publish()
+        .await
+        .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
+
+/// The same slot, with nothing adjusted: whatever the mount site fixed is the whole answer.
+#[subscriber(SqsQueue::new("forward"))]
+async fn forward(
+    order: &Order,
+    Out(shipments): Out<impl Publisher<Options = SqsPublishOptions>, Shipments>,
+) -> HandlerOutcome {
+    if shipments
+        .message(order)
+        .to("shipments.fifo")
+        .publish()
+        .await
+        .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_descriptor_declared_for_sqs_mounts_on_the_test_broker() {
     let app =
@@ -81,6 +133,28 @@ async fn a_descriptor_declared_for_sqs_mounts_on_the_test_broker() {
         .subscriber("orders")
         .assert_called_once()
         .with(&Order { id: 1 })
+        .settled(HandlerOutcome::ack());
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_definition_that_fixes_only_the_kind_takes_the_mount_sites_name() {
+    let app =
+        RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(audit.name("audit-trail").wait(Duration::from_secs(10)));
+        });
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("audit-trail", &Order { id: 8 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    tb.broker::<SqsTestBroker>()
+        .subscriber("audit-trail")
+        .assert_called_once()
+        .with(&Order { id: 8 })
         .settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("the app shuts down");
@@ -153,7 +227,7 @@ async fn the_production_publish_policy_mounts_on_the_test_broker() {
         RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
             // The line a routes file writes, unchanged: the broker under it is the only
             // difference between this and production.
-            b.include(accept).out(Reply, Publish);
+            b.include(accept).out(Reply, Publish::default());
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -174,7 +248,7 @@ async fn the_production_publish_policy_mounts_on_the_test_broker() {
 async fn the_fan_out_policy_mounts_the_same_way() {
     let app =
         RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(accept).out(Reply, SnsPublish);
+            b.include(accept).out(Reply, SnsPublish::default());
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -194,21 +268,23 @@ async fn the_fan_out_policy_mounts_the_same_way() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_startup_hook_publishes_under_the_group_it_named() {
+async fn a_startup_hook_publishes_under_the_group_the_policy_fixed() {
     let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
         SqsTestBroker::new(),
         |b| {
             b.include(ship);
             // The hook takes the live form of the production policy, so what it may call on that
             // publisher is what decides whether the service's own startup code compiles here.
-            b.after_startup(Publish, async move |sqs| -> io::Result<()> {
-                sqs.with_group_id("user-42")
-                    .message(&Order { id: 4 })
-                    .to("shipments.fifo")
-                    .publish()
-                    .await
-                    .map_err(io::Error::other)
-            });
+            b.after_startup(
+                Publish::default().group_id("user-42"),
+                async move |sqs| -> io::Result<()> {
+                    sqs.message(&Order { id: 4 })
+                        .to("shipments.fifo")
+                        .publish()
+                        .await
+                        .map_err(io::Error::other)
+                },
+            );
         },
     );
 
@@ -220,8 +296,98 @@ async fn a_startup_hook_publishes_under_the_group_it_named() {
         .assert_called_once()
         .with(&Order { id: 4 })
         .settled(HandlerOutcome::ack());
-    // The group is not dropped on the way through: it travels as the base partition key, the
-    // same header the real publishers turn into the FIFO message group id.
+    // The group reaches the delivery where SQS puts it: the partition-key header a FIFO
+    // delivery carries its message group id in.
+    tb.broker::<SqsTestBroker>()
+        .published::<Order>("shipments.fifo")
+        .assert_called_once()
+        .with_header(PARTITION_KEY_HEADER, "user-42");
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// The step on the publish builder wins over the group the policy fixed, for that one message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_step_wins_over_the_group_the_policy_fixed() {
+    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
+        SqsTestBroker::new(),
+        |b| {
+            b.include(ship);
+            b.after_startup(
+                Publish::default().group_id("user-42"),
+                async move |sqs| -> io::Result<()> {
+                    sqs.message(&Order { id: 5 })
+                        .to("shipments.fifo")
+                        .group_id("user-7")
+                        .publish()
+                        .await
+                        .map_err(io::Error::other)
+                },
+            );
+        },
+    );
+
+    let tb = TestApp::start(app).await.expect("the app starts");
+    tb.settle().await.expect("the startup publish settles");
+
+    tb.broker::<SqsTestBroker>()
+        .published::<Order>("shipments.fifo")
+        .assert_called_once()
+        .with_header(PARTITION_KEY_HEADER, "user-7");
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// The slot view records what a publish through an `Out` slot asked for, which is where a test
+/// reads back a setting the transport has already folded into its own protocol fields.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_slot_view_reads_back_the_options_a_publish_carried() {
+    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
+        SqsTestBroker::new(),
+        |b| {
+            b.include(ship);
+            b.include(dispatch)
+                .out(Shipments, Publish::default().group_id("user-42"))
+                .build();
+        },
+    );
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("dispatch", &Order { id: 6 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    tb.out::<Shipments>()
+        .assert_called_once()
+        .with_options(&SqsPublishOptions::default().group_id("user-9"));
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// A publish that names no step carries no options at all, and the policy's group is the whole
+/// answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unstepped_slot_publish_carries_the_policy_defaults() {
+    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
+        SqsTestBroker::new(),
+        |b| {
+            b.include(ship);
+            b.include(forward)
+                .out(Shipments, Publish::default().group_id("user-42"))
+                .build();
+        },
+    );
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("forward", &Order { id: 7 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    tb.out::<Shipments>()
+        .assert_called_once()
+        .assert_options_default();
     tb.broker::<SqsTestBroker>()
         .published::<Order>("shipments.fifo")
         .assert_called_once()

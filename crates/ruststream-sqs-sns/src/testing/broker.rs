@@ -8,14 +8,15 @@ use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
     Broker, ConnectedBroker, DefaultPublish, HeaderMap, OutgoingMessage, Publisher, RawMessage,
-    Subscribe,
+    RedeliveryAddress, Subscribe,
 };
 
-use crate::SqsPublish;
 use crate::error::SqsError;
-use crate::publisher::group_headers;
+use crate::message::PARTITION_KEY_HEADER;
+use crate::publisher::{fifo_settings, is_fifo};
 use crate::testing::router::AddressRouter;
 use crate::testing::subscriber::SqsTestSubscriber;
+use crate::{SqsPublish, SqsPublishOptions};
 
 /// Shared state of one in-process broker: the router, the harness coordinator, and whether the
 /// transport has been shut down.
@@ -138,6 +139,13 @@ impl Subscribe for ConnectedSqsTestBroker {
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
         ready(self.open(name))
     }
+
+    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
+        // The same answer the real broker gives, so a `retry_via` wiring that starts here
+        // starts against SQS too: the router publishes by exact address and a subscription is
+        // opened under that address.
+        Some(RedeliveryAddress::new(name.to_owned()))
+    }
 }
 
 impl TestableBroker for ConnectedSqsTestBroker {
@@ -168,74 +176,66 @@ ruststream::register_testable_broker!(ConnectedSqsTestBroker);
 #[derive(Debug, Clone)]
 pub struct SqsTestPublisher {
     state: Arc<TestState>,
-    base: Option<HeaderMap>,
+    default_group: Option<String>,
 }
 
 impl SqsTestPublisher {
     fn new(state: Arc<TestState>) -> Self {
-        Self { state, base: None }
+        Self {
+            state,
+            default_group: None,
+        }
     }
 
-    /// Returns a handle whose sends carry `group` as the FIFO message group id, mirroring
-    /// [`SqsPublisher::with_group_id`](crate::SqsPublisher::with_group_id).
-    ///
-    /// The group travels as a base `partition-key` header, exactly as it does on the real
-    /// publishers, so it reaches the handler as that header and a message naming the header
-    /// itself still wins. What the stand-in cannot show is the ordering the group buys: the
-    /// router has no message groups, only the header.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ruststream::runtime::PublishExt;
-    /// use ruststream::{Outgoing, Serialized};
-    /// use ruststream_sqs_sns::testing::SqsTestBroker;
-    ///
-    /// // The order is already encoded, so it names itself serialized and leaves byte for byte.
-    /// #[derive(Outgoing, Serialized)]
-    /// struct Order(Vec<u8>);
-    ///
-    /// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    /// SqsTestBroker::new()
-    ///     .publisher()
-    ///     .with_group_id("user-42")
-    ///     .message(&Order(br#"{"id":1}"#.to_vec()))
-    ///     .to("orders.fifo")
-    ///     .publish()
-    ///     .await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn with_group_id(&self, group: impl Into<String>) -> Self {
-        Self {
-            state: Arc::clone(&self.state),
-            base: Some(group_headers(group)),
-        }
+    /// The publisher the policy paired: the same router, under the group the policy fixed.
+    pub(crate) fn with_default_group(mut self, group: Option<String>) -> Self {
+        self.default_group = group;
+        self
     }
 
     /// Routes one message, or reports the closed transport. Split out so the [`Publisher`] impl
     /// stays a `ready(..)`: the in-process transport never awaits.
-    fn route(&self, msg: &OutgoingMessage<'_>) -> Result<(), SqsError> {
+    ///
+    /// The FIFO settings resolve exactly as they do on the real publishers, and the answer goes
+    /// where SQS puts it: a `.fifo` destination delivers the resolved group in the
+    /// `partition-key` header, and a standard destination delivers no such header at all,
+    /// because SQS never carries it as an attribute. What the stand-in cannot show is the
+    /// ordering the group buys - the router has no message groups, only the header.
+    fn route(
+        &self,
+        msg: &OutgoingMessage<'_>,
+        options: Option<&SqsPublishOptions>,
+    ) -> Result<(), SqsError> {
         self.state.ensure_open()?;
-        self.state.publish(
+        let mut headers = msg.headers().clone();
+        let partition_key = headers
+            .remove(PARTITION_KEY_HEADER)
+            .map(|value| String::from_utf8_lossy(&value).into_owned());
+        if let Some(settings) = fifo_settings(
             msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
-        );
+            is_fifo(msg.name()),
+            options,
+            partition_key,
+            self.default_group.as_deref(),
+        )? {
+            headers.insert(PARTITION_KEY_HEADER, settings.group);
+        }
+        self.state
+            .publish(msg.name(), Bytes::copy_from_slice(msg.payload()), headers);
         Ok(())
     }
 }
 
 impl Publisher for SqsTestPublisher {
     type Error = SqsError;
+    type Options = SqsPublishOptions;
 
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
-        ready(self.route(&msg))
-    }
-
-    fn base_headers(&self) -> Option<&HeaderMap> {
-        self.base.as_ref()
+    fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        options: Option<&Self::Options>,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
+        ready(self.route(&msg, options))
     }
 }
 

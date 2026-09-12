@@ -6,12 +6,14 @@
 //! size, which a batch handler names at the mount site with `batch(n)` and the subscriber maps
 //! onto `MaxNumberOfMessages`.
 
+use std::borrow::Cow;
+use std::future::{Future, ready};
 use std::time::Duration;
 
 #[cfg(feature = "testing")]
 use ruststream::Subscribe;
-use ruststream::SubscriptionSource;
 use ruststream::runtime::{Declared, SubscriberBuilder, SubscriberSettings};
+use ruststream::{FromName, RedeliveryAddress, SubscriptionSource};
 
 use crate::broker::ConnectedSqsBroker;
 use crate::error::SqsError;
@@ -121,6 +123,16 @@ impl SqsQueue {
     }
 }
 
+/// A queue is named and nothing more, so a definition may fix the kind and leave the name to the
+/// mount site: `#[subscriber(SqsQueue)]` on the handler, `.name("orders")` where it is included.
+/// Every polling option keeps its default there, and the mount-site steps of [`SqsSubscription`]
+/// change them.
+impl FromName for SqsQueue {
+    fn from_name(name: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(name.into())
+    }
+}
+
 impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
     type Subscriber = SqsSubscriber;
 
@@ -130,6 +142,18 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
 
     async fn subscribe(self, connected: &ConnectedSqsBroker) -> Result<SqsSubscriber, SqsError> {
         connected.subscribe_queue(self).await
+    }
+
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedSqsBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, SqsError>> {
+        // A queue is a publish destination as well as a subscription, so a deferred retry is
+        // published under the very name this descriptor resolves. A queue fed by an SNS topic
+        // is no exception: the retry reaches the queue directly and skips the fan-out, which is
+        // what a redelivery of this one subscription means. The answer needs no I/O, so the
+        // future is ready.
+        ready(Ok(Some(RedeliveryAddress::new(self.queue.clone()))))
     }
 }
 
@@ -161,6 +185,13 @@ impl SubscriptionSource<ConnectedSqsTestBroker> for SqsQueue {
         // never reaches SQS.
         self.validate()?;
         connected.subscribe(self.queue()).await
+    }
+
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedSqsTestBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, SqsError>> {
+        ready(Ok(Some(RedeliveryAddress::new(self.queue.clone()))))
     }
 }
 

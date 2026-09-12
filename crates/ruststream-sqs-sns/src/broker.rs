@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_sqs::types::QueueAttributeName;
-use ruststream::{Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe};
+use ruststream::{
+    Broker, ConnectedBroker, DefaultPublish, DescribeServer, RedeliveryAddress, ServerSpec,
+    Subscribe,
+};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::error::{SqsError, sdk_err};
@@ -173,25 +176,6 @@ impl std::fmt::Debug for Core {
 }
 
 pub(crate) type CoreCell = Arc<OnceCell<Arc<Core>>>;
-
-/// The host and optional port of a configured endpoint, which is what a server description
-/// carries.
-///
-/// An endpoint is an operator's URL, and the generated document is shared: a scheme is noise
-/// there, and credentials written into the URL must not travel with it. The three cuts are
-/// ordered, because a path may itself contain an `@` - taking the credentials out of
-/// `https://host/a@b` before the path is gone would leave `b` as the host.
-fn endpoint_host(endpoint: &str) -> &str {
-    let after_scheme = endpoint
-        .split_once("://")
-        .map_or(endpoint, |(_, rest)| rest);
-    let authority = after_scheme
-        .find(['/', '?', '#'])
-        .map_or(after_scheme, |end| &after_scheme[..end]);
-    authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host)
-}
 
 /// Reads the `VisibilityTimeout` attribute, which SQS reports as a whole number of seconds.
 ///
@@ -368,9 +352,9 @@ impl DescribeServer for SqsBroker {
         let host = self
             .endpoint
             .as_deref()
-            .map(endpoint_host)
+            .map(ServerSpec::host_from_url)
             .filter(|host| !host.is_empty())
-            .unwrap_or("sqs.amazonaws.com");
+            .unwrap_or_else(|| "sqs.amazonaws.com".to_owned());
         ServerSpec::new(host, "sqs")
     }
 }
@@ -514,6 +498,14 @@ impl Subscribe for ConnectedSqsBroker {
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.subscribe_queue(SqsQueue::new(name)).await
+    }
+
+    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
+        // A queue is its own publish destination: the name a subscription opened under is the
+        // name a publisher sends to, so a deferred retry lands back on the same queue. This
+        // holds for a queue fed by an SNS topic too - the retry goes to the queue directly and
+        // skips the fan-out, which is what a redelivery of one subscription means.
+        Some(RedeliveryAddress::new(name.to_owned()))
     }
 }
 
