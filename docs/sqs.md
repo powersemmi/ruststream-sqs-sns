@@ -114,7 +114,7 @@ with them there, because the framework's own steps come first on a chain:
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_batches.rs:mount"
 ```
 
-A queue that `create_if_missing` has to create is a plain queue, or a FIFO queue with
+A queue that `create_if_missing` has to create is a standard queue, or a FIFO queue with
 content-based deduplication when the name ends in `.fifo`. Production queues are usually managed
 as infrastructure.
 
