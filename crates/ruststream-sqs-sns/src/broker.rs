@@ -115,6 +115,39 @@ impl Core {
         Ok(arn)
     }
 
+    /// The queue's own visibility timeout, read once when a subscription opens.
+    ///
+    /// A subscription that names no visibility of its own holds every delivery under this
+    /// value, so it is read from the queue rather than assumed: the timeout is the operator's
+    /// setting, and a service that substituted its own would shorten it without saying so.
+    pub(crate) async fn queue_visibility(
+        &self,
+        queue: &str,
+        queue_url: &str,
+    ) -> Result<Duration, SqsError> {
+        let attributes = self
+            .sqs
+            .get_queue_attributes()
+            .queue_url(queue_url)
+            .attribute_names(QueueAttributeName::VisibilityTimeout)
+            .send()
+            .await
+            .map_err(|e| SqsError::Queue {
+                name: queue.to_owned(),
+                source: sdk_err(&e),
+            })?;
+        parse_visibility(
+            attributes
+                .attributes()
+                .and_then(|map| map.get(&QueueAttributeName::VisibilityTimeout))
+                .map(String::as_str),
+        )
+        .map_err(|reason| SqsError::Queue {
+            name: queue.to_owned(),
+            source: reason.into(),
+        })
+    }
+
     pub(crate) fn rebase_url(&self, url: String) -> String {
         let Some(endpoint) = &self.endpoint else {
             return url;
@@ -158,6 +191,26 @@ fn endpoint_host(endpoint: &str) -> &str {
     authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host)
+}
+
+/// Reads the `VisibilityTimeout` attribute, which SQS reports as a whole number of seconds.
+///
+/// SQS sets the attribute on every queue, so an answer without it, or with something that is
+/// not a number of seconds, means the timeout is unknown. The subscription then refuses to open
+/// instead of holding deliveries under a duration this crate invented.
+fn parse_visibility(raw: Option<&str>) -> Result<Duration, String> {
+    let Some(raw) = raw else {
+        return Err("GetQueueAttributes returned no VisibilityTimeout".to_owned());
+    };
+    raw.trim()
+        .parse::<u64>()
+        .map(Duration::from_secs)
+        .map_err(|_| {
+            format!(
+                "GetQueueAttributes returned VisibilityTimeout {raw:?}, \
+                 which is not a whole number of seconds"
+            )
+        })
 }
 
 /// Maps a logical destination name onto a valid SQS queue name: characters outside
@@ -393,10 +446,15 @@ impl ConnectedSqsBroker {
 
     /// Opens the subscription described by `queue`.
     ///
+    /// A descriptor that names no visibility takes the queue's own timeout, read here with one
+    /// `GetQueueAttributes` call, so every delivery is held under the value the operator
+    /// configured.
+    ///
     /// # Errors
     ///
     /// Returns [`SqsError`] when the descriptor is invalid, the queue cannot be resolved (or
-    /// created, when opted in), or the broker is shut down.
+    /// created, when opted in), the queue's visibility timeout cannot be read, or the broker is
+    /// shut down.
     pub async fn subscribe_queue(&self, queue: SqsQueue) -> Result<SqsSubscriber, SqsError> {
         queue.validate()?;
         self.core.ensure_open()?;
@@ -406,7 +464,7 @@ impl ConnectedSqsBroker {
         } else {
             self.core.queue_url(queue.queue()).await?
         };
-        Ok(SqsSubscriber::open(&self.core, url, &queue))
+        SqsSubscriber::open(&self.core, queue.queue(), url, &queue).await
     }
 
     /// Resolves the queue, creating it when missing. A `.fifo` name creates a FIFO queue with
@@ -467,7 +525,7 @@ impl DefaultPublish for ConnectedSqsBroker {
 mod tests {
     use ruststream::DescribeServer;
 
-    use super::SqsBroker;
+    use super::{Duration, SqsBroker, parse_visibility};
 
     /// The host a description carries for `endpoint`.
     fn described(endpoint: &str) -> String {
@@ -525,5 +583,29 @@ mod tests {
         let described = SqsBroker::new().describe_server();
         assert_eq!(described.host.as_deref(), Some("sqs.amazonaws.com"));
         assert_eq!(described.protocol, "sqs");
+    }
+
+    #[test]
+    fn a_queues_visibility_timeout_is_read_in_seconds() {
+        assert_eq!(parse_visibility(Some("300")), Ok(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn an_absent_visibility_timeout_is_refused_rather_than_replaced() {
+        let reason = parse_visibility(None).expect_err("an absent attribute has no answer");
+        assert!(
+            reason.contains("no VisibilityTimeout"),
+            "the reason names the missing attribute, got {reason:?}",
+        );
+    }
+
+    #[test]
+    fn a_visibility_timeout_that_is_not_seconds_is_refused() {
+        let reason =
+            parse_visibility(Some("PT5M")).expect_err("a value that is not seconds has no answer");
+        assert!(
+            reason.contains("PT5M"),
+            "the reason carries the value it could not read, got {reason:?}",
+        );
     }
 }

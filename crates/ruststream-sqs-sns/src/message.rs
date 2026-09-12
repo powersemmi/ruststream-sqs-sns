@@ -175,12 +175,18 @@ impl IncomingMessage for SqsMessage {
 /// Keeps a message invisible while its handle is alive: re-arms the visibility to `visibility`
 /// every half period. Aborted on settle/drop; a failed extension is logged and retried on the
 /// next tick (the message may redeliver, which at-least-once permits).
+///
+/// A queue configured with no invisibility at all has nothing to extend, so the task ends
+/// instead of re-arming a zero once a second for as long as the handler runs.
 async fn extend_visibility(
     client: Client,
     queue_url: String,
     receipt: String,
     visibility: Duration,
 ) {
+    if visibility.is_zero() {
+        return;
+    }
     let period = (visibility / 2).max(Duration::from_secs(1));
     let seconds = i32::try_from(visibility.as_secs().min(43_200)).unwrap_or(43_200);
     loop {
