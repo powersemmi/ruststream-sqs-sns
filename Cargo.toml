@@ -5,7 +5,7 @@ members = ["crates/ruststream-sqs-sns"]
 [workspace.package]
 version = "0.7.0"
 edition = "2024"
-# The AWS SDK tracks a stable-2 MSRV policy (1.94.1 today); the core stays at 1.85 (a
+# The AWS SDK tracks a stable-2 MSRV policy (1.94.1 today); the core stays at 1.88 (a
 # dependent may exceed its dependency's floor).
 rust-version = "1.94.1"
 license = "Apache-2.0"
@@ -16,9 +16,9 @@ authors = ["RustStream contributors"]
 ruststream-sqs-sns = { path = "crates/ruststream-sqs-sns" }
 
 # The lower bound names the pre-release explicitly: cargo excludes pre-release versions from a
-# range whose bounds carry none, so a plain >=0.7.0 would not admit 0.7.0-rc.1. The bound still
+# range whose bounds carry none, so a plain >=0.7.0 would not admit 0.7.0-rc.3. The bound still
 # accepts the final 0.7.0 once it lands.
-ruststream = { version = ">=0.7.0-rc.1, <0.8.0", default-features = false }
+ruststream = { version = ">=0.7.0-rc.3, <0.8.0", default-features = false }
 
 aws-config = "1.10"
 # default-features off drops the legacy hyper-0.14/rustls-0.21 feature (RustSec advisories in

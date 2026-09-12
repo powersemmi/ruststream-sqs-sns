@@ -25,13 +25,54 @@ use crate::error::{SqsError, sdk_err};
 use crate::message::SqsMessage;
 use crate::queue::SqsQueue;
 
-/// The visibility the extender re-arms when the descriptor does not name one (the SQS queue
-/// default).
-const DEFAULT_VISIBILITY: Duration = Duration::from_secs(30);
-
 /// The protocol cap on `MaxNumberOfMessages`: one `ReceiveMessage` returns at most ten
 /// messages, whatever a batch size asks for.
 const RECEIVE_CAP: usize = 10;
+
+/// The protocol cap on a visibility timeout, in seconds.
+const MAX_VISIBILITY_SECS: u64 = 12 * 60 * 60;
+
+/// How long a delivery of this subscription stays invisible, and where that duration came from.
+///
+/// The receive call and the extender are one decision rather than two settings: whatever holds
+/// the first delivery is what the extender has to re-arm, or the extender moves a deadline
+/// somebody else set. Keeping them in one value makes that disagreement unrepresentable.
+#[derive(Debug, Clone, Copy)]
+enum Visibility {
+    /// The descriptor named it, so every receive asks for it and the extender re-arms it.
+    Requested(Duration),
+    /// The descriptor named none. The queue's own timeout governs the receive, and the extender
+    /// re-arms the value read from the queue when the subscription opened.
+    Queue(Duration),
+}
+
+impl Visibility {
+    /// What the receive call asks for, if anything.
+    ///
+    /// A queue's own timeout is already in force on a receive that names none, and naming it
+    /// again would pin the value read at startup over any later edit the operator makes.
+    const fn requested(self) -> Option<Duration> {
+        match self {
+            Self::Requested(visibility) => Some(visibility),
+            Self::Queue(_) => None,
+        }
+    }
+
+    /// The duration a delivery is held under, which the extender re-arms.
+    const fn held(self) -> Duration {
+        match self {
+            Self::Requested(visibility) | Self::Queue(visibility) => visibility,
+        }
+    }
+
+    /// The value as the SDK spells it, saturating at the protocol cap. A descriptor is validated
+    /// against that cap and a queue cannot exceed it, so the saturation is unreachable rather
+    /// than a fallback anything rides on.
+    fn seconds(self) -> i32 {
+        i32::try_from(self.held().as_secs().min(MAX_VISIBILITY_SECS))
+            .unwrap_or_else(|_| i32::try_from(MAX_VISIBILITY_SECS).unwrap_or(i32::MAX))
+    }
+}
 
 /// The receive size as the SDK spells it. The clamp is what makes the conversion exact, and
 /// the fallback is that same cap, so nothing rides on it.
@@ -47,7 +88,7 @@ pub struct SqsSubscriber {
     client: aws_sdk_sqs::Client,
     queue_url: String,
     wait: Duration,
-    visibility: Option<Duration>,
+    visibility: Visibility,
 }
 
 impl std::fmt::Debug for SqsSubscriber {
@@ -67,13 +108,27 @@ impl SqsSubscriber {
         &self.queue_url
     }
 
-    pub(crate) fn open(core: &Core, queue_url: String, descriptor: &SqsQueue) -> Self {
-        Self {
+    /// Opens a subscription on an already resolved queue URL.
+    ///
+    /// When the descriptor names no visibility, the queue's own timeout is read here, once, so
+    /// the extender re-arms what the operator configured. `queue` is the name as the service
+    /// wrote it, for the error.
+    pub(crate) async fn open(
+        core: &Core,
+        queue: &str,
+        queue_url: String,
+        descriptor: &SqsQueue,
+    ) -> Result<Self, SqsError> {
+        let visibility = match descriptor.visibility_value() {
+            Some(requested) => Visibility::Requested(requested),
+            None => Visibility::Queue(core.queue_visibility(queue, &queue_url).await?),
+        };
+        Ok(Self {
             client: core.sqs.clone(),
             queue_url,
             wait: descriptor.wait_value(),
-            visibility: descriptor.visibility_value(),
-        }
+            visibility,
+        })
     }
 
     /// Starts a pump asking for `size` messages per receive (clamped to the protocol cap) and
@@ -104,7 +159,7 @@ impl SqsSubscriber {
 struct Receive {
     size: i32,
     wait: i32,
-    visibility: Option<Duration>,
+    visibility: Visibility,
 }
 
 /// Turns a batch channel into the stream shape both lanes are built from.
@@ -165,7 +220,7 @@ async fn pump(
     call: Receive,
     out: mpsc::Sender<Result<Vec<SqsMessage>, SqsError>>,
 ) {
-    let visibility = call.visibility.unwrap_or(DEFAULT_VISIBILITY);
+    let visibility = call.visibility.held();
     loop {
         let mut receive = client
             .receive_message()
@@ -174,8 +229,8 @@ async fn pump(
             .wait_time_seconds(call.wait)
             .message_attribute_names("All")
             .message_system_attribute_names(MessageSystemAttributeName::All);
-        if let Some(v) = call.visibility {
-            receive = receive.visibility_timeout(i32::try_from(v.as_secs()).unwrap_or(30));
+        if call.visibility.requested().is_some() {
+            receive = receive.visibility_timeout(call.visibility.seconds());
         }
 
         // Dropping this future when the stream is dropped is safe (hyper aborts the request); it
@@ -234,5 +289,32 @@ async fn pump(
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Duration, Visibility};
+
+    #[test]
+    fn a_named_visibility_is_asked_for_and_re_armed() {
+        let visibility = Visibility::Requested(Duration::from_secs(45));
+        assert_eq!(visibility.requested(), Some(Duration::from_secs(45)));
+        assert_eq!(visibility.held(), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn a_queues_own_visibility_is_re_armed_without_being_asked_for() {
+        // The receive call names nothing, so the queue's setting governs it and stays the
+        // operator's to change; the extender still re-arms that same duration.
+        let visibility = Visibility::Queue(Duration::from_secs(300));
+        assert_eq!(visibility.requested(), None);
+        assert_eq!(visibility.held(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn the_seconds_the_sdk_gets_saturate_at_the_protocol_cap() {
+        let visibility = Visibility::Requested(Duration::from_secs(u64::MAX));
+        assert_eq!(visibility.seconds(), 12 * 60 * 60);
     }
 }

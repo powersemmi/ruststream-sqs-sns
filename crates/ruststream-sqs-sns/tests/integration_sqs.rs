@@ -6,13 +6,17 @@
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
+use aws_config::{BehaviorVersion, Region};
+use aws_sdk_sqs::types::QueueAttributeName;
 use futures::StreamExt;
 use ruststream::runtime::PublishExt;
 use ruststream::{
     Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, Publisher,
     Serialized, Subscriber,
 };
-use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsQueue};
+use ruststream_sqs_sns::{
+    ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsPublishSteps, SqsQueue,
+};
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -21,14 +25,12 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Outgoing, Serialized)]
 struct Body(Vec<u8>);
 
+mod live;
+
+/// The stack these tests run against, or `None` to skip. Under `RUSTSTREAM_REQUIRE_LIVE` a
+/// missing endpoint fails instead of skipping.
 fn test_endpoint() -> Option<String> {
-    match std::env::var("SQS_TEST_ENDPOINT") {
-        Ok(endpoint) if !endpoint.is_empty() => Some(endpoint),
-        _ => {
-            eprintln!("SQS_TEST_ENDPOINT is not set; skipping the live integration test");
-            None
-        }
-    }
+    live::endpoint("SQS_TEST_ENDPOINT")
 }
 
 async fn connect(endpoint: &str) -> ConnectedSqsBroker {
@@ -69,7 +71,10 @@ async fn roundtrip_preserves_payload_headers_and_partition_key() {
     headers.insert(PARTITION_KEY_HEADER, "user-42");
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, b"{\"id\":1}".as_slice()).with_headers(headers))
+        .publish(
+            OutgoingMessage::new(&queue, b"{\"id\":1}".as_slice()).with_headers(headers),
+            None,
+        )
         .await
         .expect("publish succeeds");
 
@@ -111,7 +116,7 @@ async fn binary_payloads_survive_the_text_body() {
     let raw = [0u8, 159, 146, 150, 255];
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, raw.as_slice()))
+        .publish(OutgoingMessage::new(&queue, raw.as_slice()), None)
         .await
         .expect("publish succeeds");
 
@@ -145,7 +150,7 @@ async fn nack_with_requeue_redelivers() {
         .expect("subscription opens");
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, b"again".as_slice()))
+        .publish(OutgoingMessage::new(&queue, b"again".as_slice()), None)
         .await
         .expect("publish succeeds");
 
@@ -195,7 +200,7 @@ async fn nack_after_delays_the_redelivery() {
         .expect("subscription opens");
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new(&queue, b"not-yet".as_slice()))
+        .publish(OutgoingMessage::new(&queue, b"not-yet".as_slice()), None)
         .await
         .expect("publish succeeds");
 
@@ -258,9 +263,12 @@ async fn sns_fans_out_to_a_subscribed_queue() {
     let mut headers = HeaderMap::new();
     headers.insert("x-tenant", "acme");
     let sns = connected.sns_publisher();
-    sns.publish(OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers))
-        .await
-        .expect("sns publish succeeds");
+    sns.publish(
+        OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers),
+        None,
+    )
+    .await
+    .expect("sns publish succeeds");
 
     let mut stream = pin!(subscriber.stream());
     let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
@@ -275,8 +283,11 @@ async fn sns_fans_out_to_a_subscribed_queue() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
+/// The step on the publish builder reaches the queue as the FIFO message group id: SQS reports
+/// it back on the delivery, and this is the only place that can be shown at all - the in-process
+/// stand-in has no message groups.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_group_id_handle_sets_the_fifo_message_group() {
+async fn a_group_id_step_sets_the_fifo_message_group() {
     let Some(endpoint) = test_endpoint() else {
         return;
     };
@@ -294,9 +305,9 @@ async fn a_group_id_handle_sets_the_fifo_message_group() {
 
     connected
         .publisher()
-        .with_group_id("user-42")
         .message(&Body(br#"{"id":1}"#.to_vec()))
         .to(&queue)
+        .group_id("user-42")
         .publish()
         .await
         .expect("publish succeeds");
@@ -317,8 +328,10 @@ async fn a_group_id_handle_sets_the_fifo_message_group() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
+/// The step is this broker's own word for the group, so it wins over the portable
+/// `partition-key` header a service sets for every broker it publishes to.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_messages_own_partition_key_wins_over_the_handles_group() {
+async fn a_group_id_step_wins_over_the_messages_partition_key() {
     let Some(endpoint) = test_endpoint() else {
         return;
     };
@@ -335,13 +348,13 @@ async fn a_messages_own_partition_key_wins_over_the_handles_group() {
         .expect("subscription opens");
 
     let mut headers = HeaderMap::new();
-    headers.insert(PARTITION_KEY_HEADER, "user-7");
+    headers.insert(PARTITION_KEY_HEADER, "user-42");
     connected
         .publisher()
-        .with_group_id("user-42")
         .message(&Body(br#"{"id":2}"#.to_vec()))
         .with_headers(headers)
         .to(&queue)
+        .group_id("user-7")
         .publish()
         .await
         .expect("publish succeeds");
@@ -359,5 +372,94 @@ async fn a_messages_own_partition_key_wins_over_the_handles_group() {
     );
     message.ack().await.expect("ack succeeds");
 
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// The visibility timeout the operator configures on the queue in this test. Short, so a
+/// handler that outlives it does so within a test's patience; nothing else about the number
+/// matters.
+const OPERATOR_VISIBILITY: Duration = Duration::from_secs(2);
+
+/// How long the handler holds the delivery: several times the queue's timeout, so an extender
+/// that re-armed anything but the queue's own value would have let the message back out.
+const HOLD: Duration = Duration::from_secs(6);
+
+/// Provisions a queue whose visibility timeout is not the SQS default, the way an operator
+/// would, and returns its name.
+///
+/// The timeout is set in its own call rather than as a create attribute, so a rerun against a
+/// stack that still holds the queue configures it instead of colliding with it.
+async fn queue_with_visibility(endpoint: &str, name: &str, visibility: Duration) -> String {
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .endpoint_url(endpoint)
+        .region(Region::new("us-east-1"))
+        .test_credentials()
+        .load()
+        .await;
+    let client = aws_sdk_sqs::Client::new(&config);
+    let url = client
+        .create_queue()
+        .queue_name(name)
+        .send()
+        .await
+        .expect("the operator's queue is created")
+        .queue_url()
+        .expect("CreateQueue returns the URL")
+        .to_owned();
+    client
+        .set_queue_attributes()
+        .queue_url(url)
+        .attributes(
+            QueueAttributeName::VisibilityTimeout,
+            visibility.as_secs().to_string(),
+        )
+        .send()
+        .await
+        .expect("the operator sets the visibility timeout");
+    name.to_owned()
+}
+
+// A subscription that names no visibility of its own must hold its deliveries under the queue's
+// configured timeout. The crate used to re-arm a hard-coded 30 seconds every 15 instead, which on
+// a queue configured for less handed the message back to the queue while the handler still held
+// it, and on a queue configured for more silently shortened what the operator set. The clock
+// tells the two apart: with the queue's own value the extender re-arms inside the window, so
+// nothing redelivers while the delivery is alive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_held_delivery_rides_the_queues_own_visibility_timeout() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let queue = queue_with_visibility(&endpoint, &unique("visibility"), OPERATOR_VISIBILITY).await;
+    let connected = connect(&endpoint).await;
+
+    // No `visibility(..)` on the descriptor: the queue's setting is the one under test.
+    let mut subscriber = connected
+        .subscribe_queue(SqsQueue::new(&queue).wait(Duration::from_secs(1)))
+        .await
+        .expect("subscription opens");
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new(&queue, b"held".as_slice()), None)
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let held = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(held.payload(), b"held");
+
+    // The handler is still working: the delivery stays unsettled and alive for the whole hold.
+    let redelivered = tokio::time::timeout(HOLD, stream.next()).await;
+    assert!(
+        redelivered.is_err(),
+        "the queue took the message back while it was still held, so the extension did not \
+         ride the queue's own visibility timeout",
+    );
+
+    held.ack().await.expect("ack succeeds");
     connected.shutdown().await.expect("shutdown succeeds");
 }

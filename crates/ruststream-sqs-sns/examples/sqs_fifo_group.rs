@@ -32,11 +32,12 @@ async fn place(publisher: &SqsPublisher, order: &OrderPlaced) -> io::Result<()> 
     let meta = Shipment {
         carrier: "dhl".to_owned(),
     };
-    // Ordering is per customer: the handle carries the group, the contract carries the headers.
+    // Ordering is per customer, so the group is a setting of this one message; the contract
+    // carries the headers.
     publisher
-        .with_group_id(&order.customer)
         .message(order)
         .with_headers(&meta)
+        .group_id(&order.customer)
         .publish()
         .await
         .map_err(io::Error::other)
@@ -52,13 +53,18 @@ fn service() -> impl App {
             .region("us-east-1"),
         |b| {
             b.include(handle);
-            b.after_startup(Publish, async move |sqs| -> io::Result<()> {
-                let order = OrderPlaced {
-                    id: 1,
-                    customer: "acme".to_owned(),
-                };
-                place(&sqs, &order).await
-            });
+            // The policy fixes the group every send from this hook falls back to; the call in
+            // `place` names the customer's own and wins over it.
+            b.after_startup(
+                Publish::default().group_id("bootstrap"),
+                async move |sqs| -> io::Result<()> {
+                    let order = OrderPlaced {
+                        id: 1,
+                        customer: "acme".to_owned(),
+                    };
+                    place(&sqs, &order).await
+                },
+            );
         },
     )
 }

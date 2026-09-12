@@ -61,6 +61,18 @@ pub enum SqsError {
     /// A queue descriptor is invalid.
     #[error("invalid sqs queue descriptor: {0}")]
     InvalidQueue(String),
+
+    /// A publish named a FIFO-only setting for a destination that is not a FIFO queue or topic.
+    ///
+    /// The ordering the caller asked for would not happen there, and a value dropped in silence
+    /// is the worse answer.
+    #[error("'{destination}' is not a FIFO destination, so it cannot honour {setting}")]
+    NotFifo {
+        /// The queue or topic the message targeted.
+        destination: String,
+        /// The setting that has no meaning there.
+        setting: &'static str,
+    },
 }
 
 /// Formats an SDK error with its full cause chain and boxes it, so transport failures stay

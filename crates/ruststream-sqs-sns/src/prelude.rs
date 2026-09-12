@@ -14,6 +14,10 @@
 //! hands over. The two vocabularies never meet in one file, which is what keeps the uniform
 //! mount-site name free for the policy.
 //!
+//! One handler file does glob this one: a body that adjusts a per-message setting names a step of
+//! [`SqsPublishSteps`], and bounds the slot it publishes through as
+//! `Out<impl Publisher<Options = SqsPublishOptions>, Marker>`.
+//!
 //! # Examples
 //!
 //! ```
@@ -48,7 +52,8 @@ pub use ruststream::prelude::*;
 // re-exporting the trait would make `msg.partition_key()` on a delivery ambiguous (E0034).
 
 pub use crate::{
-    SnsPublish, SnsPublisher, SqsBroker, SqsPublish, SqsPublisher, SqsQueue, SqsSubscription,
+    SnsPublish, SnsPublisher, SqsBroker, SqsPublish, SqsPublishOptions, SqsPublishSteps,
+    SqsPublisher, SqsQueue, SqsSubscription,
 };
 
 /// The publish policy a mount site hands to `include` and the lifecycle hooks, [`SqsPublish`]

@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # No base filter: a pull request stacked on another one has a branch for its base, and a filter
+  # naming `main` leaves it with no checks at all - which reads as a conflicting branch rather
+  # than as a workflow that declined to run.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -91,7 +93,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.6
         with:
           tool: cargo-hack
 
@@ -175,9 +177,13 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # RUSTSTREAM_REQUIRE_LIVE is this job's contract with the suites: a stack is up, so a test
+      # that skips is a defect rather than a convenience. Without it a live test returns before
+      # its first assertion and reports ok, which reads exactly like a run that did the work.
       - name: Run integration + conformance against LocalStack
         env:
           SQS_TEST_ENDPOINT: http://127.0.0.1:4566
+          RUSTSTREAM_REQUIRE_LIVE: "1"
         run: >-
           cargo test --locked -p ruststream-sqs-sns --all-features
           --test integration_sqs
@@ -200,7 +206,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.86.5
+        uses: taiki-e/install-action@v2.87.6
         with:
           tool: cargo-deny
 

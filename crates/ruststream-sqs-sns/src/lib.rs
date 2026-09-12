@@ -12,10 +12,12 @@
 //!   call is one batch.
 //! - A handler outliving the visibility timeout is protected by crate-owned background
 //!   extension for as long as it holds the message.
-//! - The queue's redrive policy provides dead-lettering; FIFO message group ids map onto the
-//!   partition key.
+//! - The queue's redrive policy provides dead-lettering. FIFO ordering is a per-message setting
+//!   ([`SqsPublishOptions`]): the mount site fixes a position's group on the policy, a call
+//!   names its own with the [`SqsPublishSteps`] steps, and the portable `partition-key` header
+//!   still names one for a service that publishes to several brokers.
 //! - SNS appears only as a publisher (fan-out to queues and other endpoints), as a distinct
-//!   [`SnsPublish`] policy a mount site binds with `.out(Reply, SnsPublish)`.
+//!   [`SnsPublish`] policy a mount site binds with `.out(Reply, SnsPublish::default())`.
 //! - Bodies are text, and what the service will not take as text (binary, and equally the
 //!   valid-UTF-8 control characters a binary codec emits) travels base64-encoded and decodes
 //!   transparently on receive.
@@ -35,6 +37,8 @@ pub mod testing;
 pub use broker::{ConnectedSqsBroker, SqsBroker};
 pub use error::SqsError;
 pub use message::{PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER, SqsMessage};
-pub use publisher::{SnsPublish, SnsPublisher, SqsPublish, SqsPublisher};
+pub use publisher::{
+    SnsPublish, SnsPublisher, SqsPublish, SqsPublishOptions, SqsPublishSteps, SqsPublisher,
+};
 pub use queue::{SqsQueue, SqsSubscription};
 pub use subscriber::SqsSubscriber;

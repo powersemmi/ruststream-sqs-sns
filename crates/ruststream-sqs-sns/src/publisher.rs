@@ -1,29 +1,152 @@
 //! [`SqsPublisher`] (direct-to-queue) and [`SnsPublisher`] (topic fan-out), with their
-//! policies.
+//! policies, their per-message settings and the builder steps that name them.
 
 use std::future::{Future, ready};
-use std::sync::Arc;
 
 use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
-use ruststream::{HeaderMap, OutgoingMessage, PairError, PublishPolicy, Publisher};
+use ruststream::runtime::{PublishBuilder, PublishSink};
+use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
 
 use crate::broker::{ConnectedSqsBroker, Core, CoreCell};
 use crate::error::{SqsError, sdk_err};
 use crate::message::{
     ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body, is_service_text,
 };
+#[cfg(feature = "testing")]
+use crate::testing::{ConnectedSqsTestBroker, SqsTestPublisher};
+
+/// The settings one publish may differ from the next in, on both SQS and SNS.
+///
+/// Both fields are FIFO settings: they reach the wire on a `.fifo` queue or topic and have no
+/// meaning anywhere else, so naming one for a standard destination is a publish error rather
+/// than a value quietly dropped. Every field is optional - what a call leaves alone keeps what
+/// the mount site's [`SqsPublish`] fixed.
+///
+/// A call site fills it through the steps of [`SqsPublishSteps`], never by hand; the
+/// constructors below are for a test that asserts on what a publish carried
+/// (`tb.out::<Marker>().with_options(..)`).
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_sqs_sns::SqsPublishOptions;
+///
+/// let expected = SqsPublishOptions::default().group_id("user-42");
+/// assert_eq!(expected.group_id.as_deref(), Some("user-42"));
+/// assert_eq!(expected.deduplication_id, None);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
+pub struct SqsPublishOptions {
+    /// The FIFO message group id this message is ordered within.
+    pub group_id: Option<String>,
+    /// The FIFO deduplication id, the idempotency key of this send. Unset means the crate
+    /// supplies a process-unique one, so two identical payloads never collapse into one.
+    pub deduplication_id: Option<String>,
+}
+
+impl SqsPublishOptions {
+    /// Orders this message within `group`.
+    pub fn group_id(mut self, group: impl Into<String>) -> Self {
+        self.group_id = Some(group.into());
+        self
+    }
+
+    /// Deduplicates this message under `id` within the queue's five-minute window.
+    pub fn deduplication_id(mut self, id: impl Into<String>) -> Self {
+        self.deduplication_id = Some(id.into());
+        self
+    }
+}
+
+/// The per-message settings of this crate's publishers, on the publish builder.
+///
+/// The steps are the call site's half of [`SqsPublishOptions`]: they win over the group the
+/// mount site's [`SqsPublish`] fixed, for that one message. The bound is on the sink's options
+/// type, so they appear on a builder over an SQS or SNS publisher and on no other broker's.
+///
+/// The trait is in the [prelude](crate::prelude); a handler body that names a step is the one
+/// place a body imports this crate's prelude instead of the framework's, and bounds its slot
+/// `Out<impl Publisher<Options = SqsPublishOptions>, Marker>`.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_sqs_sns::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize, Outgoing, Serialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[derive(OutSlot)]
+/// #[publishes(Order)]
+/// struct Shipments;
+///
+/// #[subscriber("orders")]
+/// async fn ship(
+///     order: &Order,
+///     Out(shipments): Out<impl Publisher<Options = SqsPublishOptions>, Shipments>,
+/// ) -> HandlerOutcome {
+///     // This one order ships in its customer's group, whatever the mount site's default is.
+///     if shipments
+///         .message(order)
+///         .to("shipments.fifo")
+///         .group_id(format!("customer-{}", order.id))
+///         .publish()
+///         .await
+///         .is_err()
+///     {
+///         return HandlerOutcome::retry();
+///     }
+///     HandlerOutcome::ack()
+/// }
+/// # let _ = ship;
+/// ```
+pub trait SqsPublishSteps: Sized {
+    /// Orders this one message within `group` (a `.fifo` destination only).
+    #[must_use]
+    fn group_id(self, group: impl Into<String>) -> Self;
+
+    /// Deduplicates this one message under `id` (a `.fifo` destination only).
+    #[must_use]
+    fn deduplication_id(self, id: impl Into<String>) -> Self;
+}
+
+impl<Sink, Body, Enc, Hdrs, Dest> SqsPublishSteps for PublishBuilder<Sink, Body, Enc, Hdrs, Dest>
+where
+    Sink: PublishSink<Options = SqsPublishOptions>,
+{
+    fn group_id(mut self, group: impl Into<String>) -> Self {
+        self.options_mut()
+            .get_or_insert_with(SqsPublishOptions::default)
+            .group_id = Some(group.into());
+        self
+    }
+
+    fn deduplication_id(mut self, id: impl Into<String>) -> Self {
+        self.options_mut()
+            .get_or_insert_with(SqsPublishOptions::default)
+            .deduplication_id = Some(id.into());
+        self
+    }
+}
 
 /// Publishes messages directly to SQS queues (name or URL as the destination).
 ///
-/// On a FIFO queue (a `.fifo` destination) the `partition-key` header becomes the message
-/// group id (`"default"` when absent, since FIFO requires one) and a unique deduplication id
-/// is supplied per send. Buildable before `connect` and usable until `shutdown`; afterwards
-/// every publish reports [`SqsError::NotConnected`] instead of silently succeeding.
+/// On a FIFO queue (a `.fifo` destination) every send carries a message group id and a
+/// deduplication id: [`SqsPublishSteps`] names them per call, the mount site's [`SqsPublish`]
+/// fixes the group for the whole position, and a message carrying the `partition-key` header
+/// names its own group the portable way. Buildable before `connect` and usable until
+/// `shutdown`; afterwards every publish reports [`SqsError::NotConnected`] instead of silently
+/// succeeding.
 #[derive(Clone)]
 pub struct SqsPublisher {
     cell: CoreCell,
-    base: Option<HeaderMap>,
+    default_group: Option<String>,
 }
 
 impl std::fmt::Debug for SqsPublisher {
@@ -34,42 +157,16 @@ impl std::fmt::Debug for SqsPublisher {
 
 impl SqsPublisher {
     pub(crate) fn new(cell: CoreCell) -> Self {
-        Self { cell, base: None }
+        Self {
+            cell,
+            default_group: None,
+        }
     }
 
-    /// Returns a handle whose sends carry `group` as the FIFO message group id.
-    ///
-    /// The handle aliases the same connection; only the group differs. It carries the group as a
-    /// base `partition-key` header, so a message that names `partition-key` itself wins.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ruststream::runtime::PublishExt;
-    /// use ruststream::{Outgoing, Serialized};
-    /// use ruststream_sqs_sns::SqsBroker;
-    ///
-    /// // The order is already encoded, so it names itself serialized and leaves byte for byte.
-    /// #[derive(Outgoing, Serialized)]
-    /// struct Order(Vec<u8>);
-    ///
-    /// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    /// let publisher = SqsBroker::new().publisher();
-    /// publisher
-    ///     .with_group_id("user-42")
-    ///     .message(&Order(br#"{"id":1}"#.to_vec()))
-    ///     .to("orders.fifo")
-    ///     .publish()
-    ///     .await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn with_group_id(&self, group: impl Into<String>) -> Self {
-        Self {
-            cell: Arc::clone(&self.cell),
-            base: Some(group_headers(group)),
-        }
+    /// The publisher the policy paired: the same connection, under the group the policy fixed.
+    pub(crate) fn with_default_group(mut self, group: Option<String>) -> Self {
+        self.default_group = group;
+        self
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -81,15 +178,8 @@ impl SqsPublisher {
 
 /// Whether a destination names a FIFO resource. Kept case-insensitive to satisfy the
 /// extension-comparison lint; AWS itself only accepts the lowercase suffix.
-fn is_fifo(name: &str) -> bool {
+pub(crate) fn is_fifo(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with(".fifo")
-}
-
-/// The one-entry base map a group-carrying handle publishes under.
-fn group_headers(group: impl Into<String>) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(PARTITION_KEY_HEADER, group.into());
-    headers
 }
 
 /// A process-unique deduplication id: FIFO queues without content-based deduplication require
@@ -105,24 +195,90 @@ fn dedup_id() -> String {
     )
 }
 
+/// The FIFO fields one send carries.
+#[derive(Debug)]
+pub(crate) struct FifoSettings {
+    pub(crate) group: String,
+    pub(crate) deduplication: String,
+}
+
+/// Resolves the FIFO settings of one publish, or refuses a destination that cannot honour them.
+///
+/// The ladder is specific to general: the call's own step, then the `partition-key` header the
+/// message carries (the spelling that travels across brokers), then the group the mount site
+/// fixed, then `"default"`, because FIFO rejects a send with no group at all.
+///
+/// Only this crate's own settings refuse a standard destination. A `partition-key` header is a
+/// portable hint a service may set for every broker it publishes to, so a standard queue
+/// ignores it the way it always has.
+pub(crate) fn fifo_settings(
+    destination: &str,
+    fifo: bool,
+    options: Option<&SqsPublishOptions>,
+    partition_key: Option<String>,
+    default_group: Option<&str>,
+) -> Result<Option<FifoSettings>, SqsError> {
+    let named_group = options
+        .and_then(|options| options.group_id.clone())
+        .or_else(|| default_group.map(ToOwned::to_owned));
+    let named_deduplication = options.and_then(|options| options.deduplication_id.clone());
+    if !fifo {
+        if let Some(setting) = named_group
+            .is_some()
+            .then_some("a message group id")
+            .or_else(|| {
+                named_deduplication
+                    .is_some()
+                    .then_some("a deduplication id")
+            })
+        {
+            return Err(SqsError::NotFifo {
+                destination: destination.to_owned(),
+                setting,
+            });
+        }
+        return Ok(None);
+    }
+    Ok(Some(FifoSettings {
+        group: options
+            .and_then(|options| options.group_id.clone())
+            .or(partition_key)
+            .or_else(|| default_group.map(ToOwned::to_owned))
+            .unwrap_or_else(|| "default".to_owned()),
+        deduplication: named_deduplication.unwrap_or_else(dedup_id),
+    }))
+}
+
 impl Publisher for SqsPublisher {
     type Error = SqsError;
+    type Options = SqsPublishOptions;
 
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let core = self.core()?;
         let url = core.queue_url(msg.name()).await?;
         let (body, base64_marker) = encode_body(msg.payload());
-        let (attributes, group) = encode_attributes(msg.headers(), base64_marker);
+        let (attributes, partition_key) = encode_attributes(msg.headers(), base64_marker);
+        let fifo = is_fifo(msg.name()) || is_fifo(&url);
+        let settings = fifo_settings(
+            msg.name(),
+            fifo,
+            options,
+            partition_key,
+            self.default_group.as_deref(),
+        )?;
 
         let mut send = core.sqs.send_message().queue_url(&url).message_body(body);
         if !attributes.is_empty() {
             send = send.set_message_attributes(Some(attributes));
         }
-        if is_fifo(msg.name()) || is_fifo(&url) {
-            // FIFO rejects a send with no group, so the literal closes the ladder.
+        if let Some(settings) = settings {
             send = send
-                .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
-                .message_deduplication_id(dedup_id());
+                .message_group_id(settings.group)
+                .message_deduplication_id(settings.deduplication);
         }
         send.send()
             .await
@@ -132,31 +288,43 @@ impl Publisher for SqsPublisher {
                 source: sdk_err(&e),
             })
     }
-
-    fn base_headers(&self) -> Option<&HeaderMap> {
-        self.base.as_ref()
-    }
 }
 
 /// The publish policy for [`SqsPublisher`]: pure declaration, constructible anywhere, paired
 /// with the connected broker by the runtime after `connect`.
 ///
-/// It is also the broker's [`DefaultPublish`](ruststream::DefaultPublish) policy, so a
-/// `publish("dest")` handler whose mount binds no reply position of its own replies through it,
-/// and `.out(Reply, SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
+/// It is also the broker's [`DefaultPublish`](ruststream::DefaultPublish) policy, so a replying
+/// handler whose mount binds no reply position of its own replies through it, and
+/// `.out(Reply, SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
 /// changes the answer.
+///
+/// The group is the one FIFO setting a policy fixes, because it belongs to a position: every
+/// message a slot publishes is ordered within the same group. A deduplication id is the
+/// idempotency key of one message, and a constant one would collapse a position's whole output
+/// into a single delivery, so it is named per call or left to the crate.
 ///
 /// # Examples
 ///
 /// ```
 /// use ruststream_sqs_sns::SqsPublish;
 ///
-/// let policy = SqsPublish::default();
+/// // Everything this position publishes is ordered within one group.
+/// let policy = SqsPublish::default().group_id("orders");
 /// # let _ = policy;
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
-pub struct SqsPublish;
+pub struct SqsPublish {
+    group_id: Option<String>,
+}
+
+impl SqsPublish {
+    /// Orders everything this position publishes within `group`, unless a call names another.
+    pub fn group_id(mut self, group: impl Into<String>) -> Self {
+        self.group_id = Some(group.into());
+        self
+    }
+}
 
 impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
     type Live = SqsPublisher;
@@ -165,7 +333,23 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
         self,
         connected: &ConnectedSqsBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.publisher()))
+        ready(Ok(connected.publisher().with_default_group(self.group_id)))
+    }
+}
+
+/// The same policy against the in-process stand-in, so a routes file's `.out(Reply, Publish)`
+/// mounts on [`SqsTestBroker`](crate::testing::SqsTestBroker) as written. It is the stand-in's
+/// [`DefaultPublish`](ruststream::DefaultPublish) policy too, so a `publish("dest")` handler
+/// that binds nothing replies through it there as well.
+#[cfg(feature = "testing")]
+impl PublishPolicy<ConnectedSqsTestBroker> for SqsPublish {
+    type Live = SqsTestPublisher;
+
+    fn pair(
+        self,
+        connected: &ConnectedSqsTestBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher().with_default_group(self.group_id)))
     }
 }
 
@@ -176,10 +360,13 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
 /// consumer this crate would own. Subscribe queues to the topic with
 /// [`ConnectedSqsBroker::subscribe_queue_to_topic`](crate::ConnectedSqsBroker::subscribe_queue_to_topic),
 /// which enables raw message delivery so payloads and headers arrive unwrapped.
+///
+/// A FIFO topic takes the same [`SqsPublishOptions`] as a FIFO queue, so a slot moved from
+/// [`SqsPublish`] to [`SnsPublish`] keeps the handler body that names the steps.
 #[derive(Clone)]
 pub struct SnsPublisher {
     cell: CoreCell,
-    base: Option<HeaderMap>,
+    default_group: Option<String>,
 }
 
 impl std::fmt::Debug for SnsPublisher {
@@ -190,44 +377,16 @@ impl std::fmt::Debug for SnsPublisher {
 
 impl SnsPublisher {
     pub(crate) fn new(cell: CoreCell) -> Self {
-        Self { cell, base: None }
+        Self {
+            cell,
+            default_group: None,
+        }
     }
 
-    /// Returns a handle whose sends carry `group` as the FIFO message group id, for a FIFO
-    /// topic.
-    ///
-    /// The group travels as a base `partition-key` header, so a message that names
-    /// `partition-key` itself wins. See [`SqsPublisher::with_group_id`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ruststream::runtime::PublishExt;
-    /// use ruststream::{Outgoing, Serialized};
-    ///
-    /// // The notice is already a wire payload, so it names itself serialized and no codec
-    /// // runs on it.
-    /// #[derive(Outgoing, Serialized)]
-    /// struct Notice(Vec<u8>);
-    ///
-    /// # async fn demo(broker: ruststream_sqs_sns::ConnectedSqsBroker)
-    /// # -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    /// broker
-    ///     .sns_publisher()
-    ///     .with_group_id("user-42")
-    ///     .message(&Notice(b"shipped".to_vec()))
-    ///     .to("orders.fifo")
-    ///     .publish()
-    ///     .await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn with_group_id(&self, group: impl Into<String>) -> Self {
-        Self {
-            cell: Arc::clone(&self.cell),
-            base: Some(group_headers(group)),
-        }
+    /// The publisher the policy paired: the same connection, under the group the policy fixed.
+    pub(crate) fn with_default_group(mut self, group: Option<String>) -> Self {
+        self.default_group = group;
+        self
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -239,17 +398,22 @@ impl SnsPublisher {
 
 impl Publisher for SnsPublisher {
     type Error = SqsError;
+    type Options = SqsPublishOptions;
 
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let core = self.core()?;
         let arn = core.topic_arn(msg.name()).await?;
         let (body, base64_marker) = encode_body(msg.payload());
 
         let mut publish = core.sns.publish().topic_arn(&arn).message(body);
-        let mut group = None;
+        let mut partition_key = None;
         for (name, value) in msg.headers().iter() {
             if name == PARTITION_KEY_HEADER {
-                group = Some(String::from_utf8_lossy(value).into_owned());
+                partition_key = Some(String::from_utf8_lossy(value).into_owned());
                 continue;
             }
             // The same split the SQS side makes, for the same reason: a value the service
@@ -278,11 +442,16 @@ impl Publisher for SnsPublisher {
         {
             publish = publish.message_attributes(ENCODING_ATTRIBUTE, marker);
         }
-        if is_fifo(&arn) {
-            // FIFO rejects a send with no group, so the literal closes the ladder.
+        if let Some(settings) = fifo_settings(
+            msg.name(),
+            is_fifo(&arn),
+            options,
+            partition_key,
+            self.default_group.as_deref(),
+        )? {
             publish = publish
-                .message_group_id(group.unwrap_or_else(|| "default".to_owned()))
-                .message_deduplication_id(dedup_id());
+                .message_group_id(settings.group)
+                .message_deduplication_id(settings.deduplication);
         }
         publish
             .send()
@@ -293,17 +462,15 @@ impl Publisher for SnsPublisher {
                 source: sdk_err(&e),
             })
     }
-
-    fn base_headers(&self) -> Option<&HeaderMap> {
-        self.base.as_ref()
-    }
 }
 
 /// The publish policy for [`SnsPublisher`]: names the SNS fan-out mode as a distinct policy
 /// type, so direct queue publishing and topic fan-out never mix silently.
 ///
-/// A handler names where its reply goes; the mount site names who takes it there, by binding the
-/// reply position to this policy instead of the broker's default [`SqsPublish`].
+/// A reply names where it goes; the mount site names who takes it there, by binding the reply
+/// position to this policy instead of the broker's default [`SqsPublish`]. The destination itself
+/// reads the same on both policies: a name is a queue name under [`SqsPublish`] and a topic name
+/// here, whether the reply type declares it or the mount site supplies it.
 ///
 /// # Examples
 ///
@@ -316,7 +483,8 @@ impl Publisher for SnsPublisher {
 ///     id: u64,
 /// }
 ///
-/// #[derive(Serialize)]
+/// // The reply type declares no destination of its own, so it takes the one the clause names.
+/// #[derive(Serialize, Outgoing)]
 /// struct OrderPlaced {
 ///     id: u64,
 /// }
@@ -329,13 +497,24 @@ impl Publisher for SnsPublisher {
 /// // Without the step the reply would ride `SqsPublish` and land on a queue named
 /// // `orders-events`; with it the same reply fans out from the topic of that name.
 /// fn routes() -> impl RouterDef<SqsBroker> {
-///     Router::new().include(accept).out(Reply, SnsPublish).build()
+///     Router::new().include(accept).out(Reply, SnsPublish::default()).build()
 /// }
 /// # let _ = routes;
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
-pub struct SnsPublish;
+pub struct SnsPublish {
+    group_id: Option<String>,
+}
+
+impl SnsPublish {
+    /// Orders everything this position publishes within `group`, unless a call names another.
+    /// See [`SqsPublish::group_id`].
+    pub fn group_id(mut self, group: impl Into<String>) -> Self {
+        self.group_id = Some(group.into());
+        self
+    }
+}
 
 impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
     type Live = SnsPublisher;
@@ -344,37 +523,111 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
         self,
         connected: &ConnectedSqsBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.sns_publisher()))
+        ready(Ok(connected
+            .sns_publisher()
+            .with_default_group(self.group_id)))
+    }
+}
+
+/// Fan-out against the in-process stand-in, so `.out(Reply, SnsPublish::default())` mounts
+/// there as written.
+///
+/// Both policies pair into the one [`SqsTestPublisher`], because the router has no topic to
+/// fan out from: a message reaches the subscriptions on the destination it names, whichever
+/// policy carried it. So a test here proves the reply took the destination the SNS policy names,
+/// not that SNS delivered it onward to the queues subscribed to that topic - that is
+/// `subscribe_queue_to_topic`'s job and the live suite asserts it.
+#[cfg(feature = "testing")]
+impl PublishPolicy<ConnectedSqsTestBroker> for SnsPublish {
+    type Live = SqsTestPublisher;
+
+    fn pair(
+        self,
+        connected: &ConnectedSqsTestBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher().with_default_group(self.group_id)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::broker::SqsBroker;
 
-    #[test]
-    fn a_group_id_handle_publishes_under_a_base_partition_key() {
-        let publisher = SqsBroker::new().publisher().with_group_id("user-42");
-        let base = publisher.base_headers().expect("the handle carries a base");
-        assert_eq!(base.get_str(PARTITION_KEY_HEADER), Some("user-42"));
-        assert_eq!(base.len(), 1);
+    /// The FIFO fields one publish would send, or the refusal it would report.
+    fn settings(
+        destination: &str,
+        options: Option<&SqsPublishOptions>,
+        partition_key: Option<&str>,
+        default_group: Option<&str>,
+    ) -> Result<Option<FifoSettings>, SqsError> {
+        fifo_settings(
+            destination,
+            is_fifo(destination),
+            options,
+            partition_key.map(ToOwned::to_owned),
+            default_group,
+        )
     }
 
     #[test]
-    fn the_sns_handle_carries_the_same_base() {
-        let publisher = SnsPublisher::new(CoreCell::default()).with_group_id("user-42");
-        let base = publisher.base_headers().expect("the handle carries a base");
-        assert_eq!(base.get_str(PARTITION_KEY_HEADER), Some("user-42"));
+    fn a_call_step_wins_over_the_message_key_and_the_mount_site() {
+        let options = SqsPublishOptions::default().group_id("call");
+        let resolved = settings("orders.fifo", Some(&options), Some("header"), Some("mount"))
+            .expect("a fifo destination takes every group")
+            .expect("a fifo destination carries a group");
+        assert_eq!(resolved.group, "call");
     }
 
     #[test]
-    fn a_plain_handle_carries_no_base() {
-        assert!(SqsBroker::new().publisher().base_headers().is_none());
-        assert!(
-            SnsPublisher::new(CoreCell::default())
-                .base_headers()
-                .is_none()
-        );
+    fn the_message_key_wins_over_the_mount_site() {
+        let resolved = settings("orders.fifo", None, Some("header"), Some("mount"))
+            .expect("a fifo destination takes every group")
+            .expect("a fifo destination carries a group");
+        assert_eq!(resolved.group, "header");
+    }
+
+    #[test]
+    fn the_mount_site_group_holds_when_nothing_else_names_one() {
+        let resolved = settings("orders.fifo", None, None, Some("mount"))
+            .expect("a fifo destination takes every group")
+            .expect("a fifo destination carries a group");
+        assert_eq!(resolved.group, "mount");
+    }
+
+    #[test]
+    fn a_fifo_send_that_names_no_group_still_carries_one() {
+        let resolved = settings("orders.fifo", None, None, None)
+            .expect("a fifo destination takes every group")
+            .expect("a fifo destination carries a group");
+        assert_eq!(resolved.group, "default");
+        assert!(resolved.deduplication.starts_with("rs-"));
+    }
+
+    #[test]
+    fn an_explicit_deduplication_id_replaces_the_generated_one() {
+        let options = SqsPublishOptions::default().deduplication_id("order-42");
+        let resolved = settings("orders.fifo", Some(&options), None, None)
+            .expect("a fifo destination takes every setting")
+            .expect("a fifo destination carries a group");
+        assert_eq!(resolved.deduplication, "order-42");
+    }
+
+    #[test]
+    fn a_standard_queue_refuses_a_setting_it_cannot_honour() {
+        let options = SqsPublishOptions::default().group_id("call");
+        let refused = settings("orders", Some(&options), None, None)
+            .expect_err("a standard queue cannot order a group");
+        assert!(matches!(refused, SqsError::NotFifo { .. }));
+
+        let refused = settings("orders", None, None, Some("mount"))
+            .expect_err("a mount-site group is just as unhonourable there");
+        assert!(matches!(refused, SqsError::NotFifo { .. }));
+    }
+
+    #[test]
+    fn a_standard_queue_still_ignores_a_portable_partition_key() {
+        let resolved =
+            settings("orders", None, Some("header"), None).expect("a portable hint is not an ask");
+        assert!(resolved.is_none());
     }
 }
