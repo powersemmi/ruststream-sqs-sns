@@ -31,7 +31,7 @@ prelude，连同本 crate 的 Broker、队列描述符、发布策略和发布�
 | `OwnedTransactions` | 否 | SQS 没有事务性发送 |
 | `RequestReply` | 否 | SQS 没有接收回复的信箱；回复就是往另一个队列的普通发送 |
 | `Partitioned` | 是 | 一次投递把自己的 FIFO 消息组 ID 放在 `partition-key` 消息头里报出来，一次发布也从这个消息头读自己的组（见 [FIFO 消息组](#fifo-message-groups)） |
-| `Seekable` / `Positioned` | 否 | 队列没有可以移动的游标；投递次数用尽的消息，从 redrive 策略指定的死信队列里取回 |
+| `Seekable` / `Positioned` | 否 | 队列没有可以移动的游标；投递次数用尽的消息，从重新驱动策略指定的死信队列里取回 |
 | `DescribeServer` | 是 | `SqsBroker` 把自己连接的主机和端口、以及 `sqs` 协议，报进框架生成的 AsyncAPI 文档 |
 
 ## 生命周期 { #the-lifecycle }
@@ -104,8 +104,8 @@ SqsBroker::new()          只有配置，同步，没有 I/O
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_batches.rs:mount"
 ```
 
-`create_if_missing` 需要创建的队列是普通队列；名字以 `.fifo` 结尾时，创建的是开启了基于内容去重的
-FIFO 队列。生产队列通常作为基础设施来管理。
+`create_if_missing` 需要创建的队列是普通队列；名字以 `.fifo` 结尾时，创建的是开启了基于内容的
+重复数据删除的 FIFO 队列。生产队列通常作为基础设施来管理。
 
 一个订阅是一条流，由后台任务用长轮询调用 `ReceiveMessage` 来填充。它的通道只装一个批次，因此这个
 任务最多只领先处理器一次接收。丢弃这条流就停掉任务；它已经投递出去、又没有结算的消息，会在各自的
@@ -149,10 +149,10 @@ FIFO 队列。生产队列通常作为基础设施来管理。
 而不是拒绝启动。从 SNS 主题接收消息的队列，答案也一样：副本直接到达队列，跳过扇出。那一个订阅的
 重新投递，本来就是这个意思。
 
-SQS 除了删除之外没有别的丢弃办法，因此毒消息的路由归队列的 redrive 策略管：投递达到
-`maxReceiveCount` 次之后，SQS 自己把消息移进死信队列。处理器在 `sqs-receive-count` 消息头
-（`RECEIVE_COUNT_HEADER`）里读到这个计数，也就是 SQS 报出的近似接收次数，于是可以把最后一次尝试
-和第一次区别对待。
+SQS 除了删除之外没有别的丢弃办法，因此毒消息的路由归队列的重新驱动策略（`RedrivePolicy` 属性）管：
+投递达到 `maxReceiveCount` 次之后，SQS 自己把消息移进死信队列。处理器在 `sqs-receive-count`
+消息头（`RECEIVE_COUNT_HEADER`）里读到这个计数，也就是 SQS 报出的近似接收次数，于是可以把最后
+一次尝试和第一次区别对待。
 
 ## 可见性续期 { #the-visibility-extender }
 
@@ -176,8 +176,8 @@ debug 级别记录日志，并在下一拍重试。处理器能跑多久由进�
 三个答案可能同时在场，解析顺序从最具体的开始：本次调用自己的步骤，然后是消息的 `partition-key`
 消息头，再然后是挂载点固定的那个组。
 
-每一次 FIFO 发送还会补上一个进程内唯一的去重 ID，除非调用用 `deduplication_id` 步骤写出自己的。
-显式的 ID 优先于基于内容的去重，因此故意发出的两份相同载荷，绝不会塌缩成一条。
+每一次 FIFO 发送还会补上一个进程内唯一的重复数据删除 ID，除非调用用 `deduplication_id` 步骤写出
+自己的。显式的 ID 优先于基于内容的重复数据删除，因此故意发出的两份相同载荷，绝不会塌缩成一条。
 
 这两项都是 FIFO 设置。为普通队列或者普通主题写出其中任何一项，都是一个发布错误
 （`SqsError::NotFifo`）：调用方要的顺序在那里不会发生，而默默丢掉一个值是更差的答案。
@@ -218,8 +218,8 @@ prelude 还把 `SqsPublish` 以 `Publish` 之名导出，那是每个 Broker cra
 
 ### 逐条消息的设置 { #per-message-settings }
 
-一条消息和下一条可以有哪些不同，写在 `SqsPublishOptions` 里：一个消息组 ID 和一个去重 ID，两个都
-可选。发布构建器把它们当作步骤接受，来自 prelude 导出的 `SqsPublishSteps` trait：
+一条消息和下一条可以有哪些不同，写在 `SqsPublishOptions` 里：一个消息组 ID 和一个重复数据删除
+ID，两个都可选。发布构建器把它们当作步骤接受，来自 prelude 导出的 `SqsPublishSteps` trait：
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sqs_fifo_group.rs:publish"
@@ -341,7 +341,7 @@ SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --workspace --all-features --
 因为路由器没有可供扇出的主题：一个测试证明的是回复去了策略指出的那个目的地，而不是 SNS 把它继续
 投递给了订阅那个主题的队列。
 
-它按队列名精确路由。属于 SQS 自己的那些东西（可见性计时、重新投递、经 redrive 策略进死信队列、
+它按队列名精确路由。属于 SQS 自己的那些东西（可见性计时、重新投递、经重新驱动策略进死信队列、
 FIFO 顺序和 SNS 扇出），由对着 LocalStack 的真实环境测试套件来回答。
 
 批次是两种传输在内部唯一不同的地方：进程内由框架的客户端缓冲来攒批，而真实的订阅者从

@@ -2,7 +2,7 @@
 
 **`ruststream-sqs-sns`** 是 [RustStream](https://powersemmi.github.io/ruststream/) 消息框架的
 Amazon SQS Broker，并支持 SNS 扇出发布。订阅者用长轮询读自己的队列，也可以通过 `ReceiveMessage`
-取得原生的批次。重试走消息的可见性超时，进死信队列则由队列的 redrive 策略决定。向 FIFO 队列发布
+取得原生的批次。重试走消息的可见性超时，进死信队列则由队列的重新驱动策略决定。向 FIFO 队列发布
 时，你可以逐条指定消息组，也可以为整个发布位置固定一个，并从收到的消息里读回它。
 
 传输建立在官方的 [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) 和
