@@ -5,6 +5,7 @@
 //! body: SQS bodies are text, and a payload the service will not take as text travels
 //! base64-encoded with a marker attribute, decoded transparently on receive.
 
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use aws_sdk_sqs::Client;
@@ -38,7 +39,10 @@ pub(crate) const ENCODING_ATTRIBUTE: &str = "ruststream-payload-encoding";
 /// `ack` deletes the message; `nack(requeue = true)` zeroes its visibility so it redelivers
 /// immediately; `nack_after(delay)` sets the visibility to the delay, so deferred retry is
 /// native. `nack(requeue = false)` deletes: SQS has no drop verb short of deletion - poison
-/// routing belongs to the queue's redrive policy, driven by repeated requeues.
+/// routing belongs to the queue's redrive policy, driven by repeated receives. The one exception
+/// is the delivery that has used up that policy's receives: there a discard returns the message
+/// instead, because being received once more is how SQS carries it to the dead-letter queue, and
+/// a delete would lose it.
 ///
 /// While the handle is alive, a background task keeps extending the message's visibility, so a
 /// handler outliving the visibility timeout does not cause a concurrent redelivery.
@@ -48,6 +52,11 @@ pub struct SqsMessage {
     client: Client,
     queue_url: String,
     receipt: String,
+    /// The queue's `ApproximateReceiveCount` for this delivery: the first receive answers one.
+    receives: Option<u32>,
+    /// The `maxReceiveCount` the registration's declaration wrote onto the queue, where it
+    /// declared one.
+    redrive_max: Option<NonZeroU32>,
     extender: JoinHandle<()>,
 }
 
@@ -75,8 +84,13 @@ impl SqsMessage {
         queue_url: String,
         receipt: String,
         visibility: Duration,
+        redrive_max: Option<NonZeroU32>,
     ) -> Self {
         let (payload, headers) = decode_message(message);
+        let receives = message
+            .attributes()
+            .and_then(|system| system.get(&MessageSystemAttributeName::ApproximateReceiveCount))
+            .and_then(|count| count.trim().parse().ok());
         // Why a per-message watchdog: SQS has no lease API - a handler outliving the
         // visibility timeout would get a concurrent redelivery, so the crate extends the
         // visibility for as long as the handle is held (the issue's one piece of real
@@ -93,7 +107,20 @@ impl SqsMessage {
             client,
             queue_url,
             receipt,
+            receives,
+            redrive_max,
             extender,
+        }
+    }
+
+    /// Whether this delivery has used up the receives the queue's redrive policy allows.
+    ///
+    /// The move to the dead-letter queue happens on the receive after that, so returning the
+    /// message is what performs it, and deleting it is what loses it.
+    fn spent(&self) -> bool {
+        match (self.receives, self.redrive_max) {
+            (Some(receives), Some(max)) => receives >= max.get(),
+            _ => false,
         }
     }
 
@@ -143,11 +170,13 @@ impl IncomingMessage for SqsMessage {
 
     async fn nack(self, requeue: bool) -> Result<(), AckError> {
         self.extender.abort();
-        if requeue {
+        if requeue || self.spent() {
+            // Deleting IS the drop: SQS cannot discard without deleting, and the redrive policy
+            // owns poison-message routing. The exception is the delivery that has run the policy
+            // out: there the queue is one receive away from carrying it to the dead-letter
+            // queue, so returning it is the discard and a delete would lose it.
             self.set_visibility(0).await
         } else {
-            // Deleting IS the drop: SQS cannot discard without deleting, and the redrive
-            // policy owns poison-message routing.
             self.delete().await
         }
     }
@@ -394,22 +423,46 @@ mod tests {
         Client::new(&config)
     }
 
+    /// One delivery as the service hands it over, with `receives` as its
+    /// `ApproximateReceiveCount` and `redrive_max` as the policy the registration declared.
+    fn delivered(receives: Option<u32>, redrive_max: Option<u32>) -> SqsMessage {
+        let mut raw = AwsMessage::builder().body("{}").receipt_handle("receipt");
+        if let Some(receives) = receives {
+            raw = raw.attributes(
+                MessageSystemAttributeName::ApproximateReceiveCount,
+                receives.to_string(),
+            );
+        }
+        SqsMessage::new(
+            &raw.build(),
+            offline_client(),
+            "http://localhost:4566/000000000000/queue".to_owned(),
+            "receipt".to_owned(),
+            Duration::from_secs(30),
+            redrive_max.and_then(NonZeroU32::new),
+        )
+    }
+
     /// The runtime picks the native path off this flag, so a delivery that can change its own
     /// visibility has to report it; without it `retry_after` silently falls back to the
     /// deferred re-publish.
     #[tokio::test]
     async fn deliveries_advertise_native_delayed_redelivery() {
-        let raw = AwsMessage::builder()
-            .body("{}")
-            .receipt_handle("receipt")
-            .build();
-        let message = SqsMessage::new(
-            &raw,
-            offline_client(),
-            "http://localhost:4566/000000000000/queue".to_owned(),
-            "receipt".to_owned(),
-            Duration::from_secs(30),
-        );
-        assert!(message.supports_nack_after());
+        assert!(delivered(None, None).supports_nack_after());
+    }
+
+    /// The one delivery a discard must not delete: the queue is a single receive away from
+    /// carrying it to the dead-letter queue, and deleting it there loses it instead.
+    #[tokio::test]
+    async fn the_last_receive_the_redrive_policy_allows_is_spent() {
+        assert!(!delivered(Some(2), Some(3)).spent());
+        assert!(delivered(Some(3), Some(3)).spent());
+        assert!(delivered(Some(4), Some(3)).spent());
+    }
+
+    /// Without a declared policy nothing is spent, so a discard stays the delete it always was.
+    #[tokio::test]
+    async fn a_queue_with_no_declared_policy_spends_nothing() {
+        assert!(!delivered(Some(9), None).spent());
     }
 }

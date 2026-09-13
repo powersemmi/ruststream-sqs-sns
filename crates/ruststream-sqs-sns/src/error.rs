@@ -62,6 +62,24 @@ pub enum SqsError {
     #[error("invalid sqs queue descriptor: {0}")]
     InvalidQueue(String),
 
+    /// A registration declared one half of what the queue's redrive policy needs.
+    ///
+    /// SQS moves a spent delivery itself, and the policy that makes it do so carries the limit
+    /// and the dead-letter queue together. Half a policy is not one, so the subscription refuses
+    /// to open rather than running with a declaration the queue never received.
+    #[error(
+        "the registration on '{queue}' declared {declared} without {missing}; the queue's \
+         redrive policy needs max_attempts(..) and dead_letter(..) together"
+    )]
+    IncompleteRedrive {
+        /// The queue the registration subscribes to.
+        queue: String,
+        /// The half the mount site declared.
+        declared: &'static str,
+        /// The half it left out.
+        missing: &'static str,
+    },
+
     /// A publish named a FIFO-only setting for a destination that is not a FIFO queue or topic.
     ///
     /// The ordering the caller asked for would not happen there, and a value dropped in silence

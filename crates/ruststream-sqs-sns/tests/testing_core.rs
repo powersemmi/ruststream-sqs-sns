@@ -8,12 +8,13 @@
 #![cfg(feature = "testing")]
 
 use std::io;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use ruststream::testing::TestApp;
-use ruststream_sqs_sns::PARTITION_KEY_HEADER;
 use ruststream_sqs_sns::prelude::*;
 use ruststream_sqs_sns::testing::SqsTestBroker;
+use ruststream_sqs_sns::{PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER};
 use serde::{Deserialize, Serialize};
 
 /// The payload the handlers below take, and the producer publishes: a decoded type, so the
@@ -410,14 +411,14 @@ async fn an_unstepped_slot_publish_carries_the_policy_defaults() {
 /// `retry_after` is a queue operation on SQS, and it has to stay one in process: the delivery
 /// comes back on its own once the delay has passed, and nothing is republished to get it there.
 ///
-/// The registration binds the deferred-retry position anyway, which is what a service writes when
-/// it wants the fallback on brokers that need it. Here it starts (the queue reports where a
-/// deferred copy would go) and is never reached, so the queue's log still holds the one original.
+/// Nothing is bound for it either: the queue carries a spent delivery away itself, so the
+/// registration declares a cap and a destination and has no retry publisher to name. The queue's
+/// log still holds the one original.
 #[tokio::test(start_paused = true)]
 async fn a_deferred_retry_waits_out_the_delay_in_process() {
     let app =
         RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(defer).out_retry(Publish::default());
+            b.include(defer);
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -442,4 +443,151 @@ async fn a_deferred_retry_waits_out_the_delay_in_process() {
         .assert_called_once();
 
     tb.shutdown().await.expect("the app shuts down");
+}
+
+/// A handler on a capped queue that never settles a delivery: every one asks to come back after
+/// the delay, so the queue's redrive policy is what ends the message.
+#[subscriber(SqsQueue::new("claims"))]
+async fn appraise(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::retry_after(RETRY_DELAY)
+}
+
+/// The same on the immediate path: `retry()` asks for the message back at once.
+#[subscriber(SqsQueue::new("disputes"))]
+async fn arbitrate(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::retry()
+}
+
+/// What each delivery of `count_attempts` reported as its receive count.
+static ATTEMPTS: Mutex<Vec<(u64, Option<String>)>> = Mutex::new(Vec::new());
+
+/// A handler that reads how many times the queue has handed this message over. The header is
+/// the crate's own spelling of `ApproximateReceiveCount`, and the stand-in sets it too.
+#[subscriber(SqsQueue::new("attempts"))]
+async fn count_attempts(order: &Order, cx: &mut Context<'_>) -> HandlerOutcome {
+    let receives = cx
+        .headers()
+        .get(RECEIVE_COUNT_HEADER)
+        .map(|value| String::from_utf8_lossy(value).into_owned());
+    ATTEMPTS
+        .lock()
+        .expect("the attempt log")
+        .push((order.id, receives));
+    HandlerOutcome::retry()
+}
+
+/// The declaration is the one spelling of a cap on every broker, and on a queue it is the
+/// redrive policy: the message is handed over three times and the queue then carries it to the
+/// dead-letter queue itself. Nothing this process publishes is involved, which is why the
+/// registration binds no retry publisher.
+#[tokio::test(start_paused = true)]
+async fn a_capped_delivery_ends_in_the_dead_letter_queue() {
+    let app =
+        RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(appraise)
+                .max_attempts(nonzero!(3u32))
+                .dead_letter("claims-dead");
+        });
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("claims", &Order { id: 7 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    // One advance per lapsed visibility timeout: the first two hand the delivery back, the third
+    // finds the receives spent and moves the message.
+    for _ in 0..3 {
+        tb.advance(RETRY_DELAY).await.expect("the delay elapses");
+    }
+
+    tb.broker::<SqsTestBroker>()
+        .subscriber("claims")
+        .assert_called(3);
+    tb.broker::<SqsTestBroker>()
+        .published::<Order>("claims-dead")
+        .assert_called_once()
+        .with(&Order { id: 7 });
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// The same cap on the immediate path. SQS has no verb for "reject without deleting", so a
+/// delivery that has run the policy out is returned rather than deleted, and the queue carries
+/// it off on the receive that follows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_immediate_retry_obeys_the_same_cap() {
+    let app =
+        RustStream::new(AppInfo::new("disputes", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(arbitrate)
+                .max_attempts(nonzero!(3u32))
+                .dead_letter("disputes-dead");
+        });
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("disputes", &Order { id: 11 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    tb.broker::<SqsTestBroker>()
+        .subscriber("disputes")
+        .assert_called(3);
+    tb.broker::<SqsTestBroker>()
+        .published::<Order>("disputes-dead")
+        .assert_called_once()
+        .with(&Order { id: 11 });
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// A handler reads the queue's own receive count, so it can tell a first attempt from a last
+/// one. The stand-in counts receives the way the queue does, so the reading is the same here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handler_reads_the_queues_receive_count() {
+    let app =
+        RustStream::new(AppInfo::new("attempts", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(count_attempts)
+                .max_attempts(nonzero!(3u32))
+                .dead_letter("attempts-dead");
+        });
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("attempts", &Order { id: 3 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    assert_eq!(
+        ATTEMPTS.lock().expect("the attempt log").as_slice(),
+        &[
+            (3, Some("1".to_owned())),
+            (3, Some("2".to_owned())),
+            (3, Some("3".to_owned())),
+        ],
+        "the count follows the queue's own receives, starting at one",
+    );
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// A redrive policy is one setting with two halves, so half a declaration is refused where the
+/// service would otherwise run with a cap the queue never received.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn half_a_declaration_refuses_to_start() {
+    let app =
+        RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(audit.name("half")).max_attempts(nonzero!(2u32));
+        });
+
+    let refused = TestApp::start(app)
+        .await
+        .expect_err("a cap the queue never receives is not a cap");
+    let reason = refused.to_string();
+    assert!(
+        reason.contains("max_attempts(..)") && reason.contains("dead_letter(..)"),
+        "the refusal names both halves, got {reason}",
+    );
 }

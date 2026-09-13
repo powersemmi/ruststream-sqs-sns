@@ -7,13 +7,14 @@ use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, HeaderMap, OutgoingMessage, Publisher, RawMessage,
-    RedeliveryAddress, Subscribe,
+    Broker, BrokerMoves, ConnectedBroker, DefaultPublish, HeaderMap, OutgoingMessage, Publisher,
+    RawMessage, Subscribe,
 };
 
 use crate::error::SqsError;
 use crate::message::PARTITION_KEY_HEADER;
 use crate::publisher::{fifo_settings, is_fifo};
+use crate::queue::{Redrive, SqsQueue};
 use crate::testing::router::AddressRouter;
 use crate::testing::subscriber::SqsTestSubscriber;
 use crate::{SqsPublish, SqsPublishOptions};
@@ -105,9 +106,21 @@ impl ConnectedSqsTestBroker {
         SqsTestPublisher::new(Arc::clone(&self.state))
     }
 
+    /// Opens the subscription described by `queue`, carrying the registration's redrive policy
+    /// onto it: the stand-in counts receives and moves a spent delivery to the dead-letter queue
+    /// itself, as SQS does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SqsError`] when the registration declared half a redrive policy, or the
+    /// transport has shut down.
+    pub(crate) fn subscribe_queue(&self, queue: &SqsQueue) -> Result<SqsTestSubscriber, SqsError> {
+        self.open(queue.queue(), queue.redrive()?)
+    }
+
     /// Opens one subscription, or reports the closed transport. Split out so the [`Subscribe`]
     /// impl stays a `ready(..)`: the in-process transport never awaits.
-    fn open(&self, name: &str) -> Result<SqsTestSubscriber, SqsError> {
+    fn open(&self, name: &str, redrive: Option<Redrive>) -> Result<SqsTestSubscriber, SqsError> {
         self.state.ensure_open()?;
         let (id, requeue, rx) = self.state.router.subscribe(name.to_owned());
         Ok(SqsTestSubscriber::new(
@@ -115,6 +128,7 @@ impl ConnectedSqsTestBroker {
             id,
             rx,
             requeue,
+            redrive,
             self.state.coordinator().cloned(),
         ))
     }
@@ -135,16 +149,12 @@ impl ConnectedBroker for ConnectedSqsTestBroker {
 
 impl Subscribe for ConnectedSqsTestBroker {
     type Subscriber = SqsTestSubscriber;
+    // The same answer the real broker gives, so a mount chain that compiles here compiles
+    // against SQS too.
+    type Copies = BrokerMoves;
 
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
-        ready(self.open(name))
-    }
-
-    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        // The same answer the real broker gives, so an `out_retry` wiring that starts here
-        // starts against SQS too: the router publishes by exact address and a subscription is
-        // opened under that address.
-        Some(RedeliveryAddress::new(name.to_owned()))
+        ready(self.open(name, None))
     }
 }
 

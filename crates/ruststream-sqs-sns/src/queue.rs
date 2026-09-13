@@ -7,13 +7,13 @@
 //! onto `MaxNumberOfMessages`.
 
 use std::borrow::Cow;
+#[cfg(feature = "testing")]
 use std::future::{Future, ready};
+use std::num::NonZeroU32;
 use std::time::Duration;
 
-#[cfg(feature = "testing")]
-use ruststream::Subscribe;
 use ruststream::runtime::{Declared, SubscriberBuilder, SubscriberSettings};
-use ruststream::{FromName, RedeliveryAddress, SubscriptionSource};
+use ruststream::{BrokerMoves, FromName, RetryDeclaration, SubscriptionSource};
 
 use crate::broker::ConnectedSqsBroker;
 use crate::error::SqsError;
@@ -23,6 +23,17 @@ use crate::testing::{ConnectedSqsTestBroker, SqsTestSubscriber};
 
 /// The protocol cap on long polling.
 const MAX_WAIT: Duration = Duration::from_secs(20);
+
+/// The registration's retry declaration in the queue's own vocabulary.
+///
+/// A redrive policy is one setting with two halves: after `max_receive_count` receives SQS moves
+/// the delivery to `dead_letter` on its own. Holding them in one value is what keeps half a
+/// policy off the queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Redrive {
+    pub(crate) max_receive_count: NonZeroU32,
+    pub(crate) dead_letter: String,
+}
 
 /// A subscription descriptor for one SQS queue.
 ///
@@ -49,6 +60,8 @@ pub struct SqsQueue {
     wait: Duration,
     visibility: Option<Duration>,
     create_if_missing: bool,
+    max_attempts: Option<NonZeroU32>,
+    dead_letter: Option<Cow<'static, str>>,
 }
 
 impl SqsQueue {
@@ -59,6 +72,8 @@ impl SqsQueue {
             wait: MAX_WAIT,
             visibility: None,
             create_if_missing: false,
+            max_attempts: None,
+            dead_letter: None,
         }
     }
 
@@ -102,6 +117,31 @@ impl SqsQueue {
         self.create_if_missing
     }
 
+    /// The redrive policy the registration declared, or nothing where it declared nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SqsError::IncompleteRedrive`] when only one half was declared.
+    pub(crate) fn redrive(&self) -> Result<Option<Redrive>, SqsError> {
+        match (self.max_attempts, self.dead_letter.as_deref()) {
+            (Some(max_receive_count), Some(dead_letter)) => Ok(Some(Redrive {
+                max_receive_count,
+                dead_letter: dead_letter.to_owned(),
+            })),
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(SqsError::IncompleteRedrive {
+                queue: self.queue.clone(),
+                declared: "max_attempts(..)",
+                missing: "dead_letter(..)",
+            }),
+            (None, Some(_)) => Err(SqsError::IncompleteRedrive {
+                queue: self.queue.clone(),
+                declared: "dead_letter(..)",
+                missing: "max_attempts(..)",
+            }),
+        }
+    }
+
     /// Rejects descriptors that cannot form a subscription, before any I/O.
     pub(crate) fn validate(&self) -> Result<(), SqsError> {
         if self.queue.is_empty() {
@@ -119,6 +159,10 @@ impl SqsQueue {
                 "visibility must be within 1s..=12h".into(),
             ));
         }
+        // The declaration arrives as data at startup, so its two halves are checked here rather
+        // than at the mount site: what the chain offers is the core's, one step per half, and
+        // the pairing a redrive policy needs is this broker's alone.
+        self.redrive()?;
         Ok(())
     }
 }
@@ -135,6 +179,10 @@ impl FromName for SqsQueue {
 
 impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
     type Subscriber = SqsSubscriber;
+    // The queue carries a spent delivery away itself. Its redrive policy counts the receives and
+    // moves the message to the dead-letter queue once they run out, so this process publishes no
+    // copy and `.out_retry(..)` does not compile on this descriptor.
+    type Copies = BrokerMoves;
 
     fn name(&self) -> &str {
         self.queue()
@@ -144,16 +192,14 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
         connected.subscribe_queue(self).await
     }
 
-    fn redelivery_address(
-        &self,
-        _connected: &ConnectedSqsBroker,
-    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, SqsError>> {
-        // A queue is a publish destination as well as a subscription, so a deferred retry is
-        // published under the very name this descriptor resolves. A queue fed by an SNS topic
-        // is no exception: the retry reaches the queue directly and skips the fan-out, which is
-        // what a redelivery of this one subscription means. The answer needs no I/O, so the
-        // future is ready.
-        ready(Ok(Some(RedeliveryAddress::new(self.queue.clone()))))
+    fn declare_retry(mut self, declaration: &RetryDeclaration) -> Self {
+        // Recorded only: the redrive policy is written on the queue, and there is no connection
+        // here to write it through. `subscribe` applies it.
+        self.max_attempts = declaration.max_attempts();
+        self.dead_letter = declaration
+            .dead_letter()
+            .map(|destination| Cow::Owned(destination.to_owned()));
+        self
     }
 }
 
@@ -161,37 +207,42 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
 /// mounts on [`SqsTestBroker`](crate::testing::SqsTestBroker) as written, with no second
 /// descriptor type and no rewrite at the mount site.
 ///
-/// The stand-in routes by exact queue name, which is what this descriptor already resolves to.
-/// The rest of it stops here, and deliberately: `wait` has no long poll to bound (a delivery
-/// arrives the moment it is published), `visibility` has no redelivery clock to arm (an
-/// unsettled message is not handed out again in process), and `create_if_missing` has nothing
-/// to create (the router registers the address on subscribe). So a test on this broker proves
-/// that the wiring, the codec and the handler agree; it cannot prove redelivery after a lapsed
-/// visibility, or what a long poll costs. Those hold against SQS itself, and the live suite is
-/// where they are asserted.
+/// The stand-in routes by exact queue name, which is what this descriptor already resolves to,
+/// and it counts receives and applies the registration's redrive policy the way the queue does,
+/// so a cap and a dead-letter destination can be driven under the harness. The rest of it stops
+/// here, and deliberately: `wait` has no long poll to bound (a delivery arrives the moment it is
+/// published), `visibility` has no redelivery clock to arm (an unsettled message is not handed
+/// out again in process), and `create_if_missing` has nothing to create (the router registers
+/// the address on subscribe). So a test on this broker proves that the wiring, the codec and the
+/// handler agree; it cannot prove redelivery after a lapsed visibility, or what a long poll
+/// costs. Those hold against SQS itself, and the live suite is where they are asserted.
 #[cfg(feature = "testing")]
 impl SubscriptionSource<ConnectedSqsTestBroker> for SqsQueue {
     type Subscriber = SqsTestSubscriber;
+    type Copies = BrokerMoves;
 
     fn name(&self) -> &str {
         self.queue()
     }
 
-    async fn subscribe(
+    fn subscribe(
         self,
         connected: &ConnectedSqsTestBroker,
-    ) -> Result<SqsTestSubscriber, SqsError> {
+    ) -> impl Future<Output = Result<SqsTestSubscriber, SqsError>> + Send {
         // Validated in process too: a descriptor SQS would refuse must not pass a test that
-        // never reaches SQS.
-        self.validate()?;
-        connected.subscribe(self.queue()).await
+        // never reaches SQS. The transport never awaits, so the answer is ready.
+        ready(
+            self.validate()
+                .and_then(|()| connected.subscribe_queue(&self)),
+        )
     }
 
-    fn redelivery_address(
-        &self,
-        _connected: &ConnectedSqsTestBroker,
-    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, SqsError>> {
-        ready(Ok(Some(RedeliveryAddress::new(self.queue.clone()))))
+    fn declare_retry(mut self, declaration: &RetryDeclaration) -> Self {
+        self.max_attempts = declaration.max_attempts();
+        self.dead_letter = declaration
+            .dead_letter()
+            .map(|destination| Cow::Owned(destination.to_owned()));
+        self
     }
 }
 
@@ -273,6 +324,70 @@ mod tests {
             SqsQueue::new("q").wait(Duration::from_secs(21)).validate(),
             Err(SqsError::InvalidQueue(_))
         ));
+    }
+
+    /// The descriptor as it reaches `subscribe`: what the registration declared is on it.
+    fn declared(declaration: &RetryDeclaration) -> SqsQueue {
+        SubscriptionSource::<ConnectedSqsBroker>::declare_retry(
+            SqsQueue::new("orders"),
+            declaration,
+        )
+    }
+
+    /// A cap of `attempts`, as a mount site declares it.
+    fn cap(attempts: u32) -> NonZeroU32 {
+        NonZeroU32::new(attempts).expect("a cap is never zero")
+    }
+
+    /// The declaration reaches the queue as one policy, so both halves have to be there.
+    #[test]
+    fn a_full_declaration_becomes_the_queues_redrive_policy() {
+        let redrive = declared(
+            &RetryDeclaration::new()
+                .with_max_attempts(cap(4))
+                .with_dead_letter("orders-dead"),
+        )
+        .redrive()
+        .expect("both halves are declared")
+        .expect("a full declaration is a policy");
+        assert_eq!(redrive.max_receive_count.get(), 4);
+        assert_eq!(redrive.dead_letter, "orders-dead");
+    }
+
+    #[test]
+    fn a_registration_that_declares_nothing_writes_no_policy() {
+        let written = declared(&RetryDeclaration::new()).redrive();
+        assert!(
+            matches!(written, Ok(None)),
+            "a silent registration writes nothing"
+        );
+    }
+
+    /// Half a policy is not one, and the subscription says which half is missing rather than
+    /// running with a cap the queue never received.
+    #[test]
+    fn half_a_declaration_is_refused_before_io() {
+        let refused = declared(&RetryDeclaration::new().with_max_attempts(cap(4)))
+            .validate()
+            .expect_err("a cap alone is not a redrive policy");
+        assert!(
+            matches!(
+                refused,
+                SqsError::IncompleteRedrive { missing, .. } if missing == "dead_letter(..)"
+            ),
+            "the refusal names the missing half",
+        );
+
+        let refused = declared(&RetryDeclaration::new().with_dead_letter("orders-dead"))
+            .validate()
+            .expect_err("a destination alone is not a redrive policy");
+        assert!(
+            matches!(
+                refused,
+                SqsError::IncompleteRedrive { missing, .. } if missing == "max_attempts(..)"
+            ),
+            "the refusal names the missing half",
+        );
     }
 
     #[test]

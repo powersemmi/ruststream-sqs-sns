@@ -12,7 +12,10 @@
 //!   call is one batch.
 //! - A handler outliving the visibility timeout is protected by crate-owned background
 //!   extension for as long as it holds the message.
-//! - The queue's redrive policy provides dead-lettering. FIFO ordering is a per-message setting
+//! - The queue carries a spent delivery away itself: a registration declares
+//!   `max_attempts(n).dead_letter(name)` at the mount site and the subscription writes it onto
+//!   the queue as its redrive policy, so nothing is republished from the service and
+//!   `.out_retry(..)` does not compile here. FIFO ordering is a per-message setting
 //!   ([`SqsPublishOptions`]): the mount site fixes a position's group on the policy, a call
 //!   names its own with the [`SqsPublishSteps`] steps, and the portable `partition-key` header
 //!   still names one for a service that publishes to several brokers.

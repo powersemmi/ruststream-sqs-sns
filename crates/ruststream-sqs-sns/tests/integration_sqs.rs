@@ -3,6 +3,7 @@
 //! Start one with `just brokers-up`, then:
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.
 
+use std::num::NonZeroU32;
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use futures::StreamExt;
 use ruststream::runtime::PublishExt;
 use ruststream::{
     Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, Publisher,
-    Serialized, Subscriber,
+    RetryDeclaration, Serialized, Subscriber, SubscriptionSource,
 };
 use ruststream_sqs_sns::{
     ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsPublishSteps, SqsQueue,
@@ -461,5 +462,106 @@ async fn a_held_delivery_rides_the_queues_own_visibility_timeout() {
     );
 
     held.ack().await.expect("ack succeeds");
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// The cap the declaration test puts on its queue.
+const DECLARED_ATTEMPTS: u32 = 2;
+
+/// Reads one attribute of a queue as the service reports it.
+async fn queue_attribute(endpoint: &str, queue: &str, attribute: QueueAttributeName) -> String {
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .endpoint_url(endpoint)
+        .region(Region::new("us-east-1"))
+        .test_credentials()
+        .load()
+        .await;
+    let client = aws_sdk_sqs::Client::new(&config);
+    let url = client
+        .get_queue_url()
+        .queue_name(queue)
+        .send()
+        .await
+        .expect("the queue is there")
+        .queue_url()
+        .expect("GetQueueUrl returns the URL")
+        .to_owned();
+    client
+        .get_queue_attributes()
+        .queue_url(url)
+        .attribute_names(attribute.clone())
+        .send()
+        .await
+        .expect("the attributes are readable")
+        .attributes()
+        .and_then(|map| map.get(&attribute))
+        .cloned()
+        .unwrap_or_default()
+}
+
+// The declaration a registration makes is topology on SQS, so what proves it arrived is the
+// queue's own redrive policy, read back from the service rather than from the descriptor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_declaration_reaches_the_queue_as_its_redrive_policy() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = unique("redrive");
+    let dead_letter = unique("redrive-dead");
+    let declaration = RetryDeclaration::new()
+        .with_max_attempts(NonZeroU32::new(DECLARED_ATTEMPTS).expect("a cap"))
+        .with_dead_letter(dead_letter.clone());
+    let source = SubscriptionSource::<ConnectedSqsBroker>::declare_retry(
+        SqsQueue::new(&queue)
+            .create_if_missing()
+            .wait(Duration::from_secs(1)),
+        &declaration,
+    );
+    let subscriber = connected
+        .subscribe_queue(source)
+        .await
+        .expect("subscription opens");
+
+    let policy = queue_attribute(&endpoint, &queue, QueueAttributeName::RedrivePolicy).await;
+    assert!(
+        policy.contains(&format!("\"maxReceiveCount\":\"{DECLARED_ATTEMPTS}\"")),
+        "the cap did not reach the queue, got {policy}",
+    );
+    assert!(
+        policy.contains(&dead_letter),
+        "the dead-letter queue did not reach the queue, got {policy}",
+    );
+
+    drop(subscriber);
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+// A registration that declares one half of a redrive policy would otherwise run with a cap the
+// queue never received, so the subscription refuses to open and says which half is missing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn half_a_declaration_refuses_the_subscription() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let declaration = RetryDeclaration::new()
+        .with_max_attempts(NonZeroU32::new(DECLARED_ATTEMPTS).expect("a cap"));
+    let source = SubscriptionSource::<ConnectedSqsBroker>::declare_retry(
+        SqsQueue::new(unique("half")).create_if_missing(),
+        &declaration,
+    );
+    let refused = connected
+        .subscribe_queue(source)
+        .await
+        .expect_err("a cap the queue never receives is not a cap");
+    let reason = refused.to_string();
+    assert!(
+        reason.contains("dead_letter(..)"),
+        "the refusal names the missing half, got {reason}",
+    );
+
     connected.shutdown().await.expect("shutdown succeeds");
 }

@@ -14,14 +14,13 @@ use std::time::Duration;
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_sqs::types::QueueAttributeName;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, RedeliveryAddress, ServerSpec,
-    Subscribe,
+    Broker, BrokerMoves, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe,
 };
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::error::{SqsError, sdk_err};
 use crate::publisher::{SnsPublisher, SqsPublish, SqsPublisher};
-use crate::queue::SqsQueue;
+use crate::queue::{Redrive, SqsQueue};
 use crate::subscriber::SqsSubscriber;
 
 /// The live client state shared by the connected form and every handle derived from it.
@@ -116,6 +115,28 @@ impl Core {
             .to_owned();
         cache.insert(topic.to_owned(), arn.clone());
         Ok(arn)
+    }
+
+    /// The queue's ARN, which is how every SQS resource names another one: an SNS subscription
+    /// endpoint, a redrive policy's dead-letter target.
+    pub(crate) async fn queue_arn(&self, queue: &str, queue_url: &str) -> Result<String, SqsError> {
+        self.sqs
+            .get_queue_attributes()
+            .queue_url(queue_url)
+            .attribute_names(QueueAttributeName::QueueArn)
+            .send()
+            .await
+            .map_err(|e| SqsError::Queue {
+                name: queue.to_owned(),
+                source: sdk_err(&e),
+            })?
+            .attributes()
+            .and_then(|map| map.get(&QueueAttributeName::QueueArn))
+            .cloned()
+            .ok_or_else(|| SqsError::Queue {
+                name: queue.to_owned(),
+                source: Box::from("GetQueueAttributes returned no QueueArn"),
+            })
     }
 
     /// The queue's own visibility timeout, read once when a subscription opens.
@@ -215,6 +236,16 @@ pub(crate) fn queue_name(logical: &str) -> String {
         })
         .collect();
     format!("{mapped}{fifo}")
+}
+
+/// The redrive policy SQS takes, as the service spells it.
+///
+/// Built by hand rather than through a serializer: the two values are an ARN the service
+/// returned and a number, and neither alphabet reaches a JSON metacharacter.
+fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
+    format!(
+        r#"{{"deadLetterTargetArn":"{dead_letter_arn}","maxReceiveCount":"{max_receive_count}"}}"#
+    )
 }
 
 /// An Amazon SQS broker (with SNS fan-out publishing) for the `RustStream` messaging
@@ -392,26 +423,7 @@ impl ConnectedSqsBroker {
         self.core.ensure_open()?;
         let topic_arn = self.core.topic_arn(topic).await?;
         let queue_url = self.core.queue_url(queue).await?;
-        let attributes = self
-            .core
-            .sqs
-            .get_queue_attributes()
-            .queue_url(&queue_url)
-            .attribute_names(QueueAttributeName::QueueArn)
-            .send()
-            .await
-            .map_err(|e| SqsError::Queue {
-                name: queue.to_owned(),
-                source: sdk_err(&e),
-            })?;
-        let queue_arn = attributes
-            .attributes()
-            .and_then(|map| map.get(&QueueAttributeName::QueueArn))
-            .ok_or_else(|| SqsError::Queue {
-                name: queue.to_owned(),
-                source: Box::from("GetQueueAttributes returned no QueueArn"),
-            })?
-            .clone();
+        let queue_arn = self.core.queue_arn(queue, &queue_url).await?;
         self.core
             .sns
             .subscribe()
@@ -432,12 +444,15 @@ impl ConnectedSqsBroker {
     ///
     /// A descriptor that names no visibility takes the queue's own timeout, read here with one
     /// `GetQueueAttributes` call, so every delivery is held under the value the operator
-    /// configured.
+    /// configured. A registration that declared a cap and a dead-letter destination has them
+    /// written onto the queue as its redrive policy first, which is what makes SQS carry a spent
+    /// delivery away by itself.
     ///
     /// # Errors
     ///
-    /// Returns [`SqsError`] when the descriptor is invalid, the queue cannot be resolved (or
-    /// created, when opted in), the queue's visibility timeout cannot be read, or the broker is
+    /// Returns [`SqsError`] when the descriptor is invalid, the registration declared half a
+    /// redrive policy, the queue cannot be resolved (or created, when opted in), the redrive
+    /// policy cannot be written, the queue's visibility timeout cannot be read, or the broker is
     /// shut down.
     pub async fn subscribe_queue(&self, queue: SqsQueue) -> Result<SqsSubscriber, SqsError> {
         queue.validate()?;
@@ -448,7 +463,49 @@ impl ConnectedSqsBroker {
         } else {
             self.core.queue_url(queue.queue()).await?
         };
+        if let Some(redrive) = queue.redrive()? {
+            self.set_redrive_policy(queue.queue(), &url, &redrive, queue.create_value())
+                .await?;
+        }
         SqsSubscriber::open(&self.core, queue.queue(), url, &queue).await
+    }
+
+    /// Writes the registration's declaration onto the queue as its redrive policy.
+    ///
+    /// The dead-letter destination is a queue name like any other, resolved to the ARN the
+    /// policy addresses it by. A FIFO queue takes a FIFO dead-letter queue and a standard one a
+    /// standard queue; SQS rejects the mismatch and the error carries its words.
+    async fn set_redrive_policy(
+        &self,
+        queue: &str,
+        queue_url: &str,
+        redrive: &Redrive,
+        create_if_missing: bool,
+    ) -> Result<(), SqsError> {
+        let dead_letter_url = if create_if_missing {
+            self.ensure_queue(&redrive.dead_letter).await?
+        } else {
+            self.core.queue_url(&redrive.dead_letter).await?
+        };
+        let dead_letter_arn = self
+            .core
+            .queue_arn(&redrive.dead_letter, &dead_letter_url)
+            .await?;
+        self.core
+            .sqs
+            .set_queue_attributes()
+            .queue_url(queue_url)
+            .attributes(
+                QueueAttributeName::RedrivePolicy,
+                redrive_policy(&dead_letter_arn, redrive.max_receive_count.get()),
+            )
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| SqsError::Queue {
+                name: queue.to_owned(),
+                source: sdk_err(&e),
+            })
     }
 
     /// Resolves the queue, creating it when missing. A `.fifo` name creates a FIFO queue with
@@ -495,17 +552,12 @@ impl ConnectedBroker for ConnectedSqsBroker {
 
 impl Subscribe for ConnectedSqsBroker {
     type Subscriber = SqsSubscriber;
+    // A bare name is a queue, and a queue moves a spent delivery itself, so the by-name form
+    // takes the same copy path the descriptor does.
+    type Copies = BrokerMoves;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.subscribe_queue(SqsQueue::new(name)).await
-    }
-
-    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        // A queue is its own publish destination: the name a subscription opened under is the
-        // name a publisher sends to, so a deferred retry lands back on the same queue. This
-        // holds for a queue fed by an SNS topic too - the retry goes to the queue directly and
-        // skips the fan-out, which is what a redelivery of one subscription means.
-        Some(RedeliveryAddress::new(name.to_owned()))
     }
 }
 

@@ -24,6 +24,10 @@ pub(crate) struct SubscriptionId(u64);
 pub(crate) struct Delivery {
     pub(crate) payload: Bytes,
     pub(crate) headers: HeaderMap,
+    /// How many times this message has been handed to a handler, counting the delivery in
+    /// hand. It is the stand-in's `ApproximateReceiveCount`: the redrive policy reads it, and
+    /// so does a handler asking how many attempts a delivery has had.
+    pub(crate) receives: u32,
 }
 
 pub(crate) type DeliverySender = mpsc::UnboundedSender<Delivery>;
@@ -107,7 +111,11 @@ impl AddressRouter {
             }
         }
 
-        let delivery = Delivery { payload, headers };
+        let delivery = Delivery {
+            payload,
+            headers,
+            receives: 0,
+        };
         for tx in to_notify {
             if tx.send(delivery.clone()).is_ok()
                 && let Some(coordinator) = coordinator

@@ -11,7 +11,7 @@
 //! carried by each message (no round trip). Cancelling the in-flight long poll happens only when
 //! the stream is dropped, where the cost (one closed HTTP connection) does not matter.
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use futures::{Stream, StreamExt};
@@ -89,6 +89,9 @@ pub struct SqsSubscriber {
     queue_url: String,
     wait: Duration,
     visibility: Visibility,
+    /// The `maxReceiveCount` this subscription's registration declared, so a delivery knows when
+    /// the queue is one receive away from carrying it off.
+    redrive_max: Option<NonZeroU32>,
 }
 
 impl std::fmt::Debug for SqsSubscriber {
@@ -97,6 +100,7 @@ impl std::fmt::Debug for SqsSubscriber {
             .field("queue_url", &self.queue_url)
             .field("wait", &self.wait)
             .field("visibility", &self.visibility)
+            .field("redrive_max", &self.redrive_max)
             .finish_non_exhaustive()
     }
 }
@@ -128,6 +132,9 @@ impl SqsSubscriber {
             queue_url,
             wait: descriptor.wait_value(),
             visibility,
+            redrive_max: descriptor
+                .redrive()?
+                .map(|redrive| redrive.max_receive_count),
         })
     }
 
@@ -147,6 +154,7 @@ impl SqsSubscriber {
                 size: receive_size(size),
                 wait: i32::try_from(self.wait.as_secs()).unwrap_or(20),
                 visibility: self.visibility,
+                redrive_max: self.redrive_max,
             },
             tx,
         ));
@@ -160,6 +168,7 @@ struct Receive {
     size: i32,
     wait: i32,
     visibility: Visibility,
+    redrive_max: Option<NonZeroU32>,
 }
 
 /// Turns a batch channel into the stream shape both lanes are built from.
@@ -254,6 +263,7 @@ async fn pump(
                             queue_url.clone(),
                             receipt.to_owned(),
                             visibility,
+                            call.redrive_max,
                         ))
                     })
                     .collect();
