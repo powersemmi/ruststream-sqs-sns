@@ -144,15 +144,34 @@ SqsBroker::new()          只有配置，同步，没有 I/O
 延迟重试同样是原生的：`retry_after(delay)` 把消息的可见性设成这个延迟，上限是协议规定的 12 小时。
 消息原地等待，在同一个队列上重新投递，接收计数保持不变，因为什么都没有重新发布，也没有制作副本。
 
-框架自己那条重新发布延迟副本的退路，因此在这里从不执行。它仍然接好了：问到延迟副本该去哪里时，
-队列用自己的名字作答，因此绑定了 `.out_retry(Publish::default())` 的那次注册在这个 Broker 上
-能启动，而不是拒绝启动。从 SNS 主题接收消息的队列，答案也一样：副本直接到达队列，跳过扇出。那一个订阅的
-重新投递，本来就是这个意思。
+框架自己那条重新发布延迟副本的退路，因此在这里从不执行，也无法要来：`.out_retry(..)` 在
+`SqsQueue` 上不能编译。队列自己会把耗尽的投递带走，服务这边没有发布者可命名，编译错误会这样说，
+并指向下面的声明。
 
-SQS 除了删除之外没有别的丢弃办法，因此毒消息的路由归队列的重新驱动策略（`RedrivePolicy` 属性）管：
-投递达到 `maxReceiveCount` 次之后，SQS 自己把消息移进死信队列。处理器在 `sqs-receive-count`
-消息头（`RECEIVE_COUNT_HEADER`）里读到这个计数，也就是 SQS 报出的近似接收次数，于是可以把最后
-一次尝试和第一次区别对待。
+## 限制尝试次数 { #capping-the-attempts }
+
+一个不停要求重试的处理器，会让自己的消息一直转下去，直到有人来干预。`include` 之后的两个步骤
+结束这件事，而且在任何 Broker 上都是同一种写法：
+
+```rust
+--8<-- "crates/ruststream-sqs-sns/examples/sqs_dead_letter.rs:mount"
+```
+
+在 SQS 上，这两个步骤是一项设置：队列的重新驱动策略。`max_attempts(n)` 就是它的
+`maxReceiveCount`，`dead_letter(name)` 就是它指向的队列，而把它们写到队列上的是订阅，在它打开
+的时候。此后由 SQS 自己数接收次数、自己搬运消息，服务这边什么都不发出去。
+
+两半都得有，因为半条重新驱动策略不是策略。只声明了上限而没有目的地、或者只有目的地而没有上限的
+注册，会拒绝打开订阅，并说出缺的是哪一半。到那时死信队列必须已经存在，除非描述符带着
+`create_if_missing`；而且它要和它服务的队列同类：FIFO 队列配 FIFO 死信队列。
+
+数上限的是 SQS 自己的 `ApproximateReceiveCount`，它把手上这一次投递也算进去，所以第一次尝试是
+一。同一个数字，处理器在 `sqs-receive-count` 消息头（`RECEIVE_COUNT_HEADER`）里也读得到，于是
+可以把最后一次尝试和第一次区别对待。
+
+上面那张表里有一行，在有声明的时候读法不同。SQS 没有“拒收但不删除”的动作，所以丢弃就是删除；
+但已经把策略的接收次数用完的那一次投递，会被放回队列，因为再被接收一次正是 SQS 把它移进死信队列
+的办法。在那里删除它，就等于把它弄丢。
 
 ## 可见性续期 { #the-visibility-extender }
 
@@ -267,6 +286,35 @@ SNS 只以发布者的身份出现：它的投递目标是队列和 HTTP 端点�
 --8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:app"
 ```
 
+## 生成的文档 { #the-generated-document }
+
+框架按服务的声明生成 AsyncAPI 文档，本 crate 往里补上只有 SQS 才知道的部分。它有自己的 feature，
+并且会带上核心的那个：
+
+```toml
+ruststream-sqs-sns = { version = "0.7", features = ["asyncapi"] }
+```
+
+此后，队列描述符打开的每一个频道都带上 `sqs` 频道绑定：
+
+```json
+--8<-- "crates/ruststream-sqs-sns/tests/asyncapi_channel.json"
+```
+
+`name` 和 `fifoQueue` 来自队列的名字，因为让一个队列成为 FIFO 队列的正是 `.fifo` 后缀；
+`visibilityTimeout` 和 `receiveMessageWaitTime` 来自描述符写出的轮询设置。描述符留给队列自己的
+设置不会被猜出来，而是留空：要读到它得有连接，而文档是在任何东西连上之前就建好的。同样的道理，
+队列的 ARN 从不出现，队列的访问策略属于基础设施，而不是对服务的描述。凭据也不会出现，哪怕 Broker
+是用一个带着凭据的 URL 配置的。
+
+注册声明的上限和死信目的地，由框架自己报出：报在接收操作上，以及作为注册向其发送的一个频道。
+
+发布不添加绑定。AWS 的两种绑定都围绕队列名或主题名展开，而发布策略拿不到自己要发往的目的地，
+因此那里没有可说的。
+
+本 crate 描述一个服务器，协议是 `sqs`：一个 Broker 描述一个服务器，而发往 SNS 的发布走的是同一个
+账号、同一个区域，用的也是它。
+
 ## 载荷与消息头 { #payloads-and-headers }
 
 每个消息头变成一条 SQS 消息属性：SQS 当作文本接受的值用 `String`，其余的用 `Binary`。没有发明
@@ -296,6 +344,7 @@ just brokers-up                 # 在 127.0.0.1:4566 上启动 LocalStack
 cargo run --example sqs_service
 cargo run --example sqs_batches
 cargo run --example sqs_fifo_group
+cargo run --example sqs_dead_letter
 cargo run --example sns_fanout
 just brokers-down
 ```
@@ -345,10 +394,12 @@ SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --workspace --all-features --
 因为路由器没有可供扇出的主题：一个测试证明的是回复去了策略指出的那个目的地，而不是 SNS 把它继续
 投递给了订阅那个主题的队列。
 
-它按队列名精确路由，而且把一次结算答到底，延迟也算在内：`retry_after` 把消息按下不发，等延迟过去
-再交给同一个订阅，因此测试里用 `tb.advance(..)` 把它推过去，框架那份延迟副本在进程内也像在生产里
-一样不上这个 Broker 的路。属于队列自己的那些东西（自行到期的可见性超时、经重新驱动策略进死信
-队列、FIFO 顺序和 SNS 扇出），由对着 LocalStack 的真实环境测试套件来回答。
+它按队列名精确路由，而且把一次结算答到底，延迟和上限都算在内。`retry_after` 把消息按下不发，
+等延迟过去再交给同一个订阅，因此测试里用 `tb.advance(..)` 把它推过去，框架那份延迟副本在进程内
+也像在生产里一样不上这个 Broker 的路。接收次数按队列的数法来数，注册的重新驱动策略会把耗尽的
+投递搬进死信队列，在那里由 `tb.published::<Invoice>("invoices-dead")` 读出来。属于队列自己的
+那些东西（自行到期的可见性超时、FIFO 顺序和 SNS 扇出），由对着 LocalStack 的真实环境测试套件
+来回答。
 
 批次是两种传输在内部唯一不同的地方：进程内由框架的客户端缓冲来攒批，而真实的订阅者从
 `ReceiveMessage` 取。挂载写出一个大小，两边拿到的批次都不超过那个大小，正是这一点让批量处理器在

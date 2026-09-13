@@ -162,16 +162,39 @@ Deferred retry is native as well: `retry_after(delay)` sets the message's visibi
 capped at the protocol's 12 hours. The message waits in place and redelivers on the same queue
 with its receive count intact, since nothing is republished and no copy is made.
 
-The framework's own fallback, which republishes a delayed copy, therefore never runs here. It is
-still wired: a queue answers where a deferred copy would go with its own name, so a registration
-bound with `.out_retry(Publish::default())` starts on this broker instead of refusing to. A queue
-fed by an SNS topic answers the same way - the copy reaches the queue directly and skips the
-fan-out, which is what a redelivery of that one subscription means.
+The framework's own fallback, which republishes a delayed copy, therefore never runs here, and it
+cannot be asked for either: `.out_retry(..)` does not compile on an `SqsQueue`. A queue carries a
+spent delivery away itself, so there is no publisher of the service's to name, and the compile
+error says so and points at the declaration below.
 
-SQS has no discard short of deletion, so poison-message routing belongs to the queue's redrive
-policy: after `maxReceiveCount` deliveries SQS moves the message to the dead-letter queue itself.
-A handler reads that count in the `sqs-receive-count` header (`RECEIVE_COUNT_HEADER`), the
-approximate receive count SQS reports, and can treat the last attempt differently from the first.
+## Capping the attempts
+
+A handler that keeps asking for a retry circulates its message until an operator intervenes. Two
+steps right after `include` end that, and they read the same on every broker:
+
+```rust
+--8<-- "crates/ruststream-sqs-sns/examples/sqs_dead_letter.rs:mount"
+```
+
+On SQS those two steps are one setting: the queue's redrive policy. `max_attempts(n)` is its
+`maxReceiveCount`, `dead_letter(name)` is the queue it points at, and the subscription writes them
+onto the queue when it opens. SQS then counts the receives and moves the message itself, and
+nothing leaves the service.
+
+Both halves are needed, because half a redrive policy is not one. A registration that declares a
+cap without a destination, or a destination without a cap, refuses to open and names the half it
+is missing. The dead-letter queue must exist by then, unless the descriptor carries
+`create_if_missing`, and it must match the queue it serves: a FIFO queue takes a FIFO dead-letter
+queue.
+
+The count is SQS's own `ApproximateReceiveCount`, which counts the delivery in hand, so the first
+attempt is one. A handler reads the same number in the `sqs-receive-count` header
+(`RECEIVE_COUNT_HEADER`) and can treat the last attempt differently from the first.
+
+One thing about the settlement table above changes under a declaration. SQS has no verb for
+rejecting a message without deleting it, so a discard deletes; but the delivery that has used up
+the policy's receives is returned instead, because being received once more is how SQS moves it to
+the dead-letter queue. Deleting it there would lose it.
 
 ## The visibility extender
 
@@ -303,6 +326,39 @@ handler's reply fan out. `.out_reply(SnsPublish::default())` is the whole of the
 --8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:app"
 ```
 
+## The generated document
+
+The framework generates an AsyncAPI document from a service's declarations, and this crate fills
+in what only SQS knows. It is behind a feature of its own, which forwards the core's:
+
+```toml
+ruststream-sqs-sns = { version = "0.7", features = ["asyncapi"] }
+```
+
+Every channel a queue descriptor opens then carries an `sqs` channel binding:
+
+```json
+--8<-- "crates/ruststream-sqs-sns/tests/asyncapi_channel.json"
+```
+
+`name` and `fifoQueue` come from the queue's name, since the `.fifo` suffix is what makes a queue
+FIFO; `visibilityTimeout` and `receiveMessageWaitTime` come from the polling settings the
+descriptor names. A setting the descriptor leaves to the queue is left out rather than guessed:
+reading it takes a connection, and the document is built before anything connects. For the same
+reason a queue's ARN never appears, and a queue's access policy is infrastructure rather than a
+description of a service. Nor does a credential, even when the broker is configured from a URL
+that carries one.
+
+A registration's cap and its dead-letter destination are reported by the framework itself, on the
+receive operation and as a channel the registration sends to.
+
+A publish adds no binding. Both AWS bindings are built around the queue or the topic name, and a
+publish policy is never handed the destination it publishes to, so there is nothing to say that
+would be true.
+
+One server describes the crate, with the protocol `sqs`: a broker describes one, and SNS publishes
+go to the same account and region and share it.
+
 ## Payloads and headers
 
 Each header becomes one SQS message attribute: `String` for a value SQS takes as text, `Binary`
@@ -337,6 +393,7 @@ just brokers-up                 # start LocalStack on 127.0.0.1:4566
 cargo run --example sqs_service
 cargo run --example sqs_batches
 cargo run --example sqs_fifo_group
+cargo run --example sqs_dead_letter
 cargo run --example sns_fanout
 just brokers-down
 ```
@@ -391,12 +448,14 @@ one `SqsTestPublisher`,
 because the router has no topic to fan out from: a test proves the reply took the destination the
 policy names, not that SNS delivered it onward to the queues subscribed to that topic.
 
-It routes by exact queue name, and it answers a settlement in full, the delay included:
-`retry_after` holds the delivery back and hands it to the same subscription once the delay has
-passed, so a test drives it with `tb.advance(..)` and the framework's deferred copy stays off this
-broker's path in process as it does in production. What belongs to the queue itself (a visibility
-timeout that lapses on its own, dead-lettering through the redrive policy, FIFO ordering and SNS
-fan-out) is answered by the live suite against LocalStack.
+It routes by exact queue name, and it answers a settlement in full, the delay and the cap
+included. `retry_after` holds the delivery back and hands it to the same subscription once the
+delay has passed, so a test drives it with `tb.advance(..)` and the framework's deferred copy
+stays off this broker's path in process as it does in production. Receives are counted the way the
+queue counts them, and a registration's redrive policy moves a spent delivery to the dead-letter
+queue, where `tb.published::<Invoice>("invoices-dead")` reads it. What belongs to the queue itself
+(a visibility timeout that lapses on its own, FIFO ordering and SNS fan-out) is answered by the
+live suite against LocalStack.
 
 Batches are the one place the two transports differ inside: in process the framework's client-side
 buffer assembles them, while the real subscriber takes them from `ReceiveMessage`. A mount names a
