@@ -28,6 +28,7 @@ aws-sdk-sns = { version = "1.107", default-features = false, features = ["defaul
 base64 = "0.23"
 bytes = "1"
 futures = "0.3"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = "0.1"

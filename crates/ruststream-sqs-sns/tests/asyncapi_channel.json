@@ -1,0 +1,11 @@
+{
+  "sqs": {
+    "bindingVersion": "0.3.0",
+    "queue": {
+      "name": "orders",
+      "fifoQueue": false,
+      "visibilityTimeout": 30,
+      "receiveMessageWaitTime": 20
+    }
+  }
+}

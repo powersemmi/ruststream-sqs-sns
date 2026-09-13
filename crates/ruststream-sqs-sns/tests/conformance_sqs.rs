@@ -17,6 +17,8 @@
 
 #![cfg(feature = "testing")]
 
+use std::time::Duration;
+
 use ruststream::conformance::{capabilities, harness};
 use ruststream_sqs_sns::testing::SqsTestBroker;
 use ruststream_sqs_sns::{SqsBroker, SqsQueue};
@@ -64,6 +66,21 @@ async fn the_test_broker_honours_the_batch_size() {
         |connected| connected.publisher(),
     )
     .await;
+}
+
+/// A published document is shared, so nothing a broker contributes to it may carry a password.
+/// The endpoint is the way one gets in here: a URL like `http://svc:hunter2@sqs.local:4566`
+/// carries credentials, and a server description that kept them would hand them to every reader.
+#[cfg(feature = "asyncapi")]
+#[test]
+fn the_broker_describes_itself_without_its_credentials() {
+    harness::describes_without_credentials(
+        &SqsBroker::new()
+            .endpoint("http://svc:hunter2@sqs.local:4566")
+            .region("us-east-1"),
+        &SqsQueue::new("orders").visibility(Duration::from_secs(30)),
+        "hunter2",
+    );
 }
 
 /// The batch size against the real service, where it is `MaxNumberOfMessages` rather than a

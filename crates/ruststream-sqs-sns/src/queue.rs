@@ -12,11 +12,17 @@ use std::future::{Future, ready};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{Declared, SubscriberBuilder, SubscriberSettings};
 use ruststream::{BrokerMoves, FromName, RetryDeclaration, SubscriptionSource};
+#[cfg(feature = "asyncapi")]
+use serde::Serialize;
 
 use crate::broker::ConnectedSqsBroker;
 use crate::error::SqsError;
+#[cfg(feature = "asyncapi")]
+use crate::publisher::is_fifo;
 use crate::subscriber::SqsSubscriber;
 #[cfg(feature = "testing")]
 use crate::testing::{ConnectedSqsTestBroker, SqsTestSubscriber};
@@ -142,6 +148,30 @@ impl SqsQueue {
         }
     }
 
+    /// What this subscription adds to its channel in the generated `AsyncAPI` document.
+    ///
+    /// Everything here is read off the descriptor, because the document is built before anything
+    /// connects: the queue's name, whether it is FIFO (the `.fifo` suffix says so) and the
+    /// polling settings the descriptor names. A queue's ARN, its retention period and the
+    /// timeout it carries when the descriptor names none are the service's to tell, and stay
+    /// out.
+    #[cfg(feature = "asyncapi")]
+    fn channel_binding(&self) -> Bindings {
+        let body = SqsChannel {
+            queue: QueueObject {
+                name: &self.queue,
+                fifo_queue: is_fifo(&self.queue),
+                visibility_timeout: self.visibility.map(|visibility| visibility.as_secs()),
+                receive_message_wait_time: self.wait.as_secs(),
+            },
+        };
+        // A binding that fails to build is a binding the document goes without: a broker never
+        // holds up a service over a description of itself.
+        Binding::new("sqs", SQS_BINDING_VERSION, &body)
+            .map(|binding| Bindings::new().with(binding))
+            .unwrap_or_default()
+    }
+
     /// Rejects descriptors that cannot form a subscription, before any I/O.
     pub(crate) fn validate(&self) -> Result<(), SqsError> {
         if self.queue.is_empty() {
@@ -165,6 +195,39 @@ impl SqsQueue {
         self.redrive()?;
         Ok(())
     }
+}
+
+/// The binding version this crate writes for the `sqs` protocol.
+#[cfg(feature = "asyncapi")]
+const SQS_BINDING_VERSION: &str = "0.3.0";
+
+/// The `sqs` channel binding: what a reader of the document learns about the queue behind this
+/// channel.
+///
+/// The specification's `deadLetterQueue` and the queue's `redrivePolicy` are absent, and not for
+/// want of the values: the framework reads a descriptor's bindings where the handler is included,
+/// which is before the registration declares its cap and its destination. It reports the
+/// declaration itself on the operation instead, and the dead-letter queue as a channel the
+/// registration sends to.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+struct SqsChannel<'a> {
+    queue: QueueObject<'a>,
+}
+
+/// The specification's Queue object. Only the fields a descriptor can answer without a
+/// connection are here; a queue's ARN, its retention period and its access policy are not among
+/// them, and the last of those is infrastructure rather than a description of a service.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+struct QueueObject<'a> {
+    name: &'a str,
+    #[serde(rename = "fifoQueue")]
+    fifo_queue: bool,
+    #[serde(rename = "visibilityTimeout", skip_serializing_if = "Option::is_none")]
+    visibility_timeout: Option<u64>,
+    #[serde(rename = "receiveMessageWaitTime")]
+    receive_message_wait_time: u64,
 }
 
 /// A queue is named and nothing more, so a definition may fix the kind and leave the name to the
@@ -200,6 +263,11 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
             .dead_letter()
             .map(|destination| Cow::Owned(destination.to_owned()));
         self
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        self.channel_binding()
     }
 }
 
@@ -243,6 +311,13 @@ impl SubscriptionSource<ConnectedSqsTestBroker> for SqsQueue {
             .dead_letter()
             .map(|destination| Cow::Owned(destination.to_owned()));
         self
+    }
+
+    // The same values the real broker reports, so a document generated in a test is the document
+    // the service publishes.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        self.channel_binding()
     }
 }
 
