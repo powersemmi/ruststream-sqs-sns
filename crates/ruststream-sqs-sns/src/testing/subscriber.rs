@@ -301,6 +301,14 @@ impl IncomingMessage for SqsTestMessage {
         ready(Ok(()))
     }
 
+    /// The stand-in's `ApproximateReceiveCount`, counted the way the queue counts it, so a cap
+    /// driven under the harness ends where it would end in production.
+    fn redelivery_count(&self) -> Option<u64> {
+        self.delivery
+            .as_ref()
+            .map(|delivery| u64::from(delivery.receives))
+    }
+
     fn nack(mut self, requeue: bool) -> impl Future<Output = Result<(), AckError>> {
         let (delivery, back) = self.taken();
         if requeue {

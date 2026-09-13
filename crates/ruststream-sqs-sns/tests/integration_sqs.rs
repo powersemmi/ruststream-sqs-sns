@@ -565,3 +565,48 @@ async fn half_a_declaration_refuses_the_subscription() {
 
     connected.shutdown().await.expect("shutdown succeeds");
 }
+
+// The cap counts the queue's own receives, so the delivery has to report them. SQS calls it
+// ApproximateReceiveCount and counts the delivery in hand, which is what the first receive
+// answering one means.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delivery_reports_the_queues_receive_count() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = unique("receives");
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(1)),
+        )
+        .await
+        .expect("subscription opens");
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new(&queue, b"counted".as_slice()), None)
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let first = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(first.redelivery_count(), Some(1));
+    first.nack(true).await.expect("requeue succeeds");
+
+    let second = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("redelivery arrives")
+        .expect("stream is open")
+        .expect("redelivery is ok");
+    assert_eq!(second.redelivery_count(), Some(2));
+    second.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}

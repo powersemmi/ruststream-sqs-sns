@@ -168,6 +168,13 @@ impl IncomingMessage for SqsMessage {
         self.delete().await
     }
 
+    /// SQS counts every receive of a message and reports it with the delivery, so a cap counts
+    /// the queue's own redeliveries rather than only what this process sent back. The receive in
+    /// hand is counted, which is what the first delivery answering one means.
+    fn redelivery_count(&self) -> Option<u64> {
+        self.receives.map(u64::from)
+    }
+
     async fn nack(self, requeue: bool) -> Result<(), AckError> {
         self.extender.abort();
         if requeue || self.spent() {
@@ -449,6 +456,18 @@ mod tests {
     #[tokio::test]
     async fn deliveries_advertise_native_delayed_redelivery() {
         assert!(delivered(None, None).supports_nack_after());
+    }
+
+    #[tokio::test]
+    async fn a_delivery_reports_the_queues_receive_count() {
+        assert_eq!(delivered(Some(1), None).redelivery_count(), Some(1));
+        assert_eq!(delivered(Some(4), None).redelivery_count(), Some(4));
+    }
+
+    /// A queue that reports no count leaves the framework's own header to do the counting.
+    #[tokio::test]
+    async fn a_delivery_without_the_attribute_reports_no_count() {
+        assert_eq!(delivered(None, None).redelivery_count(), None);
     }
 
     /// The one delivery a discard must not delete: the queue is a single receive away from
