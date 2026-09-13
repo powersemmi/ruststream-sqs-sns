@@ -163,10 +163,10 @@ capped at the protocol's 12 hours. The message waits in place and redelivers on 
 with its receive count intact, since nothing is republished and no copy is made.
 
 The framework's own fallback, which republishes a delayed copy, therefore never runs here. It is
-still wired: a queue answers where a deferred copy would go with its own name, so a scope built
-with `BrokerScope::retry_via` starts on this broker instead of refusing to. A queue fed by an SNS
-topic answers the same way - the copy reaches the queue directly and skips the fan-out, which is
-what a redelivery of that one subscription means.
+still wired: a queue answers where a deferred copy would go with its own name, so a registration
+bound with `.out_retry(Publish::default())` starts on this broker instead of refusing to. A queue
+fed by an SNS topic answers the same way - the copy reaches the queue directly and skips the
+fan-out, which is what a redelivery of that one subscription means.
 
 SQS has no discard short of deletion, so poison-message routing belongs to the queue's redrive
 policy: after `maxReceiveCount` deliveries SQS moves the message to the dead-letter queue itself.
@@ -224,11 +224,10 @@ broker at startup. Naming a policy picks the destination kind:
 The reply type declares where the reply goes: `#[outgoing(name = "..")]` on it is the destination.
 A reply type that declares none takes the destination from the handler's `publish("..")` clause.
 
-The mount site names who takes it there. `.out(Reply, policy)` binds it: `Reply` is the marker for
-the value a replying handler returns, and the steps after the call (`.codec(..)`, `.transform(..)`)
-apply to the position it named. A mount that names no policy keeps `SqsPublish`, so a
-queue-to-queue service writes `b.include(handler)` and nothing more. Sending the same reply to a
-topic instead is one step on the chain:
+The mount site names who takes it there. `.out_reply(policy)` binds it, and the steps after the
+call (`.codec(..)`, `.transform(..)`) apply to that position. A mount that names no policy keeps
+`SqsPublish`, so a queue-to-queue service writes `b.include(handler);` and nothing more. Sending
+the same reply to a topic instead is one step on the chain:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:reply"
@@ -276,7 +275,7 @@ async fn ship(
 
 What the call leaves alone is what the mount site fixed:
 `.out(Shipments, Publish::default().group_id("orders"))`. A reply adjusts nothing, because it has
-no call site - the policy bound to the `Reply` position is its whole answer.
+no call site - the policy `.out_reply(..)` bound is its whole answer.
 
 On the way out the group becomes the native `MessageGroupId` rather than a message attribute, and
 the delivery carries it back in the `partition-key` header.
@@ -298,7 +297,7 @@ Topology administration runs on the broker's own lifecycle ladder rather than th
 application builder; in production the topic and its subscriptions are provisioned as
 infrastructure. The example wires them from an `after_startup` hook, where the queues already
 exist because the subscriptions opened them, then places one order on a queue and lets the
-handler's reply fan out. `.out(Reply, SnsPublish::default())` is the whole of the fan-out wiring:
+handler's reply fan out. `.out_reply(SnsPublish::default())` is the whole of the fan-out wiring:
 
 ```rust
 --8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:app"
@@ -383,7 +382,7 @@ descriptor: in process there is no long poll for `wait` to bound, no redelivery 
 `visibility` to arm, and no queue for `create_if_missing` to create.
 
 The publish half matches. `SqsPublish` and `SnsPublish` pair against the stand-in, which names
-`SqsPublish` as its default policy, so `.out(Reply, Publish::default())` and the default reply of
+`SqsPublish` as its default policy, so `.out_reply(Publish::default())` and the default reply of
 a `publish(..)` handler mount as written. The per-message settings arrive there too: a step a body
 names reaches the stand-in's publisher as it reaches the real one, the harness records it
 (`tb.out::<Shipments>().assert_called_once().with_options(..)`), and the resolved group is
@@ -392,9 +391,12 @@ one `SqsTestPublisher`,
 because the router has no topic to fan out from: a test proves the reply took the destination the
 policy names, not that SNS delivered it onward to the queues subscribed to that topic.
 
-It routes by exact queue name. What belongs to SQS itself (visibility timing, redelivery,
-dead-lettering through the redrive policy, FIFO ordering and SNS fan-out) is answered by the live
-suite against LocalStack.
+It routes by exact queue name, and it answers a settlement in full, the delay included:
+`retry_after` holds the delivery back and hands it to the same subscription once the delay has
+passed, so a test drives it with `tb.advance(..)` and the framework's deferred copy stays off this
+broker's path in process as it does in production. What belongs to the queue itself (a visibility
+timeout that lapses on its own, dead-lettering through the redrive policy, FIFO ordering and SNS
+fan-out) is answered by the live suite against LocalStack.
 
 Batches are the one place the two transports differ inside: in process the framework's client-side
 buffer assembles them, while the real subscriber takes them from `ReceiveMessage`. A mount names a
