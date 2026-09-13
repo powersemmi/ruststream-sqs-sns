@@ -295,7 +295,7 @@ impl Publisher for SqsPublisher {
 ///
 /// It is also the broker's [`DefaultPublish`](ruststream::DefaultPublish) policy, so a replying
 /// handler whose mount binds no reply position of its own replies through it, and
-/// `.out(Reply, SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
+/// `.out_reply(SqsPublish)` only ever restates the default. [`SnsPublish`] is the step that
 /// changes the answer.
 ///
 /// The group is the one FIFO setting a policy fixes, because it belongs to a position: every
@@ -337,7 +337,7 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
     }
 }
 
-/// The same policy against the in-process stand-in, so a routes file's `.out(Reply, Publish)`
+/// The same policy against the in-process stand-in, so a routes file's `.out_reply(Publish)`
 /// mounts on [`SqsTestBroker`](crate::testing::SqsTestBroker) as written. It is the stand-in's
 /// [`DefaultPublish`](ruststream::DefaultPublish) policy too, so a `publish("dest")` handler
 /// that binds nothing replies through it there as well.
@@ -497,7 +497,7 @@ impl Publisher for SnsPublisher {
 /// // Without the step the reply would ride `SqsPublish` and land on a queue named
 /// // `orders-events`; with it the same reply fans out from the topic of that name.
 /// fn routes() -> impl RouterDef<SqsBroker> {
-///     Router::new().include(accept).out(Reply, SnsPublish::default()).build()
+///     Router::new().include(accept).out_reply(SnsPublish::default()).build()
 /// }
 /// # let _ = routes;
 /// ```
@@ -529,7 +529,7 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
     }
 }
 
-/// Fan-out against the in-process stand-in, so `.out(Reply, SnsPublish::default())` mounts
+/// Fan-out against the in-process stand-in, so `.out_reply(SnsPublish::default())` mounts
 /// there as written.
 ///
 /// Both policies pair into the one [`SqsTestPublisher`], because the router has no topic to

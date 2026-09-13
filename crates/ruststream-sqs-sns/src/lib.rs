@@ -17,7 +17,7 @@
 //!   names its own with the [`SqsPublishSteps`] steps, and the portable `partition-key` header
 //!   still names one for a service that publishes to several brokers.
 //! - SNS appears only as a publisher (fan-out to queues and other endpoints), as a distinct
-//!   [`SnsPublish`] policy a mount site binds with `.out(Reply, SnsPublish::default())`.
+//!   [`SnsPublish`] policy a mount site binds with `.out_reply(SnsPublish::default())`.
 //! - Bodies are text, and what the service will not take as text (binary, and equally the
 //!   valid-UTF-8 control characters a binary codec emits) travels base64-encoded and decodes
 //!   transparently on receive.

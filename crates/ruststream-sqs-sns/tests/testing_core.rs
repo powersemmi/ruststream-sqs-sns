@@ -227,7 +227,7 @@ async fn the_production_publish_policy_mounts_on_the_test_broker() {
         RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
             // The line a routes file writes, unchanged: the broker under it is the only
             // difference between this and production.
-            b.include(accept).out(Reply, Publish::default());
+            b.include(accept).out_reply(Publish::default());
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -248,7 +248,7 @@ async fn the_production_publish_policy_mounts_on_the_test_broker() {
 async fn the_fan_out_policy_mounts_the_same_way() {
     let app =
         RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(accept).out(Reply, SnsPublish::default());
+            b.include(accept).out_reply(SnsPublish::default());
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 

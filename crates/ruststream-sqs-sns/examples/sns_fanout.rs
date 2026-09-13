@@ -28,7 +28,7 @@ struct OrderPlaced {
 }
 
 /// The reply type names where the reply goes; the mount site names who takes it there. Without an
-/// `.out(Reply, ..)` the reply would ride the broker's default policy and land on a queue of that
+/// `.out_reply(..)` the reply would ride the broker's default policy and land on a queue of that
 /// name, so fan-out is one step on the mount chain rather than a different handler.
 #[subscriber(SqsQueue::new("orders").create_if_missing(), publish)]
 async fn accept(order: &PlaceOrder) -> OrderPlaced {
@@ -82,9 +82,8 @@ fn app() -> impl App {
         // the first order is placed.
         .after_startup(async move |_state| wire_topology().await)
         .with_broker(broker(), |b| {
-            // One verb binds the reply position: the marker names which publish the policy is
-            // for, and `SnsPublish` names the fan-out.
-            b.include(accept).out(Reply, SnsPublish::default());
+            // One step binds the reply position, and `SnsPublish` on it names the fan-out.
+            b.include(accept).out_reply(SnsPublish::default());
             b.include(bill);
             b.include(ship);
             b.after_startup(Publish::default(), async move |sqs| -> io::Result<()> {

@@ -141,7 +141,7 @@ impl Subscribe for ConnectedSqsTestBroker {
     }
 
     fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        // The same answer the real broker gives, so a `retry_via` wiring that starts here
+        // The same answer the real broker gives, so an `out_retry` wiring that starts here
         // starts against SQS too: the router publishes by exact address and a subscription is
         // opened under that address.
         Some(RedeliveryAddress::new(name.to_owned()))
