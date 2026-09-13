@@ -64,6 +64,17 @@ async fn ship(order: &Order) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
+/// How long a deferred delivery is asked to wait, and the window the test advances past.
+const RETRY_DELAY: Duration = Duration::from_secs(45);
+
+/// A handler that is never ready: every delivery asks to come back later, so the wait itself is
+/// what the test observes.
+#[subscriber(SqsQueue::new("invoices"))]
+async fn defer(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::retry_after(RETRY_DELAY)
+}
+
 /// The other spelling: the definition fixes the kind and the mount site names the queue, which
 /// is what lets one handler run against two queues.
 #[subscriber(SqsQueue)]
@@ -392,6 +403,43 @@ async fn an_unstepped_slot_publish_carries_the_policy_defaults() {
         .published::<Order>("shipments.fifo")
         .assert_called_once()
         .with_header(PARTITION_KEY_HEADER, "user-42");
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// `retry_after` is a queue operation on SQS, and it has to stay one in process: the delivery
+/// comes back on its own once the delay has passed, and nothing is republished to get it there.
+///
+/// The registration binds the deferred-retry position anyway, which is what a service writes when
+/// it wants the fallback on brokers that need it. Here it starts (the queue reports where a
+/// deferred copy would go) and is never reached, so the queue's log still holds the one original.
+#[tokio::test(start_paused = true)]
+async fn a_deferred_retry_waits_out_the_delay_in_process() {
+    let app =
+        RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(defer).out_retry(Publish::default());
+        });
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("invoices", &Order { id: 9 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    tb.broker::<SqsTestBroker>()
+        .subscriber("invoices")
+        .assert_called_once()
+        .with(&Order { id: 9 })
+        .settled(HandlerOutcome::retry_after(RETRY_DELAY));
+
+    tb.advance(RETRY_DELAY).await.expect("the delay elapses");
+
+    tb.broker::<SqsTestBroker>()
+        .subscriber("invoices")
+        .assert_called(2);
+    tb.broker::<SqsTestBroker>()
+        .published::<Order>("invoices")
+        .assert_called_once();
 
     tb.shutdown().await.expect("the app shuts down");
 }

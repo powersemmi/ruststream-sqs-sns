@@ -11,6 +11,7 @@ use ruststream::{
     AckError, BatchSubscriber, BufferedSubscriber, HeaderMap, IncomingMessage, Partitioned,
     Subscriber, testing::Coordinator,
 };
+use tokio::time::sleep;
 
 use crate::PARTITION_KEY_HEADER;
 use crate::error::SqsError;
@@ -132,7 +133,9 @@ impl Subscriber for Deliveries {
 ///
 /// `ack` consumes the handle; `nack(requeue = true)` re-queues the delivery on the owning
 /// subscription's channel so the next handler invocation sees it again; `nack(requeue = false)`
-/// drops it, matching the real subscriber's reject path in effect.
+/// drops it, matching the real subscriber's reject path in effect. `nack_after(delay)` is the
+/// same re-queue held back by the delay, which is what the queue's `ChangeMessageVisibility`
+/// buys a service on SQS.
 pub struct SqsTestMessage {
     delivery: Option<Delivery>,
     requeue: DeliverySender,
@@ -212,6 +215,40 @@ impl IncomingMessage for SqsTestMessage {
                 coordinator.enqueued();
             }
         }
+        ready(Ok(()))
+    }
+
+    /// Delayed redelivery is native here because it is native on SQS: a service that answers
+    /// `retry_after` has its delay honoured under the harness the way the queue honours it, and
+    /// the framework's deferred-republish fallback stays off this broker's path in a test as it
+    /// is in production.
+    fn supports_nack_after(&self) -> bool {
+        true
+    }
+
+    fn nack_after(mut self, delay: Duration) -> impl Future<Output = Result<(), AckError>> {
+        let delivery = self
+            .delivery
+            .take()
+            .expect("SqsTestMessage ack/nack invoked twice");
+        let requeue = self.requeue.clone();
+        // Under the harness the redelivery is registered with the coordinator, the way the queue
+        // registers a visibility timeout, so `TestApp::advance` fires it and the in-flight count
+        // stays balanced against this message's `Drop`.
+        if let Some(coordinator) = self.coordinator.clone() {
+            let counter = coordinator.clone();
+            coordinator.schedule_redelivery(delay, move || {
+                if requeue.send(delivery).is_ok() {
+                    counter.enqueued();
+                }
+            });
+            return ready(Ok(()));
+        }
+        tokio::spawn(async move {
+            sleep(delay).await;
+            // The subscription may be gone by then; a dropped receiver is not an error.
+            let _ = requeue.send(delivery);
+        });
         ready(Ok(()))
     }
 
