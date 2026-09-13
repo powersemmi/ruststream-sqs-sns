@@ -7,8 +7,9 @@
 
 use std::time::Duration;
 
-use ruststream::DescribeServer;
 use ruststream::asyncapi::build_spec;
+use ruststream::{DescribeServer, PublishPolicy};
+use ruststream_sqs_sns::ConnectedSqsBroker;
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -89,35 +90,25 @@ fn the_document_names_the_sqs_service() {
 
     assert_eq!(value["servers"]["aws"]["protocol"], "sqs");
     assert_eq!(value["servers"]["aws"]["host"], "sqs.amazonaws.com");
+    // The protocol name already says everything: SQS has one wire protocol and a client matches
+    // no version of it, so a version field would be an invention.
+    assert!(
+        value["servers"]["aws"].get("protocolVersion").is_none(),
+        "the server named a protocol version SQS does not have: {}",
+        value["servers"]["aws"],
+    );
 }
 
-/// A reply on SQS goes to the queue the declaration names, so the document reports that name
-/// rather than a runtime expression a client would have to read a header for.
+/// A reply on SQS goes to the queue the declaration names, not through a reply-to header, so
+/// neither policy answers a reply address and the document reports the name it was given.
 #[test]
-fn a_reply_channel_carries_its_address() {
-    #[derive(Debug, Deserialize, Serialize, Outgoing)]
-    struct Confirmed {
-        id: u64,
+fn no_policy_of_this_crate_answers_a_reply_address() {
+    fn answered<Policy: PublishPolicy<ConnectedSqsBroker>>(
+        policy: &Policy,
+    ) -> Option<&'static str> {
+        policy.reply_address_location()
     }
 
-    #[subscriber("payments", publish("payments-confirmed"))]
-    async fn confirm(order: &Order) -> Confirmed {
-        Confirmed { id: order.id }
-    }
-
-    let app =
-        RustStream::new(AppInfo::new("payments", "1.0.0")).with_broker(SqsBroker::new(), |b| {
-            b.include(confirm);
-        });
-    let json = build_spec(&app).to_json().expect("the document serializes");
-    let value: Value = serde_json::from_str(&json).expect("the document is JSON");
-
-    assert_eq!(
-        value["channels"]["payments-confirmed"]["address"],
-        "payments-confirmed",
-    );
-    assert!(
-        !json.contains("$message.header"),
-        "SQS routes no reply through a header, so the document names no reply address: {json}",
-    );
+    assert_eq!(answered(&SqsPublish::default()), None);
+    assert_eq!(answered(&SnsPublish::default()), None);
 }
