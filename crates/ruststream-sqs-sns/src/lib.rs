@@ -1,30 +1,4 @@
-//! Amazon SQS broker implementation for `RustStream`, with SNS fan-out publishing.
-//!
-//! Handlers, routers, codecs, and middleware come from the framework; this crate supplies the
-//! transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
-//! [`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients.
-//!
-//! - Deleting a message is the acknowledgement, zeroing its visibility is the requeue, and a
-//!   retry with a delay sets the visibility timeout to that delay - the framework's deferred
-//!   retry is native, not emulated.
-//! - Batches are native too: `ReceiveMessage` already asks for up to ten messages per round
-//!   trip, so the batch size a registration names becomes `MaxNumberOfMessages` and one receive
-//!   call is one batch.
-//! - A handler outliving the visibility timeout is protected by crate-owned background
-//!   extension for as long as it holds the message.
-//! - The queue carries a spent delivery away itself: a registration declares
-//!   `max_attempts(n).dead_letter(name)` at the mount site and the subscription writes it onto
-//!   the queue as its redrive policy, so nothing is republished from the service and
-//!   `.out_retry(..)` does not compile here. FIFO ordering is a per-message setting
-//!   ([`SqsPublishOptions`]): the mount site fixes a position's group on the policy, a call
-//!   names its own with the [`SqsPublishSteps`] steps, and the portable `partition-key` header
-//!   still names one for a service that publishes to several brokers.
-//! - SNS appears only as a publisher (fan-out to queues and other endpoints), as a distinct
-//!   [`SnsPublish`] policy a mount site binds with `.out_reply(SnsPublish::default())`.
-//! - Bodies are text, and what the service will not take as text (binary, and equally the
-//!   valid-UTF-8 control characters a binary codec emits) travels base64-encoded and decodes
-//!   transparently on receive.
-
+#![doc = include_str!("README.md")]
 #![forbid(unsafe_code)]
 
 mod broker;
