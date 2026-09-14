@@ -152,6 +152,10 @@ fn service() -> impl App {
 }
 ```
 
+The queue is named either way. A registration mounted by a bare name, with no descriptor
+between it and the broker, has nowhere of its own to keep the declaration, so the broker takes it
+and writes the same policy onto the queue that name opens.
+
 Both halves are needed, because half a redrive policy is not one: a cap without a destination, or
 a destination without a cap, is [`SqsError::IncompleteRedrive`] at startup and names the half
 that is missing. The dead-letter queue has to exist by then unless the descriptor carries
@@ -394,13 +398,20 @@ before anything connects. For the same reason a queue's ARN never appears, and n
 credential, even when the broker is configured from an endpoint that carries one. One server
 describes the crate, with the protocol `sqs` and no protocol version, and SNS publishes share it.
 
-Three things the document does not say. A publish adds no binding, because both AWS bindings are
-built around the queue or topic name and a publish policy is never handed the destination it
-sends to. Neither policy answers a reply address, so none is reported. And the specification's
-`redrivePolicy` and `deadLetterQueue` fields stay empty, because a descriptor's bindings are read
-where the handler is included and the declaration arrives after that; the framework reports the
-cap on the operation and the dead-letter queue as a channel the registration sends to, which
-covers the same ground.
+A publish position describes its destination too, because the framework hands the policy the name
+the document reports as the channel's address. A reply through [`SqsPublish`] carries an `sqs`
+binding with the queue's `name` and `fifoQueue`; one through [`SnsPublish`] carries an `sns`
+binding with the topic's `name`. A `.fifo` topic reports `ordering.type` as `FIFO` and
+`ordering.contentBasedDeduplication` as `false`, since every FIFO send this crate makes carries a
+deduplication id of its own and an explicit id wins over one the topic would derive; a standard
+topic reports no ordering, which the specification reads as unordered. The polling settings stay
+on the subscription's half of the channel, a publish position having none.
+
+Two things the document does not say. Neither policy answers a reply address, so none is
+reported. And the specification's `redrivePolicy` and `deadLetterQueue` fields stay empty,
+because a descriptor's bindings are read where the handler is included and the declaration
+arrives after that; the framework reports the cap on the operation and the dead-letter queue as a
+channel the registration sends to, which covers the same ground.
 
 # Testing
 
@@ -408,8 +419,9 @@ The `testing` feature ships [`SqsTestBroker`](crate::testing::SqsTestBroker), an
 transport on the same ladder as the real one, teardown included. The declaration a service ships
 mounts on it unchanged: [`SqsQueue`] is a subscription source there too, and [`SqsPublish`] and
 [`SnsPublish`] pair into one publisher, so a routes file is tested as written rather than
-rewritten. Drive it with the framework's harness, documented at
-<https://docs.rs/ruststream/latest/ruststream/testing/index.html>.
+rewritten. Drive it with the framework's harness, whose overview covers the assertions and what
+a test can say:
+<https://docs.rs/ruststream/latest/ruststream/testing/index.html#what-a-test-can-say>.
 
 ```
 # #[cfg(feature = "testing")]
