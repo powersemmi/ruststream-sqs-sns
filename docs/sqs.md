@@ -440,7 +440,7 @@ cleared router. It lives in the crate's `testing` module, which a test file impo
 Build the application on it and the `TestApp` harness drives your real handlers, codecs and
 middleware: publish an input, then assert on what a handler received and on what it published
 downstream. See
-[Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
+[what a test can say](https://docs.rs/ruststream/latest/ruststream/testing/index.html#what-a-test-can-say).
 
 The declaration a service ships mounts there unchanged. `SqsQueue` is a subscription source for
 the stand-in as well, so `#[subscriber(SqsQueue::new("orders").wait(..))]` and the mount-site

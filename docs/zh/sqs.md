@@ -385,7 +385,7 @@ SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --workspace --all-features --
 按名字导入：`use ruststream_sqs_sns::testing::SqsTestBroker;`。
 把应用建在它上面，`TestApp` 测试套件就会驱动你真实的处理器、编解码器和中间件：发布一个输入，
 然后对处理器收到了什么、又向下游发布了什么做断言。参见
-[用 TestApp 对服务做单元测试](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp)。
+[一个测试能断言什么](https://docs.rs/ruststream/latest/ruststream/testing/index.html#what-a-test-can-say)。
 
 服务交付的那份声明，在那里原样挂载。`SqsQueue` 对进程内传输来说同样是订阅来源，因此
 `#[subscriber(SqsQueue::new("orders").wait(..))]` 以及链在它后面的挂载点设置，跑的就是服务真正跑

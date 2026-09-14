@@ -453,7 +453,7 @@ CI прогоняет тот же набор по LocalStack на каждое �
 Соберите приложение на нём, и обвязка `TestApp` прогонит ваши настоящие обработчики, кодеки и
 middleware: опубликуйте вход, а затем проверьте, что получил обработчик и что он опубликовал дальше.
 См.
-[Юнит-тестирование сервиса через TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
+[что может утверждать тест](https://docs.rs/ruststream/latest/ruststream/testing/index.html#what-a-test-can-say).
 
 Объявление, которое поставляет сервис, монтируется там без изменений. `SqsQueue` - источник подписки
 и для внутрипроцессного транспорта, поэтому `#[subscriber(SqsQueue::new("orders").wait(..))]` и
