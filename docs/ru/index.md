@@ -10,7 +10,7 @@
 
 Транспорт построен на официальных клиентах [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) и
 [`aws-sdk-sns`](https://docs.rs/aws-sdk-sns). Фича `testing` поставляет внутрипроцессный тестовый
-брокер.
+брокер, а фича `asyncapi` добавляет привязки `sqs` в документ, который создаёт фреймворк.
 
 Крейт следует за выпущенной линейкой `ruststream` 0.7:
 
@@ -26,9 +26,14 @@ serde = { version = "1", features = ["derive"] }
 
 ## Куда идти дальше {#where-to-go-next}
 
+Собственная документация крейта - это его rustdoc на docs.rs, и открывается он тем руководством,
+которое раньше лежало на этом сайте: что очередь умеет сама, как завершается доставка, куда
+уходит исчерпавшее попытки сообщение и что может нести публикация.
+
 <div class="grid cards" markdown>
 
-- :material-aws: **[Руководство по SQS](sqs.md)** - дескрипторы очередей, завершение доставки, пакеты, FIFO-группы, доставка через SNS всем подписчикам разом и тестирование.
+- :material-download: **[Подписка](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#subscribing)** - дескриптор очереди, завершение доставки, предел попыток, пакеты и то, что несёт доставленное сообщение.
+- :material-upload: **[Публикация](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#publishing)** - две политики публикации, ответы, доставка через SNS всем подписчикам разом и группы сообщений FIFO.
 - :material-book-open-variant: **[Документация RustStream](https://powersemmi.github.io/ruststream/)** - сам фреймворк: подписчики, роутинг, кодеки, middleware, CLI.
 - :material-language-rust: **[Справочник API](https://docs.rs/ruststream-sqs-sns)** - rustdoc крейта на docs.rs.
 
@@ -36,5 +41,8 @@ serde = { version = "1", features = ["derive"] }
 
 ## Как этот сайт связан с документацией RustStream {#how-this-site-relates-to-the-ruststream-docs}
 
-Этот сайт описывает SQS и SNS. Понятия фреймворка, общие для всех брокеров, описаны в
+Этот сайт - входная страница. Что делают SQS и SNS, описано в
+[rustdoc крейта](https://docs.rs/ruststream-sqs-sns), там же тестирование на внутрипроцессном
+брокере и эксплуатационная сторона: издатель, права доступа и пределы службы. Понятия фреймворка,
+общие для всех брокеров, описаны в
 [документации RustStream](https://powersemmi.github.io/ruststream/).

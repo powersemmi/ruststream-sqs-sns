@@ -7,7 +7,7 @@ Amazon SQS Broker，并支持 SNS 扇出发布。订阅者用长轮询读自己�
 
 传输建立在官方的 [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) 和
 [`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) 客户端之上。`testing` feature 提供一个进程内的测试
-Broker。
+Broker，`asyncapi` feature 则把 `sqs` 绑定写进框架生成的文档。
 
 这个 crate 跟随已发布的 `ruststream` 0.7 线：
 
@@ -23,9 +23,13 @@ serde = { version = "1", features = ["derive"] }
 
 ## 接下来看什么 { #where-to-go-next }
 
+crate 自己的文档就是它在 docs.rs 上的 rustdoc，开头正是本站从前那份指南：队列自己能做什么、一次
+投递如何结算、用尽次数的消息去哪里，以及一次发布可以带上什么。
+
 <div class="grid cards" markdown>
 
-- :material-aws: **[SQS 指南](sqs.md)** - 队列描述符、结算、批次、FIFO 组、SNS 扇出和测试。
+- :material-download: **[订阅](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#subscribing)** - 队列描述符、结算、尝试次数上限、批次，以及一条投递带着什么。
+- :material-upload: **[发布](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#publishing)** - 两种发布策略、回复、SNS 扇出和 FIFO 消息组。
 - :material-book-open-variant: **[RustStream 文档](https://powersemmi.github.io/ruststream/)** - 框架本身：订阅者、路由、编解码器、中间件和 CLI。
 - :material-language-rust: **[API 参考](https://docs.rs/ruststream-sqs-sns)** - crate 在 docs.rs 上的 rustdoc。
 
@@ -33,5 +37,7 @@ serde = { version = "1", features = ["derive"] }
 
 ## 本站与 RustStream 文档的关系 { #how-this-site-relates-to-the-ruststream-docs }
 
-本站讲 SQS 和 SNS。适用于每个 Broker 的框架概念，写在
+本站是入口页。SQS 和 SNS 做什么，写在 crate 的
+[rustdoc](https://docs.rs/ruststream-sqs-sns) 里，进程内 Broker 上的测试和运维一面（发布者、
+权限、服务的各项上限）也在那里。适用于每个 Broker 的框架概念，写在
 [RustStream 文档](https://powersemmi.github.io/ruststream/)里。
