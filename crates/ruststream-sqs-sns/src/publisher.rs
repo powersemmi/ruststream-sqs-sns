@@ -5,14 +5,20 @@ use std::future::{Future, ready};
 
 use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
+#[cfg(feature = "asyncapi")]
+use serde::Serialize;
 
 use crate::broker::{ConnectedSqsBroker, Core, CoreCell};
 use crate::error::{SqsError, sdk_err};
 use crate::message::{
     ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body, is_service_text,
 };
+#[cfg(feature = "asyncapi")]
+use crate::queue::SQS_BINDING_VERSION;
 #[cfg(feature = "testing")]
 use crate::testing::{ConnectedSqsTestBroker, SqsTestPublisher};
 
@@ -290,6 +296,94 @@ impl Publisher for SqsPublisher {
     }
 }
 
+/// The binding version this crate writes for the `sns` protocol.
+#[cfg(feature = "asyncapi")]
+const SNS_BINDING_VERSION: &str = "1.0.0";
+
+/// The `sqs` channel binding a publish position writes: the queue the messages leave for.
+///
+/// The publish half of the binding [`SqsQueue`](crate::SqsQueue) writes, and narrower on
+/// purpose. A position knows the destination's name and whether it is FIFO; the polling and the
+/// visibility timeout belong to the subscription that reads the queue, and stay on its half.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+struct SqsPublishChannel<'a> {
+    queue: PublishedQueue<'a>,
+}
+
+/// The specification's Queue object with the two fields it requires, and nothing a policy would
+/// have to invent.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+struct PublishedQueue<'a> {
+    name: &'a str,
+    #[serde(rename = "fifoQueue")]
+    fifo_queue: bool,
+}
+
+/// The `sns` channel binding a fan-out position writes: the topic the notifications leave for.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+struct SnsPublishChannel<'a> {
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ordering: Option<TopicOrdering>,
+}
+
+/// The specification's Ordering object, written only for a topic that has an order to report.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+struct TopicOrdering {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(rename = "contentBasedDeduplication")]
+    content_based_deduplication: bool,
+}
+
+/// What a publish to `channel` adds to that channel in the generated `AsyncAPI` document.
+///
+/// A policy declares this broker's settings and never a destination, so the queue's name is the
+/// one the mount site resolved and handed here - a reply's clause, a slot's entry, a
+/// dead-letter declaration. Whether that queue is FIFO is read off the same name, because the
+/// `.fifo` suffix is what makes a queue FIFO on SQS.
+#[cfg(feature = "asyncapi")]
+fn sqs_channel_binding(channel: &str) -> Bindings {
+    let body = SqsPublishChannel {
+        queue: PublishedQueue {
+            name: channel,
+            fifo_queue: is_fifo(channel),
+        },
+    };
+    // A binding that fails to build is a binding the document goes without: a broker never
+    // holds up a service over a description of itself.
+    Binding::new("sqs", SQS_BINDING_VERSION, &body)
+        .map(|binding| Bindings::new().with(binding))
+        .unwrap_or_default()
+}
+
+/// What a fan-out publish to `channel` adds to that channel in the generated `AsyncAPI`
+/// document.
+///
+/// The topic is named the way the queue is: by the destination the mount site resolved. A
+/// `.fifo` suffix is what makes a topic FIFO, so the ordering object appears exactly there; a
+/// standard topic carries none, which is what the specification's default already says. The
+/// deduplication flag reports what a position on this policy does rather than how the topic is
+/// configured: every FIFO send carries a deduplication id of its own, and an explicit id wins
+/// over one the topic would derive from the body.
+#[cfg(feature = "asyncapi")]
+fn sns_channel_binding(channel: &str) -> Bindings {
+    let body = SnsPublishChannel {
+        name: channel,
+        ordering: is_fifo(channel).then_some(TopicOrdering {
+            kind: "FIFO",
+            content_based_deduplication: false,
+        }),
+    };
+    Binding::new("sns", SNS_BINDING_VERSION, &body)
+        .map(|binding| Bindings::new().with(binding))
+        .unwrap_or_default()
+}
+
 /// The publish policy for [`SqsPublisher`]: pure declaration, constructible anywhere, paired
 /// with the connected broker by the runtime after `connect`.
 ///
@@ -335,6 +429,11 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher().with_default_group(self.group_id)))
     }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        sqs_channel_binding(channel)
+    }
 }
 
 /// The same policy against the in-process stand-in, so a routes file's `.out_reply(Publish)`
@@ -350,6 +449,13 @@ impl PublishPolicy<ConnectedSqsTestBroker> for SqsPublish {
         connected: &ConnectedSqsTestBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher().with_default_group(self.group_id)))
+    }
+
+    // The same binding the real broker writes, so a document generated in a test is the
+    // document the service publishes.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        sqs_channel_binding(channel)
     }
 }
 
@@ -527,6 +633,11 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
             .sns_publisher()
             .with_default_group(self.group_id)))
     }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        sns_channel_binding(channel)
+    }
 }
 
 /// Fan-out against the in-process stand-in, so `.out_reply(SnsPublish::default())` mounts
@@ -546,6 +657,13 @@ impl PublishPolicy<ConnectedSqsTestBroker> for SnsPublish {
         connected: &ConnectedSqsTestBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher().with_default_group(self.group_id)))
+    }
+
+    // A topic the router has no fan-out for is still the topic the document reports, so the
+    // binding is the one the real broker writes.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        sns_channel_binding(channel)
     }
 }
 

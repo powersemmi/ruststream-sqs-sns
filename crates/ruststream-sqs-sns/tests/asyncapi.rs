@@ -39,6 +39,41 @@ async fn ship(order: &Order) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
+/// A reply that leaves its destination open, so the clause at each mount site names one.
+#[derive(Debug, Deserialize, Serialize, Outgoing)]
+struct OrderPlaced {
+    id: u64,
+}
+
+/// The reply goes to a queue, so the document describes a queue.
+#[subscriber(SqsQueue::new("accepted"), publish("order-events"))]
+async fn accept(order: &Order) -> OrderPlaced {
+    OrderPlaced { id: order.id }
+}
+
+/// The same reply, fanned out from a FIFO topic.
+#[subscriber(SqsQueue::new("announced"), publish("order-events.fifo"))]
+async fn announce(order: &Order) -> OrderPlaced {
+    OrderPlaced { id: order.id }
+}
+
+/// The same reply again, fanned out from a standard topic.
+#[subscriber(SqsQueue::new("notified"), publish("shipment-events"))]
+async fn notify(order: &Order) -> OrderPlaced {
+    OrderPlaced { id: order.id }
+}
+
+/// The document of a service whose replies leave through all three positions.
+fn publish_document() -> Value {
+    let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(SqsBroker::new(), |b| {
+        b.include(accept).out_reply(Publish::default());
+        b.include(announce).out_reply(SnsPublish::default());
+        b.include(notify).out_reply(SnsPublish::default());
+    });
+    let json = build_spec(&app).to_json().expect("the document serializes");
+    serde_json::from_str(&json).expect("the document is JSON")
+}
+
 /// The document a service on this broker publishes.
 fn document() -> Value {
     let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(SqsBroker::new(), |b| {
@@ -111,4 +146,36 @@ fn no_policy_of_this_crate_answers_a_reply_address() {
 
     assert_eq!(answered(&SqsPublish::default()), None);
     assert_eq!(answered(&SnsPublish::default()), None);
+}
+
+/// A policy declares this broker's settings and never a destination, so the queue a reply
+/// reaches is the name the mount site resolved, and the binding carries it.
+#[test]
+fn a_reply_names_its_queue_in_the_sqs_channel_binding() {
+    let binding = &publish_document()["channels"]["order-events"]["bindings"]["sqs"];
+    assert_eq!(binding["bindingVersion"], "0.3.0");
+    assert_eq!(binding["queue"]["name"], "order-events");
+    assert_eq!(binding["queue"]["fifoQueue"], false);
+}
+
+/// Fan-out reports the same destination as a topic, and the `.fifo` suffix is what puts an
+/// order on it - the same rule the subscription side reads off a queue name.
+#[test]
+fn a_fan_out_reply_names_its_topic_in_the_sns_channel_binding() {
+    let binding = &publish_document()["channels"]["order-events.fifo"]["bindings"]["sns"];
+    assert_eq!(binding["bindingVersion"], "1.0.0");
+    assert_eq!(binding["name"], "order-events.fifo");
+    assert_eq!(binding["ordering"]["type"], "FIFO");
+}
+
+/// A standard topic has no order to report, and the specification reads an absent ordering
+/// object as exactly that, so the document says nothing rather than inventing a setting.
+#[test]
+fn a_standard_topic_reports_no_ordering() {
+    let binding = &publish_document()["channels"]["shipment-events"]["bindings"]["sns"];
+    assert_eq!(binding["name"], "shipment-events");
+    assert!(
+        binding.get("ordering").is_none(),
+        "a standard topic was given an order it does not have: {binding}",
+    );
 }

@@ -309,8 +309,12 @@ ruststream-sqs-sns = { version = "0.7", features = ["asyncapi"] }
 
 注册声明的上限和死信目的地，由框架自己报出：报在接收操作上，以及作为注册向其发送的一个频道。
 
-发布不添加绑定。AWS 的两种绑定都围绕队列名或主题名展开，而发布策略拿不到自己要发往的目的地，
-因此那里没有可说的。
+发布位置同样描述自己的目的地。框架把文档作为频道 address 报出的那个名字交给策略，因此经
+`SqsPublish` 发出的回复带上 `sqs` 绑定，里面是队列的 `name` 和 `fifoQueue`；经 `SnsPublish` 发出
+的回复带上 `sns` 绑定，里面是主题的 `name`。带 `.fifo` 后缀的主题把 `ordering.type` 报为 `FIFO`，
+把 `ordering.contentBasedDeduplication` 报为 `false`：本 crate 的每一次 FIFO 发送都带着自己的重复
+数据删除 ID，而显式给出的 ID 比主题自己推导出来的更优先。标准主题根本不报出顺序，规范把这读作
+无序。轮询设置留在频道属于订阅的那一半上：发布位置没有这些设置。
 
 本 crate 描述一个服务器，协议是 `sqs`：一个 Broker 描述一个服务器，而发往 SNS 的发布走的是同一个
 账号、同一个区域，用的也是它。

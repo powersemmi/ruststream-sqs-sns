@@ -19,8 +19,8 @@ default = []
 # The in-process test broker (TestableBroker + TestApp support). The conformance harness is a
 # broker-author tool and stays in this repo's dev-dependencies, not in the user-facing feature.
 testing = ["ruststream/testing"]
-# What this broker contributes to the AsyncAPI document the framework generates: the `sqs`
-# protocol bindings of a queue descriptor.
+# What this broker contributes to the AsyncAPI document the framework generates: the `sqs` and
+# `sns` protocol bindings of the channels a subscription reads and a publish position writes.
 asyncapi = ["ruststream/asyncapi", "dep:serde"]
 
 [dependencies]

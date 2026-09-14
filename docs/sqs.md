@@ -352,9 +352,14 @@ that carries one.
 A registration's cap and its dead-letter destination are reported by the framework itself, on the
 receive operation and as a channel the registration sends to.
 
-A publish adds no binding. Both AWS bindings are built around the queue or the topic name, and a
-publish policy is never handed the destination it publishes to, so there is nothing to say that
-would be true.
+A publish position describes its destination too. The framework hands the policy the name the
+document reports as the channel's address, so a reply through `SqsPublish` carries an `sqs`
+binding with the queue's `name` and `fifoQueue`, and a reply through `SnsPublish` an `sns` binding
+with the topic's `name`. A `.fifo` topic reports `ordering.type` as `FIFO` and
+`ordering.contentBasedDeduplication` as `false`, because every FIFO send this crate makes carries
+a deduplication id of its own and an explicit id wins over one the topic would derive. A standard
+topic reports no ordering at all, which the specification reads as unordered. The polling settings
+stay on the subscription's half of the channel: a publish position has none.
 
 One server describes the crate, with the protocol `sqs`: a broker describes one, and SNS publishes
 go to the same account and region and share it.

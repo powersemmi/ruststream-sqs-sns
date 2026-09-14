@@ -197,9 +197,9 @@ impl SqsQueue {
     }
 }
 
-/// The binding version this crate writes for the `sqs` protocol.
+/// The binding version this crate writes for the `sqs` protocol, on both sides of a channel.
 #[cfg(feature = "asyncapi")]
-const SQS_BINDING_VERSION: &str = "0.3.0";
+pub(crate) const SQS_BINDING_VERSION: &str = "0.3.0";
 
 /// The `sqs` channel binding: what a reader of the document learns about the queue behind this
 /// channel.
