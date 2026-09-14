@@ -13,7 +13,7 @@ use futures::StreamExt;
 use ruststream::runtime::PublishExt;
 use ruststream::{
     Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, Publisher,
-    RetryDeclaration, Serialized, Subscriber, SubscriptionSource,
+    RetryDeclaration, Serialized, Subscribe, Subscriber, SubscriptionSource,
 };
 use ruststream_sqs_sns::{
     ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsPublishSteps, SqsQueue,
@@ -535,6 +535,76 @@ async fn the_declaration_reaches_the_queue_as_its_redrive_policy() {
     );
 
     drop(subscriber);
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+// A registration mounted by a bare queue name carries no descriptor, so the broker takes the
+// declaration. What proves it arrived is the same thing that proves it for a descriptor: the
+// queue's own redrive policy, read back from the service.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bare_name_declaration_reaches_the_queue_as_its_redrive_policy() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    // A bare name opens the queue as it stands, so both queues are stood up first.
+    let queue = unique("named-redrive");
+    let dead_letter = unique("named-redrive-dead");
+    for name in [&queue, &dead_letter] {
+        drop(
+            connected
+                .subscribe_queue(
+                    SqsQueue::new(name)
+                        .create_if_missing()
+                        .wait(Duration::from_secs(1)),
+                )
+                .await
+                .expect("the queue is created"),
+        );
+    }
+
+    let declaration = RetryDeclaration::new()
+        .with_max_attempts(NonZeroU32::new(DECLARED_ATTEMPTS).expect("a cap"))
+        .with_dead_letter(dead_letter.clone());
+    Subscribe::declare_retry(&connected, &queue, &declaration)
+        .expect("the broker takes the declaration a bare name carries");
+    let subscriber = Subscribe::subscribe(&connected, &queue)
+        .await
+        .expect("subscription opens");
+
+    let policy = queue_attribute(&endpoint, &queue, QueueAttributeName::RedrivePolicy).await;
+    assert!(
+        policy.contains(&format!("\"maxReceiveCount\":\"{DECLARED_ATTEMPTS}\"")),
+        "the cap did not reach the queue, got {policy}",
+    );
+    assert!(
+        policy.contains(&dead_letter),
+        "the dead-letter queue did not reach the queue, got {policy}",
+    );
+
+    drop(subscriber);
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+// Half a declaration over a bare name is half a redrive policy, and the broker refuses it before
+// anything subscribes rather than opening a subscription under a cap the queue never received.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn half_a_bare_name_declaration_is_refused_by_the_broker() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let declaration = RetryDeclaration::new().with_dead_letter(unique("named-half-dead"));
+    let refused = Subscribe::declare_retry(&connected, &unique("named-half"), &declaration)
+        .expect_err("a destination alone is not a redrive policy");
+    let reason = refused.to_string();
+    assert!(
+        reason.contains("max_attempts(..)"),
+        "the refusal names the missing half, got {reason}",
+    );
+
     connected.shutdown().await.expect("shutdown succeeds");
 }
 

@@ -123,6 +123,31 @@ impl SqsQueue {
         self.create_if_missing
     }
 
+    /// Records what a registration declared, in the descriptor's own fields.
+    ///
+    /// Every mount path goes through this one mapping: the descriptor's own `declare_retry`, and
+    /// the bare-name path, where the broker maps the same declaration onto the queue the name
+    /// opens. A single mapping is what keeps the two spellings from drifting apart.
+    pub(crate) fn with_declaration(mut self, declaration: &RetryDeclaration) -> Self {
+        self.max_attempts = declaration.max_attempts();
+        self.dead_letter = declaration
+            .dead_letter()
+            .map(|destination| Cow::Owned(destination.to_owned()));
+        self
+    }
+
+    /// Puts a redrive policy the broker already holds back onto a descriptor.
+    ///
+    /// The bare-name path needs it: the declaration reaches the broker before there is a
+    /// descriptor to take it, and `subscribe` builds one from the name alone.
+    pub(crate) fn with_redrive(mut self, redrive: Option<Redrive>) -> Self {
+        if let Some(redrive) = redrive {
+            self.max_attempts = Some(redrive.max_receive_count);
+            self.dead_letter = Some(Cow::Owned(redrive.dead_letter));
+        }
+        self
+    }
+
     /// The redrive policy the registration declared, or nothing where it declared nothing.
     ///
     /// # Errors
@@ -255,14 +280,10 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
         connected.subscribe_queue(self).await
     }
 
-    fn declare_retry(mut self, declaration: &RetryDeclaration) -> Self {
+    fn declare_retry(self, declaration: &RetryDeclaration) -> Self {
         // Recorded only: the redrive policy is written on the queue, and there is no connection
         // here to write it through. `subscribe` applies it.
-        self.max_attempts = declaration.max_attempts();
-        self.dead_letter = declaration
-            .dead_letter()
-            .map(|destination| Cow::Owned(destination.to_owned()));
-        self
+        self.with_declaration(declaration)
     }
 
     #[cfg(feature = "asyncapi")]
@@ -305,12 +326,8 @@ impl SubscriptionSource<ConnectedSqsTestBroker> for SqsQueue {
         )
     }
 
-    fn declare_retry(mut self, declaration: &RetryDeclaration) -> Self {
-        self.max_attempts = declaration.max_attempts();
-        self.dead_letter = declaration
-            .dead_letter()
-            .map(|destination| Cow::Owned(destination.to_owned()));
-        self
+    fn declare_retry(self, declaration: &RetryDeclaration) -> Self {
+        self.with_declaration(declaration)
     }
 
     // The same values the real broker reports, so a document generated in a test is the document

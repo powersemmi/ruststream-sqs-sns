@@ -7,14 +7,15 @@
 
 use std::collections::HashMap;
 use std::future::{Future, ready};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_sqs::types::QueueAttributeName;
 use ruststream::{
-    Broker, BrokerMoves, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe,
+    Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, DescribeServer,
+    RetryDeclaration, ServerSpec, Subscribe,
 };
 use tokio::sync::{Mutex, OnceCell};
 
@@ -38,6 +39,11 @@ pub(crate) struct Core {
     pub(crate) queue_urls: Mutex<HashMap<String, String>>,
     /// Topic-name -> ARN cache for the SNS publisher.
     pub(crate) topic_arns: Mutex<HashMap<String, String>>,
+    /// What registrations mounted by a bare queue name declared, by queue name.
+    ///
+    /// A bare name carries no descriptor to hold the declaration, and the call that takes it
+    /// has no queue URL yet, so the policy waits here for the `subscribe` that writes it.
+    declared_redrives: StdMutex<HashMap<String, Redrive>>,
 }
 
 impl Core {
@@ -46,6 +52,30 @@ impl Core {
             return Err(SqsError::NotConnected);
         }
         Ok(())
+    }
+
+    /// Holds what a bare-name registration declared for `queue` until `subscribe` writes it.
+    ///
+    /// A registration that declared nothing clears the entry rather than leaving one behind, so
+    /// a queue two registrations open does not inherit the first one's policy.
+    fn record_redrive(&self, queue: &str, redrive: Option<Redrive>) {
+        let mut declared = self
+            .declared_redrives
+            .lock()
+            .expect("sqs declaration mutex poisoned");
+        match redrive {
+            Some(redrive) => drop(declared.insert(queue.to_owned(), redrive)),
+            None => drop(declared.remove(queue)),
+        }
+    }
+
+    /// The redrive policy a bare-name registration declared for `queue`.
+    fn declared_redrive(&self, queue: &str) -> Option<Redrive> {
+        self.declared_redrives
+            .lock()
+            .expect("sqs declaration mutex poisoned")
+            .get(queue)
+            .cloned()
     }
 
     /// Resolves a queue name to its URL through the shared cache; URLs pass through. When a
@@ -365,6 +395,7 @@ impl Broker for SqsBroker {
                     closed: AtomicBool::new(false),
                     queue_urls: Mutex::new(HashMap::new()),
                     topic_arns: Mutex::new(HashMap::new()),
+                    declared_redrives: StdMutex::new(HashMap::new()),
                 }))
             })
             .await?
@@ -557,7 +588,31 @@ impl Subscribe for ConnectedSqsBroker {
     type Copies = BrokerMoves;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        self.subscribe_queue(SqsQueue::new(name)).await
+        self.subscribe_queue(SqsQueue::new(name).with_redrive(self.core.declared_redrive(name)))
+            .await
+    }
+
+    /// Takes the declaration a registration made over a bare queue name, which on SQS is the
+    /// queue's redrive policy: after `max_attempts` receives the queue moves the delivery to the
+    /// dead-letter queue by itself. The mapping is the descriptor's own, so both spellings reach
+    /// the same policy, and the write happens in `subscribe`, the call that has the queue's URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeclareRetryError::Broker`] carrying [`SqsError::IncompleteRedrive`] when only
+    /// one half was declared: a redrive policy needs the cap and the destination together, and
+    /// a service running under a cap the queue never received would lose the messages it counts.
+    fn declare_retry(
+        &self,
+        name: &str,
+        declaration: &RetryDeclaration,
+    ) -> Result<(), DeclareRetryError> {
+        let declared = SqsQueue::new(name)
+            .with_declaration(declaration)
+            .redrive()
+            .map_err(|incomplete| DeclareRetryError::Broker(Box::new(incomplete)))?;
+        self.core.record_redrive(name, declared);
+        Ok(())
     }
 }
 

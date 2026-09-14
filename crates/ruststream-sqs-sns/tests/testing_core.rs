@@ -76,6 +76,14 @@ async fn defer(order: &Order) -> HandlerOutcome {
     HandlerOutcome::retry_after(RETRY_DELAY)
 }
 
+/// The third spelling: a bare queue name, with no descriptor between the registration and the
+/// broker. It asks for a retry every time, so the cap is what ends the delivery.
+#[subscriber("orders")]
+async fn reprice(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::retry()
+}
+
 /// The other spelling: the definition fixes the kind and the mount site names the queue, which
 /// is what lets one handler run against two queues.
 #[subscriber(SqsQueue)]
@@ -571,6 +579,54 @@ async fn a_handler_reads_the_queues_receive_count() {
     );
 
     tb.shutdown().await.expect("the app shuts down");
+}
+
+/// A bare name carries no descriptor, so the broker takes the declaration and writes it onto
+/// the queue that name opens. The delivery then ends where the descriptor spelling ends it: in
+/// the dead-letter queue, on the receive that runs the policy out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bare_name_declaration_reaches_the_queues_redrive_policy() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(reprice)
+                .max_attempts(nonzero!(5u32))
+                .dead_letter("orders-dead");
+        });
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsTestBroker>()
+        .publish("orders", &Order { id: 5 })
+        .await
+        .expect("the publish drives the handler to a standstill");
+
+    tb.broker::<SqsTestBroker>()
+        .subscriber("orders")
+        .assert_called(5);
+    tb.broker::<SqsTestBroker>()
+        .published::<Order>("orders-dead")
+        .assert_called_once()
+        .with(&Order { id: 5 });
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// Half a policy is refused on this path too, and before the subscription opens: a bare name has
+/// nowhere else to carry a cap, so the service would run with one the queue never received.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn half_a_bare_name_declaration_refuses_to_start() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+            b.include(reprice).max_attempts(nonzero!(2u32));
+        });
+
+    let refused = TestApp::start(app)
+        .await
+        .expect_err("a cap the queue never receives is not a cap");
+    let reason = refused.to_string();
+    assert!(
+        reason.contains("dead_letter(..)"),
+        "the refusal names the missing half, got {reason}",
+    );
 }
 
 /// A redrive policy is one setting with two halves, so half a declaration is refused where the

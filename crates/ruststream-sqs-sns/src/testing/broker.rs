@@ -1,14 +1,15 @@
 //! [`SqsTestBroker`]: the in-process transport and its connected form.
 
+use std::collections::HashMap;
 use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
-    Broker, BrokerMoves, ConnectedBroker, DefaultPublish, HeaderMap, OutgoingMessage, Publisher,
-    RawMessage, Subscribe,
+    Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, HeaderMap,
+    OutgoingMessage, Publisher, RawMessage, RetryDeclaration, Subscribe,
 };
 
 use crate::error::SqsError;
@@ -30,6 +31,9 @@ pub(crate) struct TestState {
     /// consuming `shutdown` the ladder makes unrepresentable for the owner, and must report a
     /// dead transport rather than route into a cleared router.
     closed: AtomicBool,
+    /// What registrations mounted by a bare queue name declared, held until `subscribe` opens
+    /// that queue - the same wait the real broker's connection makes.
+    declared_redrives: StdMutex<HashMap<String, Redrive>>,
 }
 
 impl TestState {
@@ -50,6 +54,28 @@ impl TestState {
     pub(crate) fn publish(&self, name: &str, payload: Bytes, headers: HeaderMap) {
         self.router
             .publish(name, payload, headers, self.coordinator());
+    }
+
+    /// Holds what a bare-name registration declared for `queue`, clearing the entry where it
+    /// declared nothing.
+    fn record_redrive(&self, queue: &str, redrive: Option<Redrive>) {
+        let mut declared = self
+            .declared_redrives
+            .lock()
+            .expect("sqs test declaration mutex poisoned");
+        match redrive {
+            Some(redrive) => drop(declared.insert(queue.to_owned(), redrive)),
+            None => drop(declared.remove(queue)),
+        }
+    }
+
+    /// The redrive policy a bare-name registration declared for `queue`.
+    fn declared_redrive(&self, queue: &str) -> Option<Redrive> {
+        self.declared_redrives
+            .lock()
+            .expect("sqs test declaration mutex poisoned")
+            .get(queue)
+            .cloned()
     }
 }
 
@@ -154,7 +180,29 @@ impl Subscribe for ConnectedSqsTestBroker {
     type Copies = BrokerMoves;
 
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
-        ready(self.open(name, None))
+        ready(self.open(name, self.state.declared_redrive(name)))
+    }
+
+    /// The real broker's answer, so a bare-name registration that starts here starts against
+    /// SQS: the declaration becomes the queue's redrive policy, and half a declaration is
+    /// refused with the missing half named.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeclareRetryError::Broker`] carrying
+    /// [`SqsError::IncompleteRedrive`](crate::SqsError::IncompleteRedrive) when only one half
+    /// was declared.
+    fn declare_retry(
+        &self,
+        name: &str,
+        declaration: &RetryDeclaration,
+    ) -> Result<(), DeclareRetryError> {
+        let declared = SqsQueue::new(name)
+            .with_declaration(declaration)
+            .redrive()
+            .map_err(|incomplete| DeclareRetryError::Broker(Box::new(incomplete)))?;
+        self.state.record_redrive(name, declared);
+        Ok(())
     }
 }
 

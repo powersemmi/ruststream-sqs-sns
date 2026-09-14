@@ -181,6 +181,11 @@ On SQS those two steps are one setting: the queue's redrive policy. `max_attempt
 onto the queue when it opens. SQS then counts the receives and moves the message itself, and
 nothing leaves the service.
 
+The queue is named either way. A registration mounted by a bare name -
+`#[subscriber("orders")]`, with no descriptor between it and the broker - has nowhere of its own
+to keep the declaration, so the broker takes it and writes the same redrive policy onto the queue
+that name opens.
+
 Both halves are needed, because half a redrive policy is not one. A registration that declares a
 cap without a destination, or a destination without a cap, refuses to open and names the half it
 is missing. The dead-letter queue must exist by then, unless the descriptor carries
