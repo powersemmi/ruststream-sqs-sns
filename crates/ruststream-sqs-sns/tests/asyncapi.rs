@@ -14,7 +14,7 @@ use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The excerpt `docs/sqs.md` and its translations include.
+/// The excerpt the crate overview reproduces under "The generated document".
 const CHANNEL_BINDING: &str = include_str!("asyncapi_channel.json");
 
 #[derive(Debug, Deserialize, Serialize)]
