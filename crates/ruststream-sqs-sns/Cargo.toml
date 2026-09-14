@@ -11,6 +11,11 @@ readme = "../../README.md"
 keywords = ["aws", "sqs", "sns", "broker", "ruststream"]
 categories = ["asynchronous", "network-programming"]
 
+# The overview links the modules the optional features gate, so the published page has to
+# be built with all of them.
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
