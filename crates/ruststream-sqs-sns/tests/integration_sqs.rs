@@ -7,46 +7,22 @@ use std::num::NonZeroU32;
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
-use aws_config::{BehaviorVersion, Region};
 use aws_sdk_sqs::types::QueueAttributeName;
 use futures::StreamExt;
-use ruststream::runtime::PublishExt;
 use ruststream::{
-    Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, Publisher,
-    RetryDeclaration, Serialized, Subscribe, Subscriber, SubscriptionSource,
+    ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, RetryDeclaration,
+    Subscribe, Subscriber, SubscriptionSource,
 };
-use ruststream_sqs_sns::{
-    ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsBroker, SqsPublishSteps, SqsQueue,
-};
-
-const RECV_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// The body the FIFO tests publish through the builder: bytes the test already holds encoded,
-/// so the type names itself serialized and no codec sits on the path.
-#[derive(Outgoing, Serialized)]
-struct Body(Vec<u8>);
+use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsQueue};
 
 mod live;
+
+use live::{RECV_TIMEOUT, admin, connect, queue_attribute, unique};
 
 /// The stack these tests run against, or `None` to skip. Under `RUSTSTREAM_REQUIRE_LIVE` a
 /// missing endpoint fails instead of skipping.
 fn test_endpoint() -> Option<String> {
     live::endpoint("SQS_TEST_ENDPOINT")
-}
-
-async fn connect(endpoint: &str) -> ConnectedSqsBroker {
-    SqsBroker::new()
-        .endpoint(endpoint)
-        .test_credentials()
-        .region("us-east-1")
-        .connect()
-        .await
-        .expect("broker connects")
-}
-
-/// Per-test unique queue, so runs do not observe each other's leftovers.
-fn unique(name: &str) -> String {
-    format!("it-{name}-{}", std::process::id())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -284,98 +260,6 @@ async fn sns_fans_out_to_a_subscribed_queue() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
-/// The step on the publish builder reaches the queue as the FIFO message group id: SQS reports
-/// it back on the delivery, and this is the only place that can be shown at all - the in-process
-/// stand-in has no message groups.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_group_id_step_sets_the_fifo_message_group() {
-    let Some(endpoint) = test_endpoint() else {
-        return;
-    };
-    let connected = connect(&endpoint).await;
-
-    let queue = format!("{}.fifo", unique("group"));
-    let mut subscriber = connected
-        .subscribe_queue(
-            SqsQueue::new(&queue)
-                .create_if_missing()
-                .wait(Duration::from_secs(5)),
-        )
-        .await
-        .expect("subscription opens");
-
-    connected
-        .publisher()
-        .message(&Body(br#"{"id":1}"#.to_vec()))
-        .to(&queue)
-        .group_id("user-42")
-        .publish()
-        .await
-        .expect("publish succeeds");
-
-    let mut stream = pin!(subscriber.stream());
-    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
-        .await
-        .expect("delivery arrives")
-        .expect("stream is open")
-        .expect("delivery is ok");
-
-    assert_eq!(
-        message.headers().get_str(PARTITION_KEY_HEADER),
-        Some("user-42")
-    );
-    message.ack().await.expect("ack succeeds");
-
-    connected.shutdown().await.expect("shutdown succeeds");
-}
-
-/// The step is this broker's own word for the group, so it wins over the portable
-/// `partition-key` header a service sets for every broker it publishes to.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_group_id_step_wins_over_the_messages_partition_key() {
-    let Some(endpoint) = test_endpoint() else {
-        return;
-    };
-    let connected = connect(&endpoint).await;
-
-    let queue = format!("{}.fifo", unique("groupwin"));
-    let mut subscriber = connected
-        .subscribe_queue(
-            SqsQueue::new(&queue)
-                .create_if_missing()
-                .wait(Duration::from_secs(5)),
-        )
-        .await
-        .expect("subscription opens");
-
-    let mut headers = HeaderMap::new();
-    headers.insert(PARTITION_KEY_HEADER, "user-42");
-    connected
-        .publisher()
-        .message(&Body(br#"{"id":2}"#.to_vec()))
-        .with_headers(headers)
-        .to(&queue)
-        .group_id("user-7")
-        .publish()
-        .await
-        .expect("publish succeeds");
-
-    let mut stream = pin!(subscriber.stream());
-    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
-        .await
-        .expect("delivery arrives")
-        .expect("stream is open")
-        .expect("delivery is ok");
-
-    assert_eq!(
-        message.headers().get_str(PARTITION_KEY_HEADER),
-        Some("user-7")
-    );
-    message.ack().await.expect("ack succeeds");
-
-    connected.shutdown().await.expect("shutdown succeeds");
-}
-
 /// The visibility timeout the operator configures on the queue in this test. Short, so a
 /// handler that outlives it does so within a test's patience; nothing else about the number
 /// matters.
@@ -391,13 +275,7 @@ const HOLD: Duration = Duration::from_secs(6);
 /// The timeout is set in its own call rather than as a create attribute, so a rerun against a
 /// stack that still holds the queue configures it instead of colliding with it.
 async fn queue_with_visibility(endpoint: &str, name: &str, visibility: Duration) -> String {
-    let config = aws_config::defaults(BehaviorVersion::latest())
-        .endpoint_url(endpoint)
-        .region(Region::new("us-east-1"))
-        .test_credentials()
-        .load()
-        .await;
-    let client = aws_sdk_sqs::Client::new(&config);
+    let client = admin(endpoint).await;
     let url = client
         .create_queue()
         .queue_name(name)
@@ -467,37 +345,6 @@ async fn a_held_delivery_rides_the_queues_own_visibility_timeout() {
 
 /// The cap the declaration test puts on its queue.
 const DECLARED_ATTEMPTS: u32 = 2;
-
-/// Reads one attribute of a queue as the service reports it.
-async fn queue_attribute(endpoint: &str, queue: &str, attribute: QueueAttributeName) -> String {
-    let config = aws_config::defaults(BehaviorVersion::latest())
-        .endpoint_url(endpoint)
-        .region(Region::new("us-east-1"))
-        .test_credentials()
-        .load()
-        .await;
-    let client = aws_sdk_sqs::Client::new(&config);
-    let url = client
-        .get_queue_url()
-        .queue_name(queue)
-        .send()
-        .await
-        .expect("the queue is there")
-        .queue_url()
-        .expect("GetQueueUrl returns the URL")
-        .to_owned();
-    client
-        .get_queue_attributes()
-        .queue_url(url)
-        .attribute_names(attribute.clone())
-        .send()
-        .await
-        .expect("the attributes are readable")
-        .attributes()
-        .and_then(|map| map.get(&attribute))
-        .cloned()
-        .unwrap_or_default()
-}
 
 // The declaration a registration makes is topology on SQS, so what proves it arrived is the
 // queue's own redrive policy, read back from the service rather than from the descriptor.
