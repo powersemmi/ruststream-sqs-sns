@@ -13,11 +13,11 @@ use ruststream::{
     ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, RetryDeclaration,
     Subscribe, Subscriber, SubscriptionSource,
 };
-use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsQueue};
+use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsError, SqsQueue};
 
 mod live;
 
-use live::{RECV_TIMEOUT, admin, connect, queue_attribute, unique};
+use live::{QUIET, RECV_TIMEOUT, admin, connect, queue_attribute, unique};
 
 /// The stack these tests run against, or `None` to skip. Under `RUSTSTREAM_REQUIRE_LIVE` a
 /// missing endpoint fails instead of skipping.
@@ -479,6 +479,158 @@ async fn a_delivery_reports_the_queues_receive_count() {
         .expect("redelivery is ok");
     assert_eq!(second.redelivery_count(), Some(2));
     second.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// The timeout an operator leaves on the queue in the test below: long enough that a redelivery
+/// under it would not arrive within a test's patience.
+const SLOW_QUEUE_VISIBILITY: Duration = Duration::from_secs(60);
+
+/// What the descriptor asks for instead.
+const DESCRIBED_VISIBILITY: Duration = Duration::from_secs(2);
+
+// The other half of the visibility decision: a descriptor that names one asks for it on every
+// receive, so an unsettled delivery comes back under the descriptor's value rather than the
+// queue's. The two are told apart by the clock, and only the service can run it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_descriptors_visibility_timeout_is_what_the_receive_asks_for() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let queue = queue_with_visibility(
+        &endpoint,
+        &unique("asked-visibility"),
+        SLOW_QUEUE_VISIBILITY,
+    )
+    .await;
+    let connected = connect(&endpoint).await;
+
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .visibility(DESCRIBED_VISIBILITY)
+                .wait(Duration::from_secs(1)),
+        )
+        .await
+        .expect("subscription opens");
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new(&queue, b"brief".as_slice()), None)
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let first = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    // An unsettled drop stops the extension, so what holds the message now is the timeout the
+    // receive asked for.
+    drop(first);
+
+    let second = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("the delivery comes back under the descriptor's timeout, not the queue's")
+        .expect("stream is open")
+        .expect("redelivery is ok");
+    assert_eq!(second.payload(), b"brief");
+    second.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// The protocol maximum for a long poll, which is also this crate's default.
+const LONG_POLL: Duration = Duration::from_secs(20);
+
+// A long poll at the protocol maximum has to survive on two counts: the receive must not be cut
+// short by the client's own per-attempt timeout (a poll that dies reaches the stream as an
+// error), and it must hand a message over the moment one arrives rather than at the end of the
+// wait. A stack is the only place either can be observed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_poll_outlives_its_wait_and_returns_on_arrival() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = unique("long-poll");
+    let mut subscriber = connected
+        .subscribe_queue(SqsQueue::new(&queue).create_if_missing().wait(LONG_POLL))
+        .await
+        .expect("subscription opens");
+
+    let mut stream = pin!(subscriber.stream());
+    assert!(
+        tokio::time::timeout(LONG_POLL + QUIET, stream.next())
+            .await
+            .is_err(),
+        "an empty queue handed something over: either a message or the receive's own failure",
+    );
+
+    let published = Instant::now();
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new(&queue, b"awaited".as_slice()), None)
+        .await
+        .expect("publish succeeds");
+    let message = tokio::time::timeout(QUIET * 2, stream.next())
+        .await
+        .expect("the poll in flight hands the message over as it arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(message.payload(), b"awaited");
+    assert!(
+        published.elapsed() < LONG_POLL,
+        "the message waited {:?} for the poll to run out instead of ending it",
+        published.elapsed(),
+    );
+    message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+// Creating the queue is opt-in, so a subscription that did not ask for it says the queue is
+// missing instead of conjuring one. The publish side answers the same way, and neither leaves a
+// queue behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_queue_is_reported_rather_than_created() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = unique("absent");
+    let refused = connected
+        .subscribe_queue(SqsQueue::new(&queue))
+        .await
+        .expect_err("a queue nobody created cannot be subscribed to");
+    assert!(
+        matches!(refused, SqsError::Queue { ref name, .. } if name == &queue),
+        "the refusal names the queue, got {refused}",
+    );
+
+    let refused = connected
+        .publisher()
+        .publish(OutgoingMessage::new(&queue, b"nowhere".as_slice()), None)
+        .await
+        .expect_err("a queue nobody created cannot be published to");
+    assert!(
+        matches!(refused, SqsError::Queue { ref name, .. } if name == &queue),
+        "the refusal names the queue, got {refused}",
+    );
+
+    assert!(
+        admin(&endpoint)
+            .await
+            .get_queue_url()
+            .queue_name(&queue)
+            .send()
+            .await
+            .is_err(),
+        "a refused subscription created the queue anyway",
+    );
 
     connected.shutdown().await.expect("shutdown succeeds");
 }

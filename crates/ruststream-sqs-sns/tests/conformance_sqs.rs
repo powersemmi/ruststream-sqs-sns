@@ -17,13 +17,19 @@
 
 #![cfg(feature = "testing")]
 
+use std::num::NonZeroUsize;
+use std::pin::pin;
 use std::time::Duration;
 
+use futures::StreamExt;
 use ruststream::conformance::{capabilities, harness};
+use ruststream::{BatchSubscriber, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher};
 use ruststream_sqs_sns::testing::SqsTestBroker;
 use ruststream_sqs_sns::{SqsBroker, SqsQueue};
 
 mod live;
+
+use live::{RECV_TIMEOUT, connect, unique};
 
 /// The stack these checks run against, or `None` to skip. Under `RUSTSTREAM_REQUIRE_LIVE` a
 /// missing endpoint fails instead of skipping.
@@ -125,4 +131,61 @@ async fn sqs_broker_passes_lifecycle() {
         |connected| connected.publisher(),
     )
     .await;
+}
+
+/// How many messages the clamped run puts on the queue, and the size it asks for.
+const QUEUED: usize = 12;
+
+/// The protocol cap on one receive.
+const RECEIVE_CAP: usize = 10;
+
+// A mount site may name a batch larger than one `ReceiveMessage` can return, and the crate
+// clamps it rather than refusing, so a handler written for a broker with bigger batches still
+// compiles onto SQS. What makes the clamp load-bearing is the service: a receive asking for more
+// than ten is a protocol error, so a size passed through would fail every poll rather than
+// coming back short.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_above_the_protocol_cap_is_clamped_rather_than_refused() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+
+    let queue = unique("clamped");
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(1)),
+        )
+        .await
+        .expect("subscription opens");
+    let publisher = connected.publisher();
+    for index in 0..QUEUED {
+        publisher
+            .publish(
+                OutgoingMessage::new(&queue, index.to_string().as_bytes()),
+                None,
+            )
+            .await
+            .expect("publish succeeds");
+    }
+
+    let asked = NonZeroUsize::new(QUEUED * 2).expect("a batch size is never zero");
+    let mut batches = pin!(subscriber.batches(asked));
+    let batch = tokio::time::timeout(RECV_TIMEOUT, batches.next())
+        .await
+        .expect("a batch arrives")
+        .expect("stream is open")
+        .expect("the receive asked for a size the service accepts");
+    assert!(
+        (1..=RECEIVE_CAP).contains(&batch.len()),
+        "one receive returned {} messages, and the protocol tops out at {RECEIVE_CAP}",
+        batch.len(),
+    );
+    for message in batch {
+        message.ack().await.expect("ack succeeds");
+    }
+
+    connected.shutdown().await.expect("shutdown succeeds");
 }
