@@ -69,17 +69,26 @@ markdown_extensions:
 
 hooks:
   - docs/hooks/snippet_titles.py
+  - docs/hooks/i18n_banner.py
 
 plugins:
   - search
+  # The guide this site used to carry is the crate's rustdoc now, so every link that reached a
+  # page here keeps working and lands on the section that took the topic over. An external
+  # target is a redirect like any other: the plugin writes a stub page that forwards to it.
+  - redirects:
+      redirect_maps:
+        sqs.md: https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html
+        ru/sqs.md: https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html
+        zh/sqs.md: https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html
   # Versioned docs are published with `mike` (see the Docs workflow and the version switcher).
   # Each translation is a tree of its own under `docs/<locale>/`, mirroring the English paths.
   # English stays at the docs root: a file outside a locale folder is the default language.
   #
   # English is normative; a page with no translation yet falls back to the English text inside
   # the localized site rather than disappearing from it, which is what lets translations land
-  # page by page. No page is translated yet, so today every locale renders the English text
-  # under its own nav labels.
+  # page by page. The entry page is translated into both locales, so the fallback currently
+  # covers nothing; it stays for the next page added in English alone.
   - i18n:
       docs_structure: folder
       fallback_to_default: true
@@ -95,7 +104,6 @@ plugins:
           build: true
           nav_translations:
             Home: Главная
-            Guide: Руководство
             RustStream docs: Документация RustStream
             API reference: Справочник API
         - locale: zh
@@ -103,7 +111,6 @@ plugins:
           build: true
           nav_translations:
             Home: 首页
-            Guide: 指南
             RustStream docs: RustStream 文档
             API reference: API 参考
 
@@ -116,7 +123,5 @@ extra:
 
 nav:
   - Home: index.md
-  - Guide:
-      - sqs.md
   - RustStream docs: https://powersemmi.github.io/ruststream/
   - API reference: https://docs.rs/ruststream-sqs-sns

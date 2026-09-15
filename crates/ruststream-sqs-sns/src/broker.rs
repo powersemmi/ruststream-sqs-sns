@@ -7,18 +7,21 @@
 
 use std::collections::HashMap;
 use std::future::{Future, ready};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_sqs::types::QueueAttributeName;
-use ruststream::{Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe};
+use ruststream::{
+    Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, DescribeServer,
+    RetryDeclaration, ServerSpec, Subscribe,
+};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::error::{SqsError, sdk_err};
-use crate::publisher::{SnsPublisher, SqsPublish, SqsPublisher};
-use crate::queue::SqsQueue;
+use crate::publisher::{SnsPublisher, SqsPublish, SqsPublisher, is_fifo};
+use crate::queue::{Redrive, SqsQueue};
 use crate::subscriber::SqsSubscriber;
 
 /// The live client state shared by the connected form and every handle derived from it.
@@ -36,6 +39,11 @@ pub(crate) struct Core {
     pub(crate) queue_urls: Mutex<HashMap<String, String>>,
     /// Topic-name -> ARN cache for the SNS publisher.
     pub(crate) topic_arns: Mutex<HashMap<String, String>>,
+    /// What registrations mounted by a bare queue name declared, by queue name.
+    ///
+    /// A bare name carries no descriptor to hold the declaration, and the call that takes it
+    /// has no queue URL yet, so the policy waits here for the `subscribe` that writes it.
+    declared_redrives: StdMutex<HashMap<String, Redrive>>,
 }
 
 impl Core {
@@ -44,6 +52,30 @@ impl Core {
             return Err(SqsError::NotConnected);
         }
         Ok(())
+    }
+
+    /// Holds what a bare-name registration declared for `queue` until `subscribe` writes it.
+    ///
+    /// A registration that declared nothing clears the entry rather than leaving one behind, so
+    /// a queue two registrations open does not inherit the first one's policy.
+    fn record_redrive(&self, queue: &str, redrive: Option<Redrive>) {
+        let mut declared = self
+            .declared_redrives
+            .lock()
+            .expect("sqs declaration mutex poisoned");
+        match redrive {
+            Some(redrive) => drop(declared.insert(queue.to_owned(), redrive)),
+            None => drop(declared.remove(queue)),
+        }
+    }
+
+    /// The redrive policy a bare-name registration declared for `queue`.
+    fn declared_redrive(&self, queue: &str) -> Option<Redrive> {
+        self.declared_redrives
+            .lock()
+            .expect("sqs declaration mutex poisoned")
+            .get(queue)
+            .cloned()
     }
 
     /// Resolves a queue name to its URL through the shared cache; URLs pass through. When a
@@ -63,7 +95,7 @@ impl Core {
         let resolved = self
             .sqs
             .get_queue_url()
-            .queue_name(queue_name(queue))
+            .queue_name(resource_name(queue))
             .send()
             .await
             .map_err(|e| SqsError::Queue {
@@ -94,16 +126,18 @@ impl Core {
         if let Some(arn) = cache.get(topic) {
             return Ok(arn.clone());
         }
-        let created = self
-            .sns
-            .create_topic()
-            .name(topic)
-            .send()
-            .await
-            .map_err(|e| SqsError::Admin {
-                name: topic.to_owned(),
-                source: sdk_err(&e),
-            })?;
+        let name = resource_name(topic);
+        let mut create = self.sns.create_topic().name(&name);
+        if is_fifo(&name) {
+            // SNS refuses a `.fifo` name outright unless the topic is declared FIFO, so the
+            // suffix that makes a queue FIFO makes a topic FIFO here too. Deduplication stays
+            // per message: every send this crate makes carries an id of its own.
+            create = create.attributes("FifoTopic", "true");
+        }
+        let created = create.send().await.map_err(|e| SqsError::Admin {
+            name: topic.to_owned(),
+            source: sdk_err(&e),
+        })?;
         let arn = created
             .topic_arn()
             .ok_or_else(|| SqsError::Admin {
@@ -113,6 +147,61 @@ impl Core {
             .to_owned();
         cache.insert(topic.to_owned(), arn.clone());
         Ok(arn)
+    }
+
+    /// The queue's ARN, which is how every SQS resource names another one: an SNS subscription
+    /// endpoint, a redrive policy's dead-letter target.
+    pub(crate) async fn queue_arn(&self, queue: &str, queue_url: &str) -> Result<String, SqsError> {
+        self.sqs
+            .get_queue_attributes()
+            .queue_url(queue_url)
+            .attribute_names(QueueAttributeName::QueueArn)
+            .send()
+            .await
+            .map_err(|e| SqsError::Queue {
+                name: queue.to_owned(),
+                source: sdk_err(&e),
+            })?
+            .attributes()
+            .and_then(|map| map.get(&QueueAttributeName::QueueArn))
+            .cloned()
+            .ok_or_else(|| SqsError::Queue {
+                name: queue.to_owned(),
+                source: Box::from("GetQueueAttributes returned no QueueArn"),
+            })
+    }
+
+    /// The queue's own visibility timeout, read once when a subscription opens.
+    ///
+    /// A subscription that names no visibility of its own holds every delivery under this
+    /// value, so it is read from the queue rather than assumed: the timeout is the operator's
+    /// setting, and a service that substituted its own would shorten it without saying so.
+    pub(crate) async fn queue_visibility(
+        &self,
+        queue: &str,
+        queue_url: &str,
+    ) -> Result<Duration, SqsError> {
+        let attributes = self
+            .sqs
+            .get_queue_attributes()
+            .queue_url(queue_url)
+            .attribute_names(QueueAttributeName::VisibilityTimeout)
+            .send()
+            .await
+            .map_err(|e| SqsError::Queue {
+                name: queue.to_owned(),
+                source: sdk_err(&e),
+            })?;
+        parse_visibility(
+            attributes
+                .attributes()
+                .and_then(|map| map.get(&QueueAttributeName::VisibilityTimeout))
+                .map(String::as_str),
+        )
+        .map_err(|reason| SqsError::Queue {
+            name: queue.to_owned(),
+            source: reason.into(),
+        })
     }
 
     pub(crate) fn rebase_url(&self, url: String) -> String {
@@ -141,10 +230,31 @@ impl std::fmt::Debug for Core {
 
 pub(crate) type CoreCell = Arc<OnceCell<Arc<Core>>>;
 
-/// Maps a logical destination name onto a valid SQS queue name: characters outside
-/// `[A-Za-z0-9_-]` become `-` (SQS forbids them), and a `.fifo` suffix survives. Subscribers
-/// and publishers share this mapping, so dotted framework names stay routable.
-pub(crate) fn queue_name(logical: &str) -> String {
+/// Reads the `VisibilityTimeout` attribute, which SQS reports as a whole number of seconds.
+///
+/// SQS sets the attribute on every queue, so an answer without it, or with something that is
+/// not a number of seconds, means the timeout is unknown. The subscription then refuses to open
+/// instead of holding deliveries under a duration this crate invented.
+fn parse_visibility(raw: Option<&str>) -> Result<Duration, String> {
+    let Some(raw) = raw else {
+        return Err("GetQueueAttributes returned no VisibilityTimeout".to_owned());
+    };
+    raw.trim()
+        .parse::<u64>()
+        .map(Duration::from_secs)
+        .map_err(|_| {
+            format!(
+                "GetQueueAttributes returned VisibilityTimeout {raw:?}, \
+                 which is not a whole number of seconds"
+            )
+        })
+}
+
+/// Maps a logical destination name onto a name the services accept: characters outside
+/// `[A-Za-z0-9_-]` become `-` (neither SQS nor SNS takes them), and a `.fifo` suffix survives,
+/// because that suffix is what makes a queue or a topic FIFO. Subscribers and publishers share
+/// this mapping on both services, so a dotted framework name stays routable wherever it is sent.
+pub(crate) fn resource_name(logical: &str) -> String {
     let (stem, fifo) = logical
         .strip_suffix(".fifo")
         .map_or((logical, ""), |stem| (stem, ".fifo"));
@@ -159,6 +269,16 @@ pub(crate) fn queue_name(logical: &str) -> String {
         })
         .collect();
     format!("{mapped}{fifo}")
+}
+
+/// The redrive policy SQS takes, as the service spells it.
+///
+/// Built by hand rather than through a serializer: the two values are an ARN the service
+/// returned and a number, and neither alphabet reaches a JSON metacharacter.
+fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
+    format!(
+        r#"{{"deadLetterTargetArn":"{dead_letter_arn}","maxReceiveCount":"{max_receive_count}"}}"#
+    )
 }
 
 /// An Amazon SQS broker (with SNS fan-out publishing) for the `RustStream` messaging
@@ -278,6 +398,7 @@ impl Broker for SqsBroker {
                     closed: AtomicBool::new(false),
                     queue_urls: Mutex::new(HashMap::new()),
                     topic_arns: Mutex::new(HashMap::new()),
+                    declared_redrives: StdMutex::new(HashMap::new()),
                 }))
             })
             .await?
@@ -291,9 +412,13 @@ impl Broker for SqsBroker {
 
 impl DescribeServer for SqsBroker {
     fn describe_server(&self) -> ServerSpec {
+        // An endpoint that carries no host at all (an empty override) says nothing about where
+        // clients connect, so the public service is the honest answer for the document.
         let host = self
             .endpoint
-            .clone()
+            .as_deref()
+            .map(ServerSpec::host_from_url)
+            .filter(|host| !host.is_empty())
             .unwrap_or_else(|| "sqs.amazonaws.com".to_owned());
         ServerSpec::new(host, "sqs")
     }
@@ -332,26 +457,7 @@ impl ConnectedSqsBroker {
         self.core.ensure_open()?;
         let topic_arn = self.core.topic_arn(topic).await?;
         let queue_url = self.core.queue_url(queue).await?;
-        let attributes = self
-            .core
-            .sqs
-            .get_queue_attributes()
-            .queue_url(&queue_url)
-            .attribute_names(QueueAttributeName::QueueArn)
-            .send()
-            .await
-            .map_err(|e| SqsError::Queue {
-                name: queue.to_owned(),
-                source: sdk_err(&e),
-            })?;
-        let queue_arn = attributes
-            .attributes()
-            .and_then(|map| map.get(&QueueAttributeName::QueueArn))
-            .ok_or_else(|| SqsError::Queue {
-                name: queue.to_owned(),
-                source: Box::from("GetQueueAttributes returned no QueueArn"),
-            })?
-            .clone();
+        let queue_arn = self.core.queue_arn(queue, &queue_url).await?;
         self.core
             .sns
             .subscribe()
@@ -370,10 +476,18 @@ impl ConnectedSqsBroker {
 
     /// Opens the subscription described by `queue`.
     ///
+    /// A descriptor that names no visibility takes the queue's own timeout, read here with one
+    /// `GetQueueAttributes` call, so every delivery is held under the value the operator
+    /// configured. A registration that declared a cap and a dead-letter destination has them
+    /// written onto the queue as its redrive policy first, which is what makes SQS carry a spent
+    /// delivery away by itself.
+    ///
     /// # Errors
     ///
-    /// Returns [`SqsError`] when the descriptor is invalid, the queue cannot be resolved (or
-    /// created, when opted in), or the broker is shut down.
+    /// Returns [`SqsError`] when the descriptor is invalid, the registration declared half a
+    /// redrive policy, the queue cannot be resolved (or created, when opted in), the redrive
+    /// policy cannot be written, the queue's visibility timeout cannot be read, or the broker is
+    /// shut down.
     pub async fn subscribe_queue(&self, queue: SqsQueue) -> Result<SqsSubscriber, SqsError> {
         queue.validate()?;
         self.core.ensure_open()?;
@@ -383,7 +497,49 @@ impl ConnectedSqsBroker {
         } else {
             self.core.queue_url(queue.queue()).await?
         };
-        Ok(SqsSubscriber::open(&self.core, url, &queue))
+        if let Some(redrive) = queue.redrive()? {
+            self.set_redrive_policy(queue.queue(), &url, &redrive, queue.create_value())
+                .await?;
+        }
+        SqsSubscriber::open(&self.core, queue.queue(), url, &queue).await
+    }
+
+    /// Writes the registration's declaration onto the queue as its redrive policy.
+    ///
+    /// The dead-letter destination is a queue name like any other, resolved to the ARN the
+    /// policy addresses it by. A FIFO queue takes a FIFO dead-letter queue and a standard one a
+    /// standard queue; SQS rejects the mismatch and the error carries its words.
+    async fn set_redrive_policy(
+        &self,
+        queue: &str,
+        queue_url: &str,
+        redrive: &Redrive,
+        create_if_missing: bool,
+    ) -> Result<(), SqsError> {
+        let dead_letter_url = if create_if_missing {
+            self.ensure_queue(&redrive.dead_letter).await?
+        } else {
+            self.core.queue_url(&redrive.dead_letter).await?
+        };
+        let dead_letter_arn = self
+            .core
+            .queue_arn(&redrive.dead_letter, &dead_letter_url)
+            .await?;
+        self.core
+            .sqs
+            .set_queue_attributes()
+            .queue_url(queue_url)
+            .attributes(
+                QueueAttributeName::RedrivePolicy,
+                redrive_policy(&dead_letter_arn, redrive.max_receive_count.get()),
+            )
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| SqsError::Queue {
+                name: queue.to_owned(),
+                source: sdk_err(&e),
+            })
     }
 
     /// Resolves the queue, creating it when missing. A `.fifo` name creates a FIFO queue with
@@ -392,7 +548,11 @@ impl ConnectedSqsBroker {
         if let Ok(url) = self.core.queue_url(queue).await {
             return Ok(url);
         }
-        let mut create = self.core.sqs.create_queue().queue_name(queue_name(queue));
+        let mut create = self
+            .core
+            .sqs
+            .create_queue()
+            .queue_name(resource_name(queue));
         if queue.to_ascii_lowercase().ends_with(".fifo") {
             create = create
                 .attributes(QueueAttributeName::FifoQueue, "true")
@@ -430,12 +590,142 @@ impl ConnectedBroker for ConnectedSqsBroker {
 
 impl Subscribe for ConnectedSqsBroker {
     type Subscriber = SqsSubscriber;
+    // A bare name is a queue, and a queue moves a spent delivery itself, so the by-name form
+    // takes the same copy path the descriptor does.
+    type Copies = BrokerMoves;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        self.subscribe_queue(SqsQueue::new(name)).await
+        self.subscribe_queue(SqsQueue::new(name).with_redrive(self.core.declared_redrive(name)))
+            .await
+    }
+
+    /// Takes the declaration a registration made over a bare queue name, which on SQS is the
+    /// queue's redrive policy: after `max_attempts` receives the queue moves the delivery to the
+    /// dead-letter queue by itself. The mapping is the descriptor's own, so both spellings reach
+    /// the same policy, and the write happens in `subscribe`, the call that has the queue's URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeclareRetryError::Broker`] carrying [`SqsError::IncompleteRedrive`] when only
+    /// one half was declared: a redrive policy needs the cap and the destination together, and
+    /// a service running under a cap the queue never received would lose the messages it counts.
+    fn declare_retry(
+        &self,
+        name: &str,
+        declaration: &RetryDeclaration,
+    ) -> Result<(), DeclareRetryError> {
+        let declared = SqsQueue::new(name)
+            .with_declaration(declaration)
+            .redrive()
+            .map_err(|incomplete| DeclareRetryError::Broker(Box::new(incomplete)))?;
+        self.core.record_redrive(name, declared);
+        Ok(())
     }
 }
 
 impl DefaultPublish for ConnectedSqsBroker {
     type Policy = SqsPublish;
+}
+
+#[cfg(test)]
+mod tests {
+    use ruststream::DescribeServer;
+
+    use super::{Duration, SqsBroker, parse_visibility, resource_name};
+
+    /// The host a description carries for `endpoint`.
+    fn described(endpoint: &str) -> String {
+        SqsBroker::new()
+            .endpoint(endpoint)
+            .describe_server()
+            .host
+            .expect("a configured endpoint describes a host")
+    }
+
+    #[test]
+    fn a_description_carries_the_host_and_port_of_every_endpoint_form() {
+        assert_eq!(described("http://localstack:4566"), "localstack:4566");
+        assert_eq!(described("localstack:4566"), "localstack:4566");
+        assert_eq!(
+            described("https://sqs.eu-west-1.amazonaws.com"),
+            "sqs.eu-west-1.amazonaws.com"
+        );
+        assert_eq!(
+            described("http://localstack:4566/queues/"),
+            "localstack:4566"
+        );
+        assert_eq!(
+            described("http://user:pass@localstack:4566"),
+            "localstack:4566"
+        );
+    }
+
+    #[test]
+    fn a_description_carries_neither_a_scheme_nor_credentials() {
+        for endpoint in [
+            "http://localstack:4566",
+            "localstack:4566",
+            "https://sqs.eu-west-1.amazonaws.com",
+            "http://localstack:4566/queues/",
+            "http://user:pass@localstack:4566",
+        ] {
+            let host = described(endpoint);
+            assert!(
+                !host.contains("://") && !host.contains('@'),
+                "the description of {endpoint:?} published {host:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_that_carries_an_at_sign_is_not_mistaken_for_credentials() {
+        // The cuts are ordered for this case: taking the credentials out first would leave the
+        // tail of the path as the host.
+        assert_eq!(described("https://localstack:4566/a@b"), "localstack:4566");
+    }
+
+    #[test]
+    fn the_public_service_is_described_when_no_endpoint_is_configured() {
+        let described = SqsBroker::new().describe_server();
+        assert_eq!(described.host.as_deref(), Some("sqs.amazonaws.com"));
+        assert_eq!(described.protocol, "sqs");
+    }
+
+    /// A framework destination carries dots freely and neither service takes them in a name, so
+    /// the same mapping answers for a queue and for a topic.
+    #[test]
+    fn a_dotted_destination_maps_onto_a_name_the_services_accept() {
+        assert_eq!(resource_name("order.events"), "order-events");
+        assert_eq!(resource_name("orders"), "orders");
+    }
+
+    /// The one dot that survives: it is what makes a queue or a topic FIFO.
+    #[test]
+    fn a_fifo_suffix_survives_the_mapping() {
+        assert_eq!(resource_name("order.events.fifo"), "order-events.fifo");
+    }
+
+    #[test]
+    fn a_queues_visibility_timeout_is_read_in_seconds() {
+        assert_eq!(parse_visibility(Some("300")), Ok(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn an_absent_visibility_timeout_is_refused_rather_than_replaced() {
+        let reason = parse_visibility(None).expect_err("an absent attribute has no answer");
+        assert!(
+            reason.contains("no VisibilityTimeout"),
+            "the reason names the missing attribute, got {reason:?}",
+        );
+    }
+
+    #[test]
+    fn a_visibility_timeout_that_is_not_seconds_is_refused() {
+        let reason =
+            parse_visibility(Some("PT5M")).expect_err("a value that is not seconds has no answer");
+        assert!(
+            reason.contains("PT5M"),
+            "the reason carries the value it could not read, got {reason:?}",
+        );
+    }
 }

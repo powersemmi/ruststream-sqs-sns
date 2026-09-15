@@ -44,7 +44,7 @@ fn service() -> impl App {
                     .wait(Duration::from_secs(20))
                     .create_if_missing(),
             );
-            b.after_startup(Publish, async move |sqs| -> io::Result<()> {
+            b.after_startup(Publish::default(), async move |sqs| -> io::Result<()> {
                 for id in 0..10 {
                     sqs.message(&Order { id })
                         .publish()

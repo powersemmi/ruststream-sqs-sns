@@ -11,6 +11,11 @@ readme = "../../README.md"
 keywords = ["aws", "sqs", "sns", "broker", "ruststream"]
 categories = ["asynchronous", "network-programming"]
 
+# The overview links the modules the optional features gate, so the published page has to
+# be built with all of them.
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -19,6 +24,9 @@ default = []
 # The in-process test broker (TestableBroker + TestApp support). The conformance harness is a
 # broker-author tool and stays in this repo's dev-dependencies, not in the user-facing feature.
 testing = ["ruststream/testing"]
+# What this broker contributes to the AsyncAPI document the framework generates: the `sqs` and
+# `sns` protocol bindings of the channels a subscription reads and a publish position writes.
+asyncapi = ["ruststream/asyncapi", "dep:serde"]
 
 [dependencies]
 ruststream = { workspace = true, default-features = false }
@@ -28,11 +36,13 @@ aws-sdk-sns.workspace = true
 base64.workspace = true
 bytes.workspace = true
 futures.workspace = true
+serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-ruststream = { workspace = true, features = ["conformance", "testing", "macros", "json"] }
-serde = { version = "1", features = ["derive"] }
+ruststream = { workspace = true, features = ["asyncapi", "conformance", "testing", "macros", "json"] }
+serde.workspace = true
+serde_json = "1"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
