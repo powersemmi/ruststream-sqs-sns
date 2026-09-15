@@ -459,8 +459,11 @@ impl PublishPolicy<ConnectedSqsTestBroker> for SqsPublish {
     }
 }
 
-/// Publishes notifications to SNS topics for fan-out (the destination is a topic name or
-/// ARN; names resolve through the idempotent `CreateTopic`).
+/// Publishes notifications to SNS topics for fan-out.
+///
+/// The destination is a topic name or ARN. A name resolves through the idempotent
+/// `CreateTopic`, mapped onto the alphabet SNS takes the way a queue name is, and a name ending
+/// in `.fifo` opens a FIFO topic.
 ///
 /// SNS appears only as a publisher: its delivery targets are queues and HTTP endpoints, not a
 /// consumer this crate would own. Subscribe queues to the topic with

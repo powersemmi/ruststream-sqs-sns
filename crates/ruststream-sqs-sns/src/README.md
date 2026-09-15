@@ -87,9 +87,10 @@ a framework setting first: `b.include(reconcile.batch(nonzero!(10)).wait(..))`.
 
 `#[subscriber("orders")]` takes the descriptor with its defaults, and `#[subscriber(SqsQueue)]`
 fixes the kind while leaving the name to `b.include(handle.name("orders"))`, which is how one
-definition serves two queues. A name the service uses need not be a legal SQS name: on the way to
-the service every character outside `[A-Za-z0-9_-]` becomes `-` and a `.fifo` suffix survives, so
-a dotted framework name stays routable. Subscriptions and queue publishes share that mapping.
+definition serves two queues. A framework name need not be a legal name on the service: on the way
+there every character outside `[A-Za-z0-9_-]` becomes `-` and a `.fifo` suffix survives, so a
+dotted framework name stays routable. Subscriptions, queue publishes and topic publishes share
+that mapping, and the surviving suffix is what opens a FIFO queue or a FIFO topic.
 
 A subscription is a stream fed by a background pump. Its channel holds one batch, so the pump
 never runs more than one receive ahead of the handler. Dropping the stream stops the pump, and
@@ -353,8 +354,10 @@ The same steps are on every publish surface: an injected slot, a publisher a lif
 handed, a publisher taken from the broker. A reply adjusts nothing, having no call site - the
 policy `.out_reply(..)` bound is its whole answer.
 
-Both settings are FIFO settings. Naming either for a standard queue or topic is
-[`SqsError::NotFifo`] rather than a value dropped in silence. A [`PARTITION_KEY_HEADER`] is not
+Both settings are FIFO settings, and the `.fifo` suffix is what makes a destination take them:
+a queue [`create_if_missing`](SqsQueue::create_if_missing) opens under such a name is a FIFO
+queue, and a topic a fan-out publish opens is a FIFO topic. Naming either setting for a standard
+queue or topic is [`SqsError::NotFifo`] rather than a value dropped in silence. A [`PARTITION_KEY_HEADER`] is not
 an ask of this broker, so a standard queue keeps ignoring it.
 
 # The prelude
