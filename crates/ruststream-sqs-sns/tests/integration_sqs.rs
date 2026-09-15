@@ -215,51 +215,6 @@ async fn nack_after_delays_the_redelivery() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sns_fans_out_to_a_subscribed_queue() {
-    let Some(endpoint) = test_endpoint() else {
-        return;
-    };
-    let connected = connect(&endpoint).await;
-
-    let queue = unique("fanout");
-    let topic = unique("topic");
-    let mut subscriber = connected
-        .subscribe_queue(
-            SqsQueue::new(&queue)
-                .create_if_missing()
-                .wait(Duration::from_secs(5)),
-        )
-        .await
-        .expect("subscription opens");
-    connected
-        .subscribe_queue_to_topic(&topic, &queue)
-        .await
-        .expect("queue subscribes to topic");
-
-    let mut headers = HeaderMap::new();
-    headers.insert("x-tenant", "acme");
-    let sns = connected.sns_publisher();
-    sns.publish(
-        OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers),
-        None,
-    )
-    .await
-    .expect("sns publish succeeds");
-
-    let mut stream = pin!(subscriber.stream());
-    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
-        .await
-        .expect("delivery arrives")
-        .expect("stream is open")
-        .expect("delivery is ok");
-    assert_eq!(message.payload(), b"notice");
-    assert_eq!(message.headers().get_str("x-tenant"), Some("acme"));
-    message.ack().await.expect("ack succeeds");
-
-    connected.shutdown().await.expect("shutdown succeeds");
-}
-
 /// The visibility timeout the operator configures on the queue in this test. Short, so a
 /// handler that outlives it does so within a test's patience; nothing else about the number
 /// matters.

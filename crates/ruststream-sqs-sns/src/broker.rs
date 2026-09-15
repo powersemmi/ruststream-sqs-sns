@@ -20,7 +20,7 @@ use ruststream::{
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::error::{SqsError, sdk_err};
-use crate::publisher::{SnsPublisher, SqsPublish, SqsPublisher};
+use crate::publisher::{SnsPublisher, SqsPublish, SqsPublisher, is_fifo};
 use crate::queue::{Redrive, SqsQueue};
 use crate::subscriber::SqsSubscriber;
 
@@ -95,7 +95,7 @@ impl Core {
         let resolved = self
             .sqs
             .get_queue_url()
-            .queue_name(queue_name(queue))
+            .queue_name(resource_name(queue))
             .send()
             .await
             .map_err(|e| SqsError::Queue {
@@ -126,16 +126,18 @@ impl Core {
         if let Some(arn) = cache.get(topic) {
             return Ok(arn.clone());
         }
-        let created = self
-            .sns
-            .create_topic()
-            .name(topic)
-            .send()
-            .await
-            .map_err(|e| SqsError::Admin {
-                name: topic.to_owned(),
-                source: sdk_err(&e),
-            })?;
+        let name = resource_name(topic);
+        let mut create = self.sns.create_topic().name(&name);
+        if is_fifo(&name) {
+            // SNS refuses a `.fifo` name outright unless the topic is declared FIFO, so the
+            // suffix that makes a queue FIFO makes a topic FIFO here too. Deduplication stays
+            // per message: every send this crate makes carries an id of its own.
+            create = create.attributes("FifoTopic", "true");
+        }
+        let created = create.send().await.map_err(|e| SqsError::Admin {
+            name: topic.to_owned(),
+            source: sdk_err(&e),
+        })?;
         let arn = created
             .topic_arn()
             .ok_or_else(|| SqsError::Admin {
@@ -248,10 +250,11 @@ fn parse_visibility(raw: Option<&str>) -> Result<Duration, String> {
         })
 }
 
-/// Maps a logical destination name onto a valid SQS queue name: characters outside
-/// `[A-Za-z0-9_-]` become `-` (SQS forbids them), and a `.fifo` suffix survives. Subscribers
-/// and publishers share this mapping, so dotted framework names stay routable.
-pub(crate) fn queue_name(logical: &str) -> String {
+/// Maps a logical destination name onto a name the services accept: characters outside
+/// `[A-Za-z0-9_-]` become `-` (neither SQS nor SNS takes them), and a `.fifo` suffix survives,
+/// because that suffix is what makes a queue or a topic FIFO. Subscribers and publishers share
+/// this mapping on both services, so a dotted framework name stays routable wherever it is sent.
+pub(crate) fn resource_name(logical: &str) -> String {
     let (stem, fifo) = logical
         .strip_suffix(".fifo")
         .map_or((logical, ""), |stem| (stem, ".fifo"));
@@ -545,7 +548,11 @@ impl ConnectedSqsBroker {
         if let Ok(url) = self.core.queue_url(queue).await {
             return Ok(url);
         }
-        let mut create = self.core.sqs.create_queue().queue_name(queue_name(queue));
+        let mut create = self
+            .core
+            .sqs
+            .create_queue()
+            .queue_name(resource_name(queue));
         if queue.to_ascii_lowercase().ends_with(".fifo") {
             create = create
                 .attributes(QueueAttributeName::FifoQueue, "true")
@@ -624,7 +631,7 @@ impl DefaultPublish for ConnectedSqsBroker {
 mod tests {
     use ruststream::DescribeServer;
 
-    use super::{Duration, SqsBroker, parse_visibility};
+    use super::{Duration, SqsBroker, parse_visibility, resource_name};
 
     /// The host a description carries for `endpoint`.
     fn described(endpoint: &str) -> String {
@@ -682,6 +689,20 @@ mod tests {
         let described = SqsBroker::new().describe_server();
         assert_eq!(described.host.as_deref(), Some("sqs.amazonaws.com"));
         assert_eq!(described.protocol, "sqs");
+    }
+
+    /// A framework destination carries dots freely and neither service takes them in a name, so
+    /// the same mapping answers for a queue and for a topic.
+    #[test]
+    fn a_dotted_destination_maps_onto_a_name_the_services_accept() {
+        assert_eq!(resource_name("order.events"), "order-events");
+        assert_eq!(resource_name("orders"), "orders");
+    }
+
+    /// The one dot that survives: it is what makes a queue or a topic FIFO.
+    #[test]
+    fn a_fifo_suffix_survives_the_mapping() {
+        assert_eq!(resource_name("order.events.fifo"), "order-events.fifo");
     }
 
     #[test]
