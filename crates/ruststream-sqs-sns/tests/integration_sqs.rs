@@ -13,7 +13,9 @@ use ruststream::{
     ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, RetryDeclaration,
     Subscribe, Subscriber, SubscriptionSource,
 };
-use ruststream_sqs_sns::{ConnectedSqsBroker, PARTITION_KEY_HEADER, SqsError, SqsQueue};
+use ruststream_sqs_sns::{
+    ConnectedSqsBroker, PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER, SqsError, SqsQueue,
+};
 
 mod live;
 
@@ -470,6 +472,11 @@ async fn a_delivery_reports_the_queues_receive_count() {
         .expect("stream is open")
         .expect("delivery is ok");
     assert_eq!(first.redelivery_count(), Some(1));
+    assert_eq!(
+        first.headers().get_str(RECEIVE_COUNT_HEADER),
+        Some("1"),
+        "the count a handler reads off the headers is the count the queue reported",
+    );
     first.nack(true).await.expect("requeue succeeds");
 
     let second = tokio::time::timeout(RECV_TIMEOUT, stream.next())
@@ -478,6 +485,7 @@ async fn a_delivery_reports_the_queues_receive_count() {
         .expect("stream is open")
         .expect("redelivery is ok");
     assert_eq!(second.redelivery_count(), Some(2));
+    assert_eq!(second.headers().get_str(RECEIVE_COUNT_HEADER), Some("2"));
     second.ack().await.expect("ack succeeds");
 
     connected.shutdown().await.expect("shutdown succeeds");

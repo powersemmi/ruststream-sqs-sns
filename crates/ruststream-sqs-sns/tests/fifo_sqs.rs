@@ -12,6 +12,7 @@
 use std::pin::pin;
 use std::time::Duration;
 
+use aws_sdk_sqs::types::QueueAttributeName;
 use futures::StreamExt;
 use ruststream::runtime::{PublishError, PublishExt};
 use ruststream::{
@@ -22,7 +23,7 @@ use ruststream_sqs_sns::{PARTITION_KEY_HEADER, SqsError, SqsPublish, SqsPublishS
 
 mod live;
 
-use live::{QUIET, RECV_TIMEOUT, connect, unique};
+use live::{QUIET, RECV_TIMEOUT, connect, queue_attribute, unique};
 
 /// The body these tests publish through the builder: bytes the test already holds encoded, so
 /// the type names itself serialized and no codec sits on the path.
@@ -222,7 +223,9 @@ async fn a_deduplication_id_collapses_the_repeat_publish() {
 
 // The other side of that window. A FIFO queue this crate creates deduplicates on content, so two
 // legitimate identical payloads would collapse into one; every send carrying an id of its own is
-// what keeps them apart, and only the service can show it.
+// what keeps them apart, and only the service can show it. The queue's own attribute is read
+// back first, because the guarantee is worth nothing if the window it is measured against is
+// not open.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_identical_payloads_stay_two_messages() {
     let Some(endpoint) = test_endpoint() else {
@@ -235,6 +238,17 @@ async fn two_identical_payloads_stay_two_messages() {
         .subscribe_queue(source(&queue))
         .await
         .expect("subscription opens");
+    assert_eq!(
+        queue_attribute(
+            &endpoint,
+            &queue,
+            QueueAttributeName::ContentBasedDeduplication
+        )
+        .await,
+        "true",
+        "a fifo queue this crate created does not deduplicate on content, so the test below \
+         would pass on a queue that never collapses anything",
+    );
 
     for _ in 0..2 {
         connected
