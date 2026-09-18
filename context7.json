@@ -1,0 +1,14 @@
+{
+  "rules": [
+    "Glob `ruststream_sqs_sns::prelude::*` in a routes file; a handler file globs the framework's prelude instead, and this one only when its body names a per-message setting.",
+    "Describe a subscription with `SqsQueue` and its `wait`, `visibility` and `create_if_missing` steps, or with a bare queue name, which is the same descriptor with its defaults.",
+    "Chain the queue's own steps at the mount site after the framework's, `b.include(handler.batch(nonzero!(10)).wait(..))`; they come from the `SqsSubscription` trait in the prelude.",
+    "Take a batch as a `&[T]` parameter and name its size with `.batch(n)`: one `ReceiveMessage` call is one batch, and the service returns at most ten messages per call.",
+    "Cap redeliveries with `.max_attempts(n).dead_letter(name)` right after `include`, always both halves; they become the queue's redrive policy, and `.out_retry(..)` does not compile on an `SqsQueue`.",
+    "Return `HandlerOutcome::retry_after(delay)` as it is: SQS defers through the visibility timeout, so no copy is published and the queue's receive count survives.",
+    "Bind a reply position with `.out_reply(SnsPublish::default())` for topic fan-out; `SqsPublish` is the broker's default policy, so a queue-to-queue reply binds nothing.",
+    "Set a FIFO message group per message with the `group_id` and `deduplication_id` steps of `SqsPublishSteps`, or fix a position's group with `Publish::default().group_id(..)`; naming either for a standard queue or topic is an error.",
+    "Bound a handler that names one of those steps as `Out<impl Publisher<Options = SqsPublishOptions>, Marker>`; a handler signature never names `SqsPublisher` or `SnsPublisher`.",
+    "Test a service on `ruststream_sqs_sns::testing::SqsTestBroker` with `ruststream::testing::TestApp` (feature `testing`), which answers routing, settlement and the attempt cap, but not a lapsing visibility timeout or an SNS fan-out."
+  ]
+}

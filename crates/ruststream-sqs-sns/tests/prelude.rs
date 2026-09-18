@@ -15,10 +15,20 @@ fn _p<T: Publisher>() {}
 
 #[test]
 fn the_uniform_mount_site_name_is_this_brokers_policy() {
-    // The value a mount site or a lifecycle hook hands over. The policy is a unit struct, so
-    // naming it is the whole construction, and the annotation is what pins the alias down: a
-    // trait under this name would not be accepted in type position.
-    let _: Publish = Publish;
+    // The value a mount site or a lifecycle hook hands over. It carries the defaults of the
+    // position it is bound to, so it is built rather than named, and the annotation is what
+    // pins the alias down: a trait under this name would not be accepted in type position.
+    let _: Publish = Publish::default().group_id("orders");
     // Fan-out is the departure from the default, so it keeps its own name beside the uniform one.
-    let _ = SnsPublish;
+    let _ = SnsPublish::default();
+}
+
+/// The per-message settings reach a file through the same glob: the steps a body calls, and the
+/// options type it names in the bound on its slot.
+#[test]
+fn the_per_message_settings_come_with_the_glob() {
+    fn _steps<T: SqsPublishSteps>() {}
+
+    let options = SqsPublishOptions::default().group_id("user-42");
+    assert_eq!(options.group_id.as_deref(), Some("user-42"));
 }
