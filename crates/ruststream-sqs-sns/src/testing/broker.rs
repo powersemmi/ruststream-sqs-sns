@@ -212,11 +212,9 @@ impl TestableBroker for ConnectedSqsTestBroker {
     }
 
     fn inject(&self, message: OutgoingMessage<'_>) {
-        self.state.publish(
-            message.name(),
-            Bytes::copy_from_slice(message.payload()),
-            message.headers().clone(),
-        );
+        let (name, payload, headers) = message.into_parts();
+        self.state
+            .publish(name, Bytes::copy_from_slice(payload), headers);
     }
 
     fn published(&self, name: &str) -> Vec<RawMessage> {
@@ -265,9 +263,8 @@ impl SqsTestPublisher {
         options: Option<&SqsPublishOptions>,
     ) -> Result<(), SqsError> {
         self.state.ensure_open()?;
-        let destination = msg.name();
-        let mut headers = msg.headers().clone();
-        let payload = msg.into_payload().freeze();
+        let (destination, payload, mut headers) = msg.into_parts();
+        let payload = payload.freeze();
         let partition_key = headers
             .remove(PARTITION_KEY_HEADER)
             .map(|value| String::from_utf8_lossy(&value).into_owned());
