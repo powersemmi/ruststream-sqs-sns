@@ -9,7 +9,7 @@ use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
     Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, HeaderMap,
-    OutgoingMessage, Publisher, RawMessage, RetryDeclaration, Str, Subscribe,
+    OutgoingFor, OutgoingMessage, Publisher, RawMessage, RetryDeclaration, Str, Subscribe, Take,
 };
 
 use crate::error::SqsError;
@@ -261,7 +261,7 @@ impl SqsTestPublisher {
     /// ordering the group buys - the router has no message groups, only the header.
     fn route(
         &self,
-        msg: &OutgoingMessage<'_>,
+        msg: &OutgoingFor<'_, Take>,
         options: Option<&SqsPublishOptions>,
     ) -> Result<(), SqsError> {
         self.state.ensure_open()?;
@@ -285,12 +285,14 @@ impl SqsTestPublisher {
 }
 
 impl Publisher for SqsTestPublisher {
+    /// The real publishers' form: the in-process router keeps the payload as well.
+    type Payload = Take;
     type Error = SqsError;
     type Options = SqsPublishOptions;
 
     fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingFor<'_, Take>,
         options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
         ready(self.route(&msg, options))

@@ -8,7 +8,7 @@ use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
+use ruststream::{OutgoingFor, PairError, PublishPolicy, Publisher, Take};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
@@ -256,12 +256,15 @@ pub(crate) fn fifo_settings(
 }
 
 impl Publisher for SqsPublisher {
+    /// The SQS body is a `String` the client keeps for the request, and the crate builds it out of
+    /// the payload, so the publisher takes the buffer the framework wrote.
+    type Payload = Take;
     type Error = SqsError;
     type Options = SqsPublishOptions;
 
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingFor<'_, Take>,
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let core = self.core()?;
@@ -506,12 +509,14 @@ impl SnsPublisher {
 }
 
 impl Publisher for SnsPublisher {
+    /// The SNS message is a `String` the client keeps for the request, like the SQS body.
+    type Payload = Take;
     type Error = SqsError;
     type Options = SqsPublishOptions;
 
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingFor<'_, Take>,
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let core = self.core()?;
