@@ -8,7 +8,7 @@ use std::time::Duration;
 use futures::Stream;
 
 use ruststream::{
-    AckError, BatchSubscriber, BufferedSubscriber, HeaderMap, IncomingMessage, Partitioned,
+    AckError, BatchSubscriber, BufferedSubscriber, HeaderMap, IncomingMessage, Partitioned, Str,
     Subscriber, testing::Coordinator,
 };
 use tokio::time::sleep;
@@ -131,9 +131,10 @@ impl Subscriber for Deliveries {
                     // the same header the real subscriber puts it in, so a service reading its
                     // attempt number reads the same value in a test.
                     delivery.receives = delivery.receives.saturating_add(1);
-                    delivery
-                        .headers
-                        .insert(RECEIVE_COUNT_HEADER, delivery.receives.to_string());
+                    delivery.headers.insert(
+                        Str::from_static(RECEIVE_COUNT_HEADER),
+                        delivery.receives.to_string(),
+                    );
                     Ok(SqsTestMessage::new(
                         Arc::clone(&state),
                         delivery,

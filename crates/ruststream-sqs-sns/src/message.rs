@@ -16,7 +16,7 @@ use aws_sdk_sqs::types::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned, Str};
 use tokio::task::JoinHandle;
 
 use crate::error::sdk_err;
@@ -262,10 +262,10 @@ fn decode_message(message: &AwsMessage) -> (Bytes, HeaderMap) {
     }
     if let Some(system) = message.attributes() {
         if let Some(group) = system.get(&MessageSystemAttributeName::MessageGroupId) {
-            headers.insert(PARTITION_KEY_HEADER, group.clone());
+            headers.insert(Str::from_static(PARTITION_KEY_HEADER), group.clone());
         }
         if let Some(count) = system.get(&MessageSystemAttributeName::ApproximateReceiveCount) {
-            headers.insert(RECEIVE_COUNT_HEADER, count.clone());
+            headers.insert(Str::from_static(RECEIVE_COUNT_HEADER), count.clone());
         }
     }
 

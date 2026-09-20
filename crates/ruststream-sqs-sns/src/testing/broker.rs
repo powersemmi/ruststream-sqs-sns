@@ -9,7 +9,7 @@ use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
     Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, HeaderMap,
-    OutgoingMessage, Publisher, RawMessage, RetryDeclaration, Subscribe,
+    OutgoingMessage, Publisher, RawMessage, RetryDeclaration, Str, Subscribe,
 };
 
 use crate::error::SqsError;
@@ -276,7 +276,7 @@ impl SqsTestPublisher {
             partition_key,
             self.default_group.as_deref(),
         )? {
-            headers.insert(PARTITION_KEY_HEADER, settings.group);
+            headers.insert(Str::from_static(PARTITION_KEY_HEADER), settings.group);
         }
         self.state
             .publish(msg.name(), Bytes::copy_from_slice(msg.payload()), headers);
