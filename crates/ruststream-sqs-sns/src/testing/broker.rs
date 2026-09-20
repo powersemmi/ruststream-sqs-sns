@@ -261,25 +261,26 @@ impl SqsTestPublisher {
     /// ordering the group buys - the router has no message groups, only the header.
     fn route(
         &self,
-        msg: &OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'_, Take>,
         options: Option<&SqsPublishOptions>,
     ) -> Result<(), SqsError> {
         self.state.ensure_open()?;
+        let destination = msg.name();
         let mut headers = msg.headers().clone();
+        let payload = msg.into_payload().freeze();
         let partition_key = headers
             .remove(PARTITION_KEY_HEADER)
             .map(|value| String::from_utf8_lossy(&value).into_owned());
         if let Some(settings) = fifo_settings(
-            msg.name(),
-            is_fifo(msg.name()),
+            destination,
+            is_fifo(destination),
             options,
             partition_key,
             self.default_group.as_deref(),
         )? {
             headers.insert(Str::from_static(PARTITION_KEY_HEADER), settings.group);
         }
-        self.state
-            .publish(msg.name(), Bytes::copy_from_slice(msg.payload()), headers);
+        self.state.publish(destination, payload, headers);
         Ok(())
     }
 }
@@ -295,7 +296,7 @@ impl Publisher for SqsTestPublisher {
         msg: OutgoingFor<'_, Take>,
         options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
-        ready(self.route(&msg, options))
+        ready(self.route(msg, options))
     }
 }
 

@@ -269,11 +269,13 @@ impl Publisher for SqsPublisher {
     ) -> Result<(), Self::Error> {
         let core = self.core()?;
         let url = core.queue_url(msg.name()).await?;
-        let (body, base64_marker) = encode_body(msg.payload());
-        let (attributes, partition_key) = encode_attributes(msg.headers(), base64_marker);
-        let fifo = is_fifo(msg.name()) || is_fifo(&url);
+        // The destination is the caller's string and outlives the message the body is taken from.
+        let (destination, payload, headers) = msg.into_parts();
+        let (body, base64_marker) = encode_body(payload);
+        let (attributes, partition_key) = encode_attributes(&headers, base64_marker);
+        let fifo = is_fifo(destination) || is_fifo(&url);
         let settings = fifo_settings(
-            msg.name(),
+            destination,
             fifo,
             options,
             partition_key,
@@ -293,7 +295,7 @@ impl Publisher for SqsPublisher {
             .await
             .map(|_| ())
             .map_err(|e| SqsError::Publish {
-                destination: msg.name().to_owned(),
+                destination: destination.to_owned(),
                 source: sdk_err(&e),
             })
     }
@@ -521,11 +523,13 @@ impl Publisher for SnsPublisher {
     ) -> Result<(), Self::Error> {
         let core = self.core()?;
         let arn = core.topic_arn(msg.name()).await?;
-        let (body, base64_marker) = encode_body(msg.payload());
+        // The destination is the caller's string and outlives the message the body is taken from.
+        let (destination, payload, headers) = msg.into_parts();
+        let (body, base64_marker) = encode_body(payload);
 
         let mut publish = core.sns.publish().topic_arn(&arn).message(body);
         let mut partition_key = None;
-        for (name, value) in msg.headers().iter() {
+        for (name, value) in headers.iter() {
             if name == PARTITION_KEY_HEADER {
                 partition_key = Some(String::from_utf8_lossy(value).into_owned());
                 continue;
@@ -557,7 +561,7 @@ impl Publisher for SnsPublisher {
             publish = publish.message_attributes(ENCODING_ATTRIBUTE, marker);
         }
         if let Some(settings) = fifo_settings(
-            msg.name(),
+            destination,
             is_fifo(&arn),
             options,
             partition_key,
@@ -572,7 +576,7 @@ impl Publisher for SnsPublisher {
             .await
             .map(|_| ())
             .map_err(|e| SqsError::Publish {
-                destination: msg.name().to_owned(),
+                destination: destination.to_owned(),
                 source: sdk_err(&e),
             })
     }
