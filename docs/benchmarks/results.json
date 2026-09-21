@@ -1,9 +1,9 @@
 {
-  "schema": 1,
+  "schema": 3,
   "crate": "ruststream-sqs-sns",
   "crate_version": "0.7.0",
-  "core_version": "0.7.0-rc.7",
-  "measured_at": "2026-09-20",
+  "core_version": "0.7.0-rc.9",
+  "measured_at": "2026-09-21",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -13,7 +13,7 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "localstack/localstack:4.14.0 (the LocalStack emulator, not the hosted service) in Docker on localhost",
-    "round_trip": "639 us per request to the stand",
+    "round_trip": "610 us per request to the stand",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-sqs-sns default (none), ruststream macros,json",
@@ -23,52 +23,46 @@
     {
       "name": "Standard queue, 512 B JSON, delete per message",
       "unit": "msg/s",
-      "messages": 4416,
-      "pairs": 11,
+      "messages": 4245,
+      "pairs": 3,
       "raw": {
-        "median": 676,
-        "min": 655,
-        "max": 726
+        "best": 760,
+        "worst": 750
       },
       "adapter": {
-        "median": 689,
-        "min": 653,
-        "max": 719
+        "best": 756,
+        "worst": 738
       },
       "framework": {
-        "median": 702,
-        "min": 651,
-        "max": 726
+        "best": 755,
+        "worst": 737
       },
-      "overhead_percent": -3.9,
-      "adapter_overhead_percent": -1.9,
+      "overhead_percent": 0.7,
+      "adapter_overhead_percent": 0.6,
       "verdict": "indistinguishable",
-      "broker_bound": false
+      "broker_bound": true
     },
     {
       "name": "FIFO queue, 64 message groups, 512 B JSON, delete per message",
       "unit": "msg/s",
-      "messages": 4282,
-      "pairs": 11,
+      "messages": 4535,
+      "pairs": 3,
       "raw": {
-        "median": 689,
-        "min": 644,
-        "max": 724
+        "best": 755,
+        "worst": 749
       },
       "adapter": {
-        "median": 661,
-        "min": 643,
-        "max": 720
+        "best": 745,
+        "worst": 724
       },
       "framework": {
-        "median": 671,
-        "min": 648,
-        "max": 713
+        "best": 737,
+        "worst": 727
       },
-      "overhead_percent": 2.6,
-      "adapter_overhead_percent": 4.1,
-      "verdict": "indistinguishable",
-      "broker_bound": false
+      "overhead_percent": 2.4,
+      "adapter_overhead_percent": 1.3,
+      "verdict": "measured",
+      "broker_bound": true
     }
   ]
 }
