@@ -29,9 +29,9 @@ below as a statement about what a delivery costs inside this crate, and about no
 
 ## The numbers
 
-The best of three interleaved rounds, with the slowest round in parentheses. Higher is better.
+The best of three interleaved rounds, with the median round in parentheses. Higher is better.
 
-<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "This crate", "framework": "Full service", "adapterOverhead": "Crate over raw", "overhead": "Service over raw", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
+<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "This crate", "framework": "Full service", "adapterOverhead": "Crate over raw", "overhead": "Service over raw", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "instructions": "Instructions per message", "allocations": "Allocations per message", "cold": "Cold start (instructions / allocations)", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
 
 The table is read in your browser from the document the last run wrote, so nothing on this page is
 a copy that could have gone stale.
@@ -51,6 +51,38 @@ so none is published.
 The machine-readable form of the same run, which the framework's site reads to build its
 cross-broker table, is at
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-sqs-sns/latest/benchmarks/results.json).
+
+## The crate's own code
+
+<div id="benchmark-code"></div>
+
+The second table is what a message costs on this crate's code path, counted rather than timed:
+instructions under callgrind and allocations under DHAT. Each scenario is the service a user
+writes, built on `SqsBroker` with the constructor a service uses, pointed at the same LocalStack
+stand and started on a single-threaded runtime. The queue is filled from another thread between the
+start and the drain, and that thread is not counted.
+
+What is counted is everything the service's thread runs: the framework, this crate, and the work
+of `aws-sdk-sqs` and its HTTP stack on that thread, building and signing every request and parsing
+every answer. Threads the client runs on its own are not counted, and neither is the emulator's
+side of a round trip. Every delivery pays its share of a `ReceiveMessage` and a `DeleteMessage` of
+its own, and a reply adds a `SendMessage`, so most of every row is the AWS client's work rather
+than this crate's.
+
+Instructions and allocations are per message in the steady state: the slope between a run of 1000
+deliveries and a run of 2000. The last column is what starting the service and taking the first
+delivery cost once: loading the AWS configuration, resolving the queue and reading its visibility
+timeout. The numbers are absolute, the framework's own cost included; the core publishes that cost
+alone on its [benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/).
+
+A batch holds ten messages, the most one `ReceiveMessage` returns, and every delivery in it is
+still deleted with a call of its own.
+
+Four runs of one binary agree within half a percent on instructions and within three allocations
+in 1.7 million, which is how the emulator answers and how the socket's reads split.
+`just bench-code` fails on an allocation above the floor a scenario declares, the highest count
+observed plus a tenth of a percent, and with `--baseline=main` on more than two percent more
+instructions. A pull request that changes the cost cites its numbers.
 
 ## The machine
 
@@ -98,3 +130,11 @@ The recipe starts the stand from `docker-compose.test.yml`, runs both scenarios,
 and rewrites `docs/benchmarks/results.json` with what it measured. It takes about ten minutes and
 wants the machine to itself. The message count is not fixed: a probe run sets it so that every
 measured run lasts at least five seconds on whatever machine it is taken on.
+
+```bash
+just bench-code
+```
+
+The recipe starts the same stand, counts the code table under valgrind, stops the stand and
+rewrites the `code` section of the same document. It takes a few minutes and needs valgrind and the
+benchmark runner: `cargo install --locked gungraun-runner --version =0.19.4`.
