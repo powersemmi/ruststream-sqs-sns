@@ -1,0 +1,34 @@
+# ruststream-sqs-sns
+
+> `ruststream-sqs-sns` is the Amazon SQS broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them, with SNS fan-out publishing. It runs over the official `aws-sdk-sqs` and `aws-sdk-sns` clients: a subscriber long-polls its queue, retries run through the visibility timeout, and dead-lettering through the queue's redrive policy.
+
+A subscription is the descriptor `SqsQueue`, by queue URL or by name, with its long-polling wait, visibility timeout and batch settings. A routes file imports `ruststream_sqs_sns::prelude::*`, which offers `SqsPublish` (send to a queue) as `Publish` and `SnsPublish` (publish to a topic) under its own name. The message group of a publish to a FIFO queue is its per-message setting, set with a step from `SqsPublishSteps`.
+
+This site holds the entry pages. The crate's guide is its overview on docs.rs, and the framework itself is documented on the RustStream site.
+
+## Site
+
+- [Home](https://powersemmi.github.io/ruststream-sqs-sns/latest/): what the crate does, the dependency lines and a first service
+- [Benchmarks](https://powersemmi.github.io/ruststream-sqs-sns/latest/benchmarks/): what this crate and the framework's runtime cost over the raw `aws-sdk-sqs` client on LocalStack, and how to re-measure it with `just bench`
+
+## Guide
+
+- [Overview](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html): the transport and a service
+- [The queue descriptor](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#the-queue-descriptor): `SqsQueue` and the settings that decide cost and latency
+- [Settlement](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#settlement): how each handler outcome settles a delivery
+- [Capping the attempts](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#capping-the-attempts): the attempt cap and where a spent delivery goes
+- [Batches](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#batches): native batches over `ReceiveMessage`
+- [What a delivery carries](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#what-a-delivery-carries): headers as SQS message attributes, the FIFO message group and the receive count
+- [Publishing](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#publishing): the two publish policies and publishers taken from the broker
+- [Replies and fan-out](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#replies-and-fan-out): replies to a queue and SNS fan-out
+- [FIFO message groups](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#fifo-message-groups): the message group per publish or per position
+- [The prelude](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#the-prelude): what a routes file and a handler file import
+- [The generated document](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#the-generated-document): the `sqs` bindings the `asyncapi` feature reports
+- [Testing](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#testing): the in-process broker behind the `testing` feature, driven by `TestApp`
+- [Operations](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#operations): credentials, region, a local stack endpoint and timeouts
+
+## Optional
+
+- [API reference](https://docs.rs/ruststream-sqs-sns): the full rustdoc of the crate
+- [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
+- [Source](https://github.com/powersemmi/ruststream-sqs-sns): the crate's repository
