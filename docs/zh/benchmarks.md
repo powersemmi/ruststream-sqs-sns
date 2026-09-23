@@ -25,9 +25,9 @@
 
 ## 数字 {#the-numbers}
 
-三个交错轮次中的最佳值，括号里是最差的一轮。越大越好。
+三个交错轮次中的最佳值，括号里是中位的一轮。越大越好。
 
-<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载已发布的结果……", "scenario": "场景", "raw": "原生客户端", "adapter": "本 crate", "framework": "完整服务", "adapterOverhead": "本 crate 相对原生", "overhead": "服务相对原生", "indistinguishable": "无法区分", "brokerBound": "受 Broker 限制", "machine": "机器", "os": "操作系统", "broker": "Broker", "build": "构建", "versions": "版本", "measured": "测量于", "unavailable": "读不到结果。它们发布在 {url}。", "unknownSchema": "已发布的结果声明的 schema 是 {schema}，本页无法渲染。"}'></div>
+<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载已发布的结果……", "scenario": "场景", "raw": "原生客户端", "adapter": "本 crate", "framework": "完整服务", "adapterOverhead": "本 crate 相对原生", "overhead": "服务相对原生", "indistinguishable": "无法区分", "brokerBound": "受 Broker 限制", "machine": "机器", "os": "操作系统", "broker": "Broker", "build": "构建", "versions": "版本", "measured": "测量于", "instructions": "每条消息的指令数", "allocations": "每条消息的内存分配次数", "cold": "冷启动（指令 / 分配）", "unavailable": "读不到结果。它们发布在 {url}。", "unknownSchema": "已发布的结果声明的 schema 是 {schema}，本页无法渲染。"}'></div>
 
 表格在你的浏览器里从最近一次运行写下的文档读取，所以本页没有任何可能过期的副本。
 
@@ -41,6 +41,32 @@
 同一次运行的机器可读形式在
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-sqs-sns/latest/benchmarks/results.json)，
 框架站点用它构建跨 Broker 的汇总表。
+
+## crate 自身的代码 {#the-crates-own-code}
+
+<div id="benchmark-code"></div>
+
+第二张表是一条消息在本 crate 代码路径上的开销，是数出来的，不是计时得来的：指令数由 callgrind 统计，
+内存分配次数由 DHAT 统计。每个场景都是用户会写的那种服务：用服务里同样的构造方式建在 `SqsBroker` 上，
+指向同一个 LocalStack 测试台，并在单线程运行时上启动。在启动和排空之间，由另一个线程往队列里填消息，
+这个线程不计入。
+
+计入的是服务线程执行的一切：框架、本 crate，以及 `aws-sdk-sqs` 和它的 HTTP 栈在这个线程上的工作，
+也就是构建并签名每个请求、解析每个应答。客户端自己开的线程不计入，每次往返中模拟器那一侧也不计入。
+每次投递都要分摊一次 `ReceiveMessage`，并付出自己的一次 `DeleteMessage`，回复还要再加一次
+`SendMessage`，所以每一行的大部分是 AWS 客户端的工作，而不是本 crate 的。
+
+指令数和分配次数都是稳态下每条消息的值：1000 次投递的运行和 2000 次投递的运行之间的斜率。最后一列
+是启动服务并处理第一次投递一次性付出的开销：加载 AWS 配置、解析队列、读取它的可见性超时时间。这些
+数字是绝对值，框架自身的开销也算在内；框架单独的开销由核心库在它的
+[基准测试页面](https://powersemmi.github.io/ruststream/latest/zh/benchmarks/)上公布。
+
+一批是十条消息，这是一次 `ReceiveMessage` 最多返回的条数；批里的每次投递仍然各自用一次调用删除。
+
+同一个二进制文件跑四次，指令数相差不到半个百分点，分配次数在 170 万次里最多差三次，这取决于模拟器
+如何作答、套接字的读取如何切分。`just bench-code` 在分配次数超过场景声明的下限时失败，这个下限是测到的
+最大计数再加千分之一；加上 `--baseline=main` 时，指令数多出百分之二以上也算失败。改变开销
+的合并请求要附上自己的数字。
 
 ## 机器 {#the-machine}
 
@@ -80,3 +106,10 @@ just bench
 这条配方从 `docker-compose.test.yml` 启动测试台，跑完两个场景，停掉测试台，并把测得的结果写回
 `docs/benchmarks/results.json`。它需要大约十分钟，并且要独占这台机器。消息条数不是固定的：一次探测
 运行会把它定下来，使每次被测量的运行在所在机器上至少持续五秒。
+
+```bash
+just bench-code
+```
+
+这条配方启动同一个测试台，在 valgrind 下统计代码表，停掉测试台，并重写同一份文档里的 `code` 部分。
+它需要几分钟，还要有 valgrind 和基准测试运行器：`cargo install --locked gungraun-runner --version =0.19.4`。
