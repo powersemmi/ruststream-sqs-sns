@@ -16,7 +16,7 @@ use aws_sdk_sqs::types::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned};
+use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Str};
 use tokio::task::JoinHandle;
 
 use crate::error::sdk_err;
@@ -262,10 +262,10 @@ fn decode_message(message: &AwsMessage) -> (Bytes, HeaderMap) {
     }
     if let Some(system) = message.attributes() {
         if let Some(group) = system.get(&MessageSystemAttributeName::MessageGroupId) {
-            headers.insert(PARTITION_KEY_HEADER, group.clone());
+            headers.insert(Str::from_static(PARTITION_KEY_HEADER), group.clone());
         }
         if let Some(count) = system.get(&MessageSystemAttributeName::ApproximateReceiveCount) {
-            headers.insert(RECEIVE_COUNT_HEADER, count.clone());
+            headers.insert(Str::from_static(RECEIVE_COUNT_HEADER), count.clone());
         }
     }
 
@@ -302,10 +302,13 @@ pub(crate) fn is_service_text(text: &str) -> bool {
 /// "Anything else" is wider than "not UTF-8": a binary codec's output is often valid UTF-8 and
 /// still carries control bytes the service refuses, and a rejected send is a worse answer than
 /// a transparently encoded one.
-pub(crate) fn encode_body(payload: &[u8]) -> (String, bool) {
-    match std::str::from_utf8(payload) {
-        Ok(text) if is_service_text(text) => (text.to_owned(), false),
-        _ => (BASE64.encode(payload), true),
+pub(crate) fn encode_body(payload: BytesMut) -> (String, bool) {
+    // `Vec::from` reclaims the buffer the framework wrote and `String::from_utf8` validates it in
+    // place, so a body the service accepts as text reaches the request without a copy.
+    match String::from_utf8(Vec::from(payload)) {
+        Ok(text) if is_service_text(&text) => (text, false),
+        Ok(text) => (BASE64.encode(text.as_bytes()), true),
+        Err(invalid) => (BASE64.encode(invalid.as_bytes()), true),
     }
 }
 
@@ -357,9 +360,26 @@ pub(crate) fn encode_attributes(
 mod tests {
     use super::*;
 
+    /// Content equality cannot tell a hand-over from a copy, so the buffer the framework wrote is
+    /// identified by its address.
+    #[test]
+    fn a_text_body_keeps_the_buffer_the_framework_wrote() {
+        let payload = BytesMut::from(&br#"{"id":1}"#[..]);
+        let written = payload.as_ptr();
+
+        let (body, base64_marker) = encode_body(payload);
+
+        assert!(!base64_marker, "a JSON body is text the service accepts");
+        assert_eq!(
+            body.as_ptr(),
+            written,
+            "the body is the buffer the framework wrote, validated as text rather than copied"
+        );
+    }
+
     #[test]
     fn utf8_payloads_pass_through() {
-        let (body, marker) = encode_body(b"{\"id\":1}");
+        let (body, marker) = encode_body(BytesMut::from(&b"{\"id\":1}"[..]));
         assert_eq!(body, "{\"id\":1}");
         assert!(!marker);
     }
@@ -367,7 +387,7 @@ mod tests {
     #[test]
     fn binary_payloads_travel_base64_with_marker() {
         let raw = [0u8, 159, 146, 150];
-        let (body, marker) = encode_body(&raw);
+        let (body, marker) = encode_body(BytesMut::from(&raw[..]));
         assert!(marker);
         assert_eq!(BASE64.decode(body).expect("valid base64"), raw);
     }
@@ -382,14 +402,14 @@ mod tests {
             std::str::from_utf8(&raw).is_ok(),
             "the sample is valid UTF-8"
         );
-        let (body, marker) = encode_body(&raw);
+        let (body, marker) = encode_body(BytesMut::from(&raw[..]));
         assert!(marker);
         assert_eq!(BASE64.decode(body).expect("valid base64"), raw);
     }
 
     #[test]
     fn whitespace_the_service_accepts_stays_text() {
-        let (body, marker) = encode_body(b"a\tb\r\nc");
+        let (body, marker) = encode_body(BytesMut::from(&b"a\tb\r\nc"[..]));
         assert!(!marker);
         assert_eq!(body, "a\tb\r\nc");
     }

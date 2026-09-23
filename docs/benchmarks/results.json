@@ -1,0 +1,68 @@
+{
+  "schema": 3,
+  "crate": "ruststream-sqs-sns",
+  "crate_version": "0.7.0",
+  "core_version": "0.7.0-rc.9",
+  "measured_at": "2026-09-21",
+  "environment": {
+    "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+    "architecture": "x86_64",
+    "cpu_frequency": "427-5912 MHz",
+    "cores": "12 physical, 24 logical",
+    "memory": "62.4 GiB",
+    "memory_speed": "unknown",
+    "os": "Linux 7.2.6-x64v3-xanmod1-1",
+    "broker": "localstack/localstack:4.14.0 (the LocalStack emulator, not the hosted service) in Docker on localhost",
+    "round_trip": "610 us per request to the stand",
+    "rustc": "1.98.1",
+    "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
+    "features": "ruststream-sqs-sns default (none), ruststream macros,json",
+    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)"
+  },
+  "scenarios": [
+    {
+      "name": "Standard queue, 512 B JSON, delete per message",
+      "unit": "msg/s",
+      "messages": 4245,
+      "pairs": 3,
+      "raw": {
+        "best": 760,
+        "worst": 750
+      },
+      "adapter": {
+        "best": 756,
+        "worst": 738
+      },
+      "framework": {
+        "best": 755,
+        "worst": 737
+      },
+      "overhead_percent": 0.7,
+      "adapter_overhead_percent": 0.6,
+      "verdict": "indistinguishable",
+      "broker_bound": true
+    },
+    {
+      "name": "FIFO queue, 64 message groups, 512 B JSON, delete per message",
+      "unit": "msg/s",
+      "messages": 4535,
+      "pairs": 3,
+      "raw": {
+        "best": 755,
+        "worst": 749
+      },
+      "adapter": {
+        "best": 745,
+        "worst": 724
+      },
+      "framework": {
+        "best": 737,
+        "worst": 727
+      },
+      "overhead_percent": 2.4,
+      "adapter_overhead_percent": 1.3,
+      "verdict": "measured",
+      "broker_bound": true
+    }
+  ]
+}
