@@ -50,6 +50,13 @@ async fn reconcile(payments: &[Order]) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
+/// A batch handler on a queue whose mount site asks for more than one receive can return.
+#[subscriber(SqsQueue::new("ledger"))]
+async fn post_ledger(entries: &[Order]) -> HandlerOutcome {
+    let _ = entries.len();
+    HandlerOutcome::ack()
+}
+
 /// A reply-shaped handler: it says where the reply goes, and the mount site says who takes it
 /// there. Every mount below reuses this one definition, which is the point - the policy is the
 /// only thing that differs.
@@ -213,6 +220,39 @@ async fn the_mount_site_settings_ride_that_descriptor_in_process() {
         .subscriber("payments")
         .assert_called_once()
         .assert_batch_sizes(&[2])
+        .settled(HandlerOutcome::ack());
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// One `ReceiveMessage` returns at most ten messages, and one receive is one batch, so a batch
+/// never holds more than ten on the queue. A mount site may ask for more; the stand caps the
+/// batches where the queue caps them, so a handler that counts on a larger batch finds out here
+/// rather than in production.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_never_holds_more_than_one_receive_returns() {
+    let broker = SqsTestBroker::new();
+    // A producer handle taken before the app is built, for the reason the test above gives: the
+    // harness's own publish would close a batch per message.
+    let producer = broker.publisher();
+    let app = RustStream::new(AppInfo::new("ledger", "0.1.0")).with_broker(broker, |b| {
+        b.include(post_ledger.batch(nonzero!(25)));
+    });
+
+    let tb = TestApp::start(app).await.expect("the app starts");
+    for id in 0..25 {
+        producer
+            .message(&Order { id })
+            .to("ledger")
+            .publish()
+            .await
+            .expect("the publish succeeds");
+    }
+    tb.settle().await.expect("the batches settle");
+
+    tb.broker::<SqsTestBroker>()
+        .subscriber("ledger")
+        .assert_batch_sizes(&[10, 10, 5])
         .settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("the app shuts down");

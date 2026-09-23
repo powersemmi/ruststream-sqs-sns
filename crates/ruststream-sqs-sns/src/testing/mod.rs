@@ -8,7 +8,8 @@
 //! not simulate the queue's own bookkeeping (dead-letter policies, credit, a visibility timeout
 //! that lapses on its own); those are verified end to end against a real broker. What a
 //! settlement asks for it does answer, delay included: `retry_after` redelivers once the delay
-//! has passed, as `ChangeMessageVisibility` makes it on the queue.
+//! has passed, as `ChangeMessageVisibility` makes it on the queue. A batch is capped where one
+//! `ReceiveMessage` caps it, at ten messages, whatever size the registration named.
 //!
 //! The crate's own types are what mount on it: [`SqsQueue`](crate::SqsQueue) opens a subscription
 //! here, and [`SqsPublish`](crate::SqsPublish) and [`SnsPublish`](crate::SnsPublish) pair into

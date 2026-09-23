@@ -17,7 +17,7 @@ use std::time::Duration;
 use futures::{Stream, StreamExt};
 
 use aws_sdk_sqs::types::MessageSystemAttributeName;
-use ruststream::{BatchSubscriber, Subscriber};
+use ruststream::{BatchSubscriber, Subscriber, nonzero};
 use tokio::sync::mpsc;
 
 use crate::broker::Core;
@@ -27,7 +27,7 @@ use crate::queue::SqsQueue;
 
 /// The protocol cap on `MaxNumberOfMessages`: one `ReceiveMessage` returns at most ten
 /// messages, whatever a batch size asks for.
-const RECEIVE_CAP: usize = 10;
+pub(crate) const RECEIVE_CAP: NonZeroUsize = nonzero!(10_usize);
 
 /// The protocol cap on a visibility timeout, in seconds.
 const MAX_VISIBILITY_SECS: u64 = 12 * 60 * 60;
@@ -77,7 +77,25 @@ impl Visibility {
 /// The receive size as the SDK spells it. The clamp is what makes the conversion exact, and
 /// the fallback is that same cap, so nothing rides on it.
 fn receive_size(requested: usize) -> i32 {
-    i32::try_from(requested.min(RECEIVE_CAP)).unwrap_or(10)
+    i32::try_from(requested.min(RECEIVE_CAP.get())).unwrap_or(10)
+}
+
+/// The largest batch a subscription on `queue` yields when its registration asks for `requested`
+/// messages: the size itself, capped at what one `ReceiveMessage` returns.
+///
+/// The cap is logged once per subscription, when its batches open, so a registration that asked
+/// for more does not lose the difference silently. The in-process stand-in batches through this
+/// same rule, so a test sees the batches the queue would hand over.
+pub(crate) fn receive_batch(requested: NonZeroUsize, queue: &str) -> NonZeroUsize {
+    if requested > RECEIVE_CAP {
+        tracing::warn!(
+            queue,
+            requested = requested.get(),
+            delivered = RECEIVE_CAP.get(),
+            "sqs receives at most 10 messages per call; batches are capped at that",
+        );
+    }
+    requested.min(RECEIVE_CAP)
 }
 
 /// A subscription to one SQS queue; yields [`SqsMessage`]s.
@@ -186,7 +204,7 @@ impl Subscriber for SqsSubscriber {
         // A single-message subscription still receives a whole call's worth: SQS charges per
         // request, so asking for the protocol maximum and handing the messages over one at a
         // time costs a tenth of what one receive per message would.
-        batch_stream(self.pump(RECEIVE_CAP)).flat_map(|batch| {
+        batch_stream(self.pump(RECEIVE_CAP.get())).flat_map(|batch| {
             futures::stream::iter(match batch {
                 Ok(messages) => messages.into_iter().map(Ok).collect(),
                 Err(err) => vec![Err(err)],
@@ -210,16 +228,8 @@ impl BatchSubscriber for SqsSubscriber {
         &mut self,
         size: NonZeroUsize,
     ) -> impl Stream<Item = Result<Self::Batch, SqsError>> + Send + '_ {
-        let requested = size.get();
-        if requested > RECEIVE_CAP {
-            tracing::warn!(
-                queue_url = %self.queue_url,
-                requested,
-                delivered = RECEIVE_CAP,
-                "sqs receives at most 10 messages per call; batches are capped at that",
-            );
-        }
-        batch_stream(self.pump(requested))
+        let size = receive_batch(size, &self.queue_url);
+        batch_stream(self.pump(size.get()))
     }
 }
 

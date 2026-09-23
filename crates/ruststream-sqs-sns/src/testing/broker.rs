@@ -150,6 +150,7 @@ impl ConnectedSqsTestBroker {
         self.state.ensure_open()?;
         let (id, requeue, rx) = self.state.router.subscribe(name.to_owned());
         Ok(SqsTestSubscriber::new(
+            name.to_owned(),
             Arc::clone(&self.state),
             id,
             rx,
