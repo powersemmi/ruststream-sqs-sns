@@ -1,9 +1,10 @@
 //! Subscription registry and fanout for the in-process SQS stand-in.
 //!
-//! Core routing only: an exact-name match fans a published message out to every live
-//! subscription on that name, and a per-name log records traffic for assertions. SQS's own
-//! semantics (visibility timeouts, redrive policies, FIFO ordering, SNS fan-out) are transport
-//! behaviour and are not simulated here.
+//! Core routing: an exact-name match fans a published message out to every live subscription on
+//! that name, a per-name log records traffic for assertions, and every delivery carries the
+//! receive count the subscriber's redrive policy reads. A lapsing visibility timeout, FIFO
+//! ordering and the onward delivery of an SNS fan-out are transport behaviour, verified end to end
+//! against a real broker.
 
 use std::collections::HashMap;
 use std::sync::{
