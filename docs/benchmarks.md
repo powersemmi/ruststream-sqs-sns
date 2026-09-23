@@ -36,13 +36,13 @@ The best of three interleaved rounds, with the median round in parentheses. High
 The table is read in your browser from the document the last run wrote, so nothing on this page is
 a copy that could have gone stale.
 
-Both rows are marked broker-bound, and that is the important thing on this page. A delivery costs a
-`DeleteMessage` of its own, because that is what this crate's `ack` does, plus a tenth of the
-`ReceiveMessage` that carried its batch over. The run measures the round trip to the
-stand separately and publishes it below, and those round trips account for most of what a delivery
-took. The framework's work therefore happened inside a wait the raw client was already paying, which
-makes the difference between the two halves a lower bound on what dispatch costs rather than a
-measurement of it.
+Round trips set the pace of both rows, and that is the important thing on this page. A delivery
+costs a `DeleteMessage` of its own, because that is what this crate's `ack` does, plus a tenth of the
+`ReceiveMessage` that carried its batch over. The run measures the round trip to the stand
+separately and publishes it below, and those round trips account for about half of what a delivery
+took; a row where they reach half is marked broker-bound. The work of this crate and of the
+framework happens inside a wait the raw client pays as well, which makes the difference between the
+loops a lower bound on what that work costs rather than a measurement of it.
 
 A row reported as `indistinguishable` is one whose two halves differ by less than the spread between
 runs of either. A figure below the run-to-run noise would read as precision that was never measured,
@@ -127,7 +127,7 @@ just bench
 ```
 
 The recipe starts the stand from `docker-compose.test.yml`, runs both scenarios, stops the stand
-and rewrites `docs/benchmarks/results.json` with what it measured. It takes about ten minutes and
+and rewrites `docs/benchmarks/results.json` with what it measured. It takes a few minutes and
 wants the machine to itself. The message count is not fixed: a probe run sets it so that every
 measured run lasts at least five seconds on whatever machine it is taken on.
 
