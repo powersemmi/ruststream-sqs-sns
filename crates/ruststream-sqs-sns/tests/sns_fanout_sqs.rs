@@ -2,9 +2,8 @@
 //!
 //! SNS appears in this crate as a publisher only, so what a service is promised is that a
 //! notification reaches the queues subscribed to the topic, with its payload and its headers
-//! intact. The in-process stand-in has no topics at all: both publish policies pair into its one
-//! publisher and a message reaches whatever destination it names, so the fan-out itself can only
-//! be shown here.
+//! intact. The in-process mode models the fan-out; this suite is what holds that model to the
+//! service.
 //!
 //! Start a stack with `just brokers-up`, then:
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.

@@ -3,8 +3,8 @@
 //!
 //! Every assertion here reads the group back off the delivery, which is the service's own
 //! answer: SQS reports `MessageGroupId` as a system attribute and this crate maps it onto the
-//! portable `partition-key` header. The in-process stand-in has no message groups and no
-//! deduplication window, so this is the only place any of it can be shown.
+//! portable `partition-key` header. The in-process mode models groups and the deduplication
+//! window; this suite is what holds that model to the service.
 //!
 //! Start a stack with `just brokers-up`, then:
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.
@@ -50,8 +50,7 @@ fn source(queue: &str) -> SqsQueue {
 }
 
 /// The step on the publish builder reaches the queue as the FIFO message group id: SQS reports
-/// it back on the delivery, and this is the only place that can be shown at all - the in-process
-/// stand-in has no message groups.
+/// it back on the delivery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_group_id_step_sets_the_fifo_message_group() {
     let Some(endpoint) = test_endpoint() else {

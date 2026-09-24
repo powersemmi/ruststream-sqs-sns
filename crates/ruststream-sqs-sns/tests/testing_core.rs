@@ -147,7 +147,7 @@ async fn forward(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_descriptor_declared_for_sqs_mounts_on_the_test_broker() {
+async fn a_descriptor_declared_for_sqs_mounts_in_process() {
     let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(), |b| {
         b.include(handle_order);
     });
@@ -231,8 +231,8 @@ async fn the_mount_site_settings_ride_that_descriptor_in_process() {
 }
 
 /// One `ReceiveMessage` returns at most ten messages, and one receive is one batch, so a batch
-/// never holds more than ten on the queue. A mount site may ask for more; the stand caps the
-/// batches where the queue caps them, so a handler that counts on a larger batch finds out here
+/// never holds more than ten on the queue. A mount site may ask for more; the in-process queue
+/// caps the batches where SQS caps them, so a handler that counts on a larger batch finds out here
 /// rather than in production.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_batch_never_holds_more_than_one_receive_returns() {
@@ -295,7 +295,7 @@ async fn a_reply_takes_the_brokers_default_policy_in_process() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_production_publish_policy_mounts_on_the_test_broker() {
+async fn the_production_publish_policy_mounts_in_process() {
     let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {
         // The line a routes file writes, unchanged: the broker under it is the only
         // difference between this and production.
