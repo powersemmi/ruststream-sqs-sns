@@ -1,16 +1,19 @@
-//! Conformance: every suite this crate's capabilities justify, run twice.
+//! Conformance: every suite this crate's capabilities justify, run twice over the production
+//! broker.
 //!
-//! Each check runs against the in-process transport, where it is the definition of correct
-//! behaviour the stand-in is held to, and again against a local stack (gated behind
-//! `SQS_TEST_ENDPOINT`), where the same check is what proves the stand-in is not lying about the
-//! service. Dropping either leg leaves one of the two unverified.
+//! Each check runs over the in-process transport, through `harness::InProcessBroker` where the
+//! suite connects with `connect`, and again against a local stack (gated behind
+//! `SQS_TEST_ENDPOINT`). The in-process pass holds the transport tests run on to the framework's
+//! own definition of a well-behaved broker; the live pass proves the SQS implementation. Dropping
+//! either leg leaves one of the two unverified.
 //!
 //! The suites are the routing contract ([`harness::run_suite`], in process only - it drives the
 //! `TestableBroker` surface, which no live broker has), the lifecycle ladder
-//! ([`harness::lifecycle`]) and the one capability this crate implements beyond the base,
-//! [`capabilities::batches`]. `request_reply`, `transactions`, `owned_transactions` and `seeking`
-//! have no suite here because the crate implements none of those capabilities: SQS offers no
-//! request-reply channel, no transactions and no cursor to seek.
+//! ([`harness::lifecycle`]) through the crate's descriptor and through a bare name, and the one
+//! capability this crate implements beyond the base, [`capabilities::batches`].
+//! `redelivery_address`, `request_reply`, `transactions`, `owned_transactions` and `seeking` have
+//! no suite here: a queue moves a spent delivery itself, so no subscription reports an address
+//! for a copy, and SQS offers no request-reply channel, no transactions and no cursor to seek.
 //!
 //! Start a stack with `just brokers-up`, then:
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features`.
@@ -22,9 +25,10 @@ use std::pin::pin;
 use std::time::Duration;
 
 use futures::StreamExt;
+use ruststream::Name;
+use ruststream::conformance::harness::InProcessBroker;
 use ruststream::conformance::{capabilities, harness};
 use ruststream::{BatchSubscriber, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher};
-use ruststream_sqs_sns::testing::SqsTestBroker;
 use ruststream_sqs_sns::{SqsBroker, SqsQueue};
 
 mod live;
@@ -37,27 +41,41 @@ fn test_endpoint() -> Option<String> {
     live::endpoint("SQS_TEST_ENDPOINT")
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sqs_test_broker_passes_conformance_suite() {
-    harness::run_suite(SqsTestBroker::new).await;
+/// The production broker, connected in process by the suites that take any broker.
+fn in_process() -> InProcessBroker<SqsBroker> {
+    InProcessBroker::new(SqsBroker::new().region("us-east-1"))
 }
 
-/// The lifecycle ladder against the in-process transport: the same walk the live leg below
-/// makes, so the stand-in is held to the framework's own definition of a well-behaved broker
-/// rather than only to the routing suite. It ends on the assertion that matters most here - a
-/// publisher that aliased the connection must report the closed transport afterwards instead of
-/// routing into a dead router, which is what the real broker does through its `closed` flag.
-///
-/// The suite opens the subscription through this crate's own descriptor, the same one the live
-/// leg uses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_in_process_mode_passes_conformance_suite() {
+    harness::run_suite(|| SqsBroker::new().region("us-east-1")).await;
+}
+
+/// The lifecycle ladder in process: the same walk the live leg below makes. It ends on the
+/// assertion that matters most here - a publisher that aliased the connection must report the
+/// closed transport afterwards instead of succeeding, which the production broker does through
+/// its `closed` flag on both transports.
 // The closures below cannot become method paths: their bounds are higher-ranked, so a bare path
 // would bind one concrete lifetime.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_test_broker_passes_lifecycle() {
+async fn in_process_passes_lifecycle() {
     harness::lifecycle(
-        SqsTestBroker::new,
+        in_process,
         |name| SqsQueue::new(name),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
+/// The same ladder over the bare-name form, which resolves through `Subscribe` rather than
+/// through the crate's descriptor.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_passes_lifecycle_by_name() {
+    harness::lifecycle(
+        in_process,
+        |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
     .await;
@@ -65,9 +83,9 @@ async fn the_test_broker_passes_lifecycle() {
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_test_broker_honours_the_batch_size() {
+async fn in_process_honours_the_batch_size() {
     capabilities::batches(
-        SqsTestBroker::new,
+        in_process,
         |name| SqsQueue::new(name),
         |connected| connected.publisher(),
     )

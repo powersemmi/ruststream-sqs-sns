@@ -3,13 +3,13 @@
 
 mod broker;
 mod error;
+#[cfg(feature = "testing")]
+mod in_process;
 mod message;
 pub mod prelude;
 mod publisher;
 mod queue;
 mod subscriber;
-#[cfg(feature = "testing")]
-pub mod testing;
 
 pub use broker::{ConnectedSqsBroker, SqsBroker};
 pub use error::SqsError;

@@ -6,7 +6,6 @@
 
 use std::io;
 
-use ruststream::ConnectedBroker;
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -58,30 +57,34 @@ fn broker() -> SqsBroker {
 
 /// Wires both queues to the topic with raw delivery, so payloads and headers arrive unwrapped.
 ///
-/// Stays on the broker's own lifecycle ladder: topology administration is provisioning work
-/// (terraform or the console in production), and the app builder has no vocabulary for it. The
-/// queues themselves already exist by now - the subscriptions opened them.
+/// Topology administration is provisioning work (terraform or the console in production), and
+/// the app builder has no vocabulary for it, so it runs in a startup hook on a clone of the app's
+/// broker. A clone connects to the connection the app's broker already holds, which is also what
+/// a test running this app in process wires. The queues themselves already exist by now - the
+/// subscriptions opened them.
 // --8<-- [start:wiring]
-async fn wire_topology() -> io::Result<()> {
-    let connected = broker().connect().await.map_err(io::Error::other)?;
+async fn wire_topology(broker: SqsBroker) -> io::Result<()> {
+    let connected = broker.connect().await.map_err(io::Error::other)?;
     for queue in ["billing", "shipping"] {
         connected
             .subscribe_queue_to_topic("orders-events", queue)
             .await
             .map_err(io::Error::other)?;
     }
-    connected.shutdown().await.map_err(io::Error::other)
+    Ok(())
 }
 // --8<-- [end:wiring]
 
 // --8<-- [start:app]
 #[app]
 fn app() -> impl App {
+    let broker = broker();
+    let topology = broker.clone();
     RustStream::new(AppInfo::new("sns-fanout", "0.1.0"))
         // Registration order is run order across both hook levels, so the wiring lands before
         // the first order is placed.
-        .after_startup(async move |_state| wire_topology().await)
-        .with_broker(broker(), |b| {
+        .after_startup(async move |_state| wire_topology(topology).await)
+        .with_broker(broker, |b| {
             // One step binds the reply position, and `SnsPublish` on it names the fan-out.
             b.include(accept).out_reply(SnsPublish::default());
             b.include(bill);

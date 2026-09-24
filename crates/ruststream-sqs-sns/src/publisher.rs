@@ -1,6 +1,13 @@
 //! [`SqsPublisher`] (direct-to-queue) and [`SnsPublisher`] (topic fan-out), with their
 //! policies, their per-message settings and the builder steps that name them.
 
+// Without the `testing` feature the transport has one variant, so a `match` on it has a single
+// arm; the matches stay so that the in-process arm has its place when the feature is on.
+#![cfg_attr(
+    not(feature = "testing"),
+    allow(clippy::infallible_destructuring_match)
+)]
+
 use std::future::{Future, ready};
 
 use aws_sdk_sns::primitives::Blob;
@@ -12,15 +19,15 @@ use ruststream::{OutgoingFor, PairError, PublishPolicy, Publisher, Take};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
-use crate::broker::{ConnectedSqsBroker, Core, CoreCell};
+use crate::broker::{ConnectedSqsBroker, Core, CoreCell, Transport};
 use crate::error::{SqsError, sdk_err};
+#[cfg(feature = "testing")]
+use crate::in_process;
 use crate::message::{
     ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_attributes, encode_body, is_service_text,
 };
 #[cfg(feature = "asyncapi")]
 use crate::queue::SQS_BINDING_VERSION;
-#[cfg(feature = "testing")]
-use crate::testing::{ConnectedSqsTestBroker, SqsTestPublisher};
 
 /// The settings one publish may differ from the next in, on both SQS and SNS.
 ///
@@ -202,7 +209,7 @@ fn dedup_id() -> String {
 }
 
 /// The FIFO fields one send carries.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FifoSettings {
     pub(crate) group: String,
     pub(crate) deduplication: String,
@@ -268,7 +275,14 @@ impl Publisher for SqsPublisher {
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let core = self.core()?;
-        let url = core.queue_url(msg.name()).await?;
+        let aws = match &core.transport {
+            Transport::Aws(aws) => aws,
+            #[cfg(feature = "testing")]
+            Transport::InProcess(bus) => {
+                return in_process::send(bus, msg, options, self.default_group.as_deref());
+            }
+        };
+        let url = aws.queue_url(msg.name()).await?;
         // The destination is the caller's string and outlives the message the body is taken from.
         let (destination, payload, headers) = msg.into_parts();
         let (body, base64_marker) = encode_body(payload);
@@ -282,7 +296,7 @@ impl Publisher for SqsPublisher {
             self.default_group.as_deref(),
         )?;
 
-        let mut send = core.sqs.send_message().queue_url(&url).message_body(body);
+        let mut send = aws.sqs.send_message().queue_url(&url).message_body(body);
         if !attributes.is_empty() {
             send = send.set_message_attributes(Some(attributes));
         }
@@ -441,29 +455,6 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
     }
 }
 
-/// The same policy against the in-process stand-in, so a routes file's `.out_reply(Publish)`
-/// mounts on [`SqsTestBroker`](crate::testing::SqsTestBroker) as written. It is the stand-in's
-/// [`DefaultPublish`](ruststream::DefaultPublish) policy too, so a `publish("dest")` handler
-/// that binds nothing replies through it there as well.
-#[cfg(feature = "testing")]
-impl PublishPolicy<ConnectedSqsTestBroker> for SqsPublish {
-    type Live = SqsTestPublisher;
-
-    fn pair(
-        self,
-        connected: &ConnectedSqsTestBroker,
-    ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.publisher().with_default_group(self.group_id)))
-    }
-
-    // The same binding the real broker writes, so a document generated in a test is the
-    // document the service publishes.
-    #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self, channel: &str) -> Bindings {
-        sqs_channel_binding(channel)
-    }
-}
-
 /// Publishes notifications to SNS topics for fan-out.
 ///
 /// The destination is a topic name or ARN. A name resolves through the idempotent
@@ -522,12 +513,19 @@ impl Publisher for SnsPublisher {
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let core = self.core()?;
-        let arn = core.topic_arn(msg.name()).await?;
+        let aws = match &core.transport {
+            Transport::Aws(aws) => aws,
+            #[cfg(feature = "testing")]
+            Transport::InProcess(bus) => {
+                return in_process::publish_topic(bus, msg, options, self.default_group.as_deref());
+            }
+        };
+        let arn = aws.topic_arn(msg.name()).await?;
         // The destination is the caller's string and outlives the message the body is taken from.
         let (destination, payload, headers) = msg.into_parts();
         let (body, base64_marker) = encode_body(payload);
 
-        let mut publish = core.sns.publish().topic_arn(&arn).message(body);
+        let mut publish = aws.sns.publish().topic_arn(&arn).message(body);
         let mut partition_key = None;
         for (name, value) in headers.iter() {
             if name == PARTITION_KEY_HEADER {
@@ -646,33 +644,6 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
             .with_default_group(self.group_id)))
     }
 
-    #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self, channel: &str) -> Bindings {
-        sns_channel_binding(channel)
-    }
-}
-
-/// Fan-out against the in-process stand-in, so `.out_reply(SnsPublish::default())` mounts
-/// there as written.
-///
-/// Both policies pair into the one [`SqsTestPublisher`], because the router has no topic to
-/// fan out from: a message reaches the subscriptions on the destination it names, whichever
-/// policy carried it. So a test here proves the reply took the destination the SNS policy names,
-/// not that SNS delivered it onward to the queues subscribed to that topic - that is
-/// `subscribe_queue_to_topic`'s job and the live suite asserts it.
-#[cfg(feature = "testing")]
-impl PublishPolicy<ConnectedSqsTestBroker> for SnsPublish {
-    type Live = SqsTestPublisher;
-
-    fn pair(
-        self,
-        connected: &ConnectedSqsTestBroker,
-    ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.publisher().with_default_group(self.group_id)))
-    }
-
-    // A topic the router has no fan-out for is still the topic the document reports, so the
-    // binding is the one the real broker writes.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self, channel: &str) -> Bindings {
         sns_channel_binding(channel)

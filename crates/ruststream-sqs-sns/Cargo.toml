@@ -21,8 +21,9 @@ workspace = true
 
 [features]
 default = []
-# The in-process test broker (TestableBroker + TestApp support). The conformance harness is a
-# broker-author tool and stays in this repo's dev-dependencies, not in the user-facing feature.
+# The broker's in-process mode: `TestApp::start` connects `SqsBroker` without a server. A service
+# enables it in its dev-dependencies. The conformance harness is a broker-author tool and stays in
+# this repo's dev-dependencies, not in the user-facing feature.
 testing = ["ruststream/testing"]
 # What this broker contributes to the AsyncAPI document the framework generates: the `sqs` and
 # `sns` protocol bindings of the channels a subscription reads and a publish position writes.

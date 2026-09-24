@@ -1,4 +1,4 @@
-//! The declaration a service ships, mounted on the in-process transport.
+//! The declaration a service ships, run on the production broker in process.
 //!
 //! What a production routes file writes is `#[subscriber(SqsQueue::new(..))]`, whatever the mount
 //! site chains onto it, and the publish policy the reply position is bound to. That exact wiring
@@ -8,14 +8,17 @@
 #![cfg(feature = "testing")]
 
 use std::io;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use ruststream::testing::TestApp;
 use ruststream_sqs_sns::prelude::*;
-use ruststream_sqs_sns::testing::SqsTestBroker;
 use ruststream_sqs_sns::{PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER};
 use serde::{Deserialize, Serialize};
+
+/// The broker every app below is built on, as a service's `main` builds it.
+fn broker() -> SqsBroker {
+    SqsBroker::new().region("eu-west-1")
+}
 
 /// The payload the handlers below take, and the producer publishes: a decoded type, so the
 /// default codec sits on the path the way a service's does.
@@ -145,18 +148,19 @@ async fn forward(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_descriptor_declared_for_sqs_mounts_on_the_test_broker() {
-    let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(handle_order);
-        });
+    let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(), |b| {
+        b.include(handle_order);
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("orders", &Order { id: 1 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 1 })
+        .to("orders")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("orders")
         .assert_called_once()
         .with(&Order { id: 1 })
@@ -167,18 +171,19 @@ async fn a_descriptor_declared_for_sqs_mounts_on_the_test_broker() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_definition_that_fixes_only_the_kind_takes_the_mount_sites_name() {
-    let app =
-        RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(audit.name("audit-trail").wait(Duration::from_secs(10)));
-        });
+    let app = RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(broker(), |b| {
+        b.include(audit.name("audit-trail").wait(Duration::from_secs(10)));
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("audit-trail", &Order { id: 8 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 8 })
+        .to("audit-trail")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("audit-trail")
         .assert_called_once()
         .with(&Order { id: 8 })
@@ -189,7 +194,7 @@ async fn a_definition_that_fixes_only_the_kind_takes_the_mount_sites_name() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_mount_site_settings_ride_that_descriptor_in_process() {
-    let broker = SqsTestBroker::new();
+    let broker = broker();
     // A producer handle taken before the app is built: the harness's own publish drives each
     // message to a standstill, which would close a batch per message and say nothing about the
     // size the mount site named.
@@ -216,7 +221,7 @@ async fn the_mount_site_settings_ride_that_descriptor_in_process() {
     }
     tb.settle().await.expect("the batch settles");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("payments")
         .assert_called_once()
         .assert_batch_sizes(&[2])
@@ -231,7 +236,7 @@ async fn the_mount_site_settings_ride_that_descriptor_in_process() {
 /// rather than in production.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_batch_never_holds_more_than_one_receive_returns() {
-    let broker = SqsTestBroker::new();
+    let broker = broker();
     // A producer handle taken before the app is built, for the reason the test above gives: the
     // harness's own publish would close a batch per message.
     let producer = broker.publisher();
@@ -252,7 +257,7 @@ async fn a_batch_never_holds_more_than_one_receive_returns() {
 
     // Where the batches split depends on how the publishes fall against the receive's wait, so
     // the case pins the cap and the total, not the shape.
-    let broker = tb.broker::<SqsTestBroker>();
+    let broker = tb.broker::<SqsBroker>();
     let ledger = broker.subscriber("ledger");
     let sizes: Vec<usize> = ledger.batches::<Order>().iter().map(Vec::len).collect();
     assert!(
@@ -267,20 +272,21 @@ async fn a_batch_never_holds_more_than_one_receive_returns() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_takes_the_brokers_default_policy_in_process() {
-    let app =
-        RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            // No `.out(..)`: the reply rides whatever the connected broker names as its default
-            // policy, and in process that has to be the production one.
-            b.include(accept);
-        });
+    let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {
+        // No `.out(..)`: the reply rides whatever the connected broker names as its default
+        // policy, and in process that has to be the production one.
+        b.include(accept);
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("accepted", &Order { id: 1 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 1 })
+        .to("accepted")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<OrderPlaced>("order-events")
         .assert_called_once()
         .with(&OrderPlaced { id: 1 });
@@ -290,20 +296,21 @@ async fn a_reply_takes_the_brokers_default_policy_in_process() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_production_publish_policy_mounts_on_the_test_broker() {
-    let app =
-        RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            // The line a routes file writes, unchanged: the broker under it is the only
-            // difference between this and production.
-            b.include(accept).out_reply(Publish::default());
-        });
+    let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {
+        // The line a routes file writes, unchanged: the broker under it is the only
+        // difference between this and production.
+        b.include(accept).out_reply(Publish::default());
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("accepted", &Order { id: 2 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 2 })
+        .to("accepted")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<OrderPlaced>("order-events")
         .assert_called_once()
         .with(&OrderPlaced { id: 2 });
@@ -313,20 +320,21 @@ async fn the_production_publish_policy_mounts_on_the_test_broker() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fan_out_policy_mounts_the_same_way() {
-    let app =
-        RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(accept).out_reply(SnsPublish::default());
-        });
+    let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {
+        b.include(accept).out_reply(SnsPublish::default());
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("accepted", &Order { id: 3 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 3 })
+        .to("accepted")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
     // The reply reached the destination the fan-out policy names. Onward delivery to the queues
     // subscribed to that topic is SNS's own work and belongs to the live suite.
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<OrderPlaced>("order-events")
         .assert_called_once()
         .with(&OrderPlaced { id: 3 });
@@ -336,36 +344,33 @@ async fn the_fan_out_policy_mounts_the_same_way() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_startup_hook_publishes_under_the_group_the_policy_fixed() {
-    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
-        SqsTestBroker::new(),
-        |b| {
-            b.include(ship);
-            // The hook takes the live form of the production policy, so what it may call on that
-            // publisher is what decides whether the service's own startup code compiles here.
-            b.after_startup(
-                Publish::default().group_id("user-42"),
-                async move |sqs| -> io::Result<()> {
-                    sqs.message(&Order { id: 4 })
-                        .to("shipments.fifo")
-                        .publish()
-                        .await
-                        .map_err(io::Error::other)
-                },
-            );
-        },
-    );
+    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
+        b.include(ship);
+        // The hook takes the live form of the production policy, so what it may call on that
+        // publisher is what decides whether the service's own startup code compiles here.
+        b.after_startup(
+            Publish::default().group_id("user-42"),
+            async move |sqs| -> io::Result<()> {
+                sqs.message(&Order { id: 4 })
+                    .to("shipments.fifo")
+                    .publish()
+                    .await
+                    .map_err(io::Error::other)
+            },
+        );
+    });
 
     let tb = TestApp::start(app).await.expect("the app starts");
     tb.settle().await.expect("the startup publish settles");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("shipments.fifo")
         .assert_called_once()
         .with(&Order { id: 4 })
         .settled(HandlerOutcome::ack());
     // The group reaches the delivery where SQS puts it: the partition-key header a FIFO
     // delivery carries its message group id in.
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Order>("shipments.fifo")
         .assert_called_once()
         .with_header(PARTITION_KEY_HEADER, "user-42");
@@ -376,28 +381,25 @@ async fn a_startup_hook_publishes_under_the_group_the_policy_fixed() {
 /// The step on the publish builder wins over the group the policy fixed, for that one message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_call_step_wins_over_the_group_the_policy_fixed() {
-    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
-        SqsTestBroker::new(),
-        |b| {
-            b.include(ship);
-            b.after_startup(
-                Publish::default().group_id("user-42"),
-                async move |sqs| -> io::Result<()> {
-                    sqs.message(&Order { id: 5 })
-                        .to("shipments.fifo")
-                        .group_id("user-7")
-                        .publish()
-                        .await
-                        .map_err(io::Error::other)
-                },
-            );
-        },
-    );
+    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
+        b.include(ship);
+        b.after_startup(
+            Publish::default().group_id("user-42"),
+            async move |sqs| -> io::Result<()> {
+                sqs.message(&Order { id: 5 })
+                    .to("shipments.fifo")
+                    .group_id("user-7")
+                    .publish()
+                    .await
+                    .map_err(io::Error::other)
+            },
+        );
+    });
 
     let tb = TestApp::start(app).await.expect("the app starts");
     tb.settle().await.expect("the startup publish settles");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Order>("shipments.fifo")
         .assert_called_once()
         .with_header(PARTITION_KEY_HEADER, "user-7");
@@ -409,19 +411,18 @@ async fn a_call_step_wins_over_the_group_the_policy_fixed() {
 /// reads back a setting the transport has already folded into its own protocol fields.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_slot_view_reads_back_the_options_a_publish_carried() {
-    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
-        SqsTestBroker::new(),
-        |b| {
-            b.include(ship);
-            b.include(dispatch)
-                .out(Shipments, Publish::default().group_id("user-42"))
-                .build();
-        },
-    );
+    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
+        b.include(ship);
+        b.include(dispatch)
+            .out(Shipments, Publish::default().group_id("user-42"))
+            .build();
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("dispatch", &Order { id: 6 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 6 })
+        .to("dispatch")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
@@ -436,26 +437,25 @@ async fn the_slot_view_reads_back_the_options_a_publish_carried() {
 /// answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unstepped_slot_publish_carries_the_policy_defaults() {
-    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(
-        SqsTestBroker::new(),
-        |b| {
-            b.include(ship);
-            b.include(forward)
-                .out(Shipments, Publish::default().group_id("user-42"))
-                .build();
-        },
-    );
+    let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
+        b.include(ship);
+        b.include(forward)
+            .out(Shipments, Publish::default().group_id("user-42"))
+            .build();
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("forward", &Order { id: 7 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 7 })
+        .to("forward")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
     tb.out::<Shipments>()
         .assert_called_once()
         .assert_options_default();
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Order>("shipments.fifo")
         .assert_called_once()
         .with_header(PARTITION_KEY_HEADER, "user-42");
@@ -471,18 +471,19 @@ async fn an_unstepped_slot_publish_carries_the_policy_defaults() {
 /// log still holds the one original.
 #[tokio::test(start_paused = true)]
 async fn a_deferred_retry_waits_out_the_delay_in_process() {
-    let app =
-        RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(defer);
-        });
+    let app = RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(broker(), |b| {
+        b.include(defer);
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("invoices", &Order { id: 9 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 9 })
+        .to("invoices")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("invoices")
         .assert_called_once()
         .with(&Order { id: 9 })
@@ -490,10 +491,10 @@ async fn a_deferred_retry_waits_out_the_delay_in_process() {
 
     tb.advance(RETRY_DELAY).await.expect("the delay elapses");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("invoices")
         .assert_called(2);
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Order>("invoices")
         .assert_called_once();
 
@@ -515,21 +516,44 @@ async fn arbitrate(order: &Order) -> HandlerOutcome {
     HandlerOutcome::retry()
 }
 
-/// What each delivery of `count_attempts` reported as its receive count.
-static ATTEMPTS: Mutex<Vec<(u64, Option<String>)>> = Mutex::new(Vec::new());
+/// What one delivery of `count_attempts` reported as its receive count.
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+struct Attempt {
+    id: u64,
+    receives: Option<String>,
+}
+
+/// Where `count_attempts` reports each attempt, so the test reads the counts off the broker.
+#[derive(OutSlot)]
+#[publishes(Attempt)]
+struct Attempts;
 
 /// A handler that reads how many times the queue has handed this message over. The header is
-/// the crate's own spelling of `ApproximateReceiveCount`, and the stand-in sets it too.
+/// the crate's own spelling of `ApproximateReceiveCount`, and it reports every reading before it
+/// asks for the message again.
 #[subscriber(SqsQueue::new("attempts"))]
-async fn count_attempts(order: &Order, cx: &mut Context<'_>) -> HandlerOutcome {
+async fn count_attempts(
+    order: &Order,
+    cx: &mut Context<'_>,
+    Out(attempts): Out<impl Publisher, Attempts>,
+) -> HandlerOutcome {
     let receives = cx
         .headers()
         .get(RECEIVE_COUNT_HEADER)
         .map(|value| String::from_utf8_lossy(value).into_owned());
-    ATTEMPTS
-        .lock()
-        .expect("the attempt log")
-        .push((order.id, receives));
+    let attempt = Attempt {
+        id: order.id,
+        receives,
+    };
+    if attempts
+        .message(&attempt)
+        .to("attempt-log")
+        .publish()
+        .await
+        .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
     HandlerOutcome::retry()
 }
 
@@ -539,16 +563,17 @@ async fn count_attempts(order: &Order, cx: &mut Context<'_>) -> HandlerOutcome {
 /// registration binds no retry publisher.
 #[tokio::test(start_paused = true)]
 async fn a_capped_delivery_ends_in_the_dead_letter_queue() {
-    let app =
-        RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(appraise)
-                .max_attempts(nonzero!(3u32))
-                .dead_letter("claims-dead");
-        });
+    let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
+        b.include(appraise)
+            .max_attempts(nonzero!(3u32))
+            .dead_letter("claims-dead");
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("claims", &Order { id: 7 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 7 })
+        .to("claims")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
@@ -558,10 +583,10 @@ async fn a_capped_delivery_ends_in_the_dead_letter_queue() {
         tb.advance(RETRY_DELAY).await.expect("the delay elapses");
     }
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("claims")
         .assert_called(3);
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Order>("claims-dead")
         .assert_called_once()
         .with(&Order { id: 7 });
@@ -574,23 +599,24 @@ async fn a_capped_delivery_ends_in_the_dead_letter_queue() {
 /// it off on the receive that follows.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_immediate_retry_obeys_the_same_cap() {
-    let app =
-        RustStream::new(AppInfo::new("disputes", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(arbitrate)
-                .max_attempts(nonzero!(3u32))
-                .dead_letter("disputes-dead");
-        });
+    let app = RustStream::new(AppInfo::new("disputes", "0.1.0")).with_broker(broker(), |b| {
+        b.include(arbitrate)
+            .max_attempts(nonzero!(3u32))
+            .dead_letter("disputes-dead");
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("disputes", &Order { id: 11 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 11 })
+        .to("disputes")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("disputes")
         .assert_called(3);
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Order>("disputes-dead")
         .assert_called_once()
         .with(&Order { id: 11 });
@@ -599,29 +625,37 @@ async fn an_immediate_retry_obeys_the_same_cap() {
 }
 
 /// A handler reads the queue's own receive count, so it can tell a first attempt from a last
-/// one. The stand-in counts receives the way the queue does, so the reading is the same here.
+/// one. The in-process queue counts receives the way SQS does, so the reading is the same here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_handler_reads_the_queues_receive_count() {
-    let app =
-        RustStream::new(AppInfo::new("attempts", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(count_attempts)
-                .max_attempts(nonzero!(3u32))
-                .dead_letter("attempts-dead");
-        });
+    let app = RustStream::new(AppInfo::new("attempts", "0.1.0")).with_broker(broker(), |b| {
+        b.include(count_attempts)
+            .max_attempts(nonzero!(3u32))
+            .dead_letter("attempts-dead")
+            .out(Attempts, Publish::default())
+            .build();
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("attempts", &Order { id: 3 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 3 })
+        .to("attempts")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
+    let log = tb.broker::<SqsBroker>().published::<Attempt>("attempt-log");
+    let attempts: Vec<Attempt> = log
+        .messages()
+        .iter()
+        .map(|message| serde_json::from_slice(message.payload()).expect("an attempt decodes"))
+        .collect();
     assert_eq!(
-        ATTEMPTS.lock().expect("the attempt log").as_slice(),
-        &[
-            (3, Some("1".to_owned())),
-            (3, Some("2".to_owned())),
-            (3, Some("3".to_owned())),
-        ],
+        attempts,
+        [1, 2, 3].map(|receives| Attempt {
+            id: 3,
+            receives: Some(receives.to_string()),
+        }),
         "the count follows the queue's own receives, starting at one",
     );
 
@@ -633,23 +667,24 @@ async fn a_handler_reads_the_queues_receive_count() {
 /// the dead-letter queue, on the receive that runs the policy out.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bare_name_declaration_reaches_the_queues_redrive_policy() {
-    let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(reprice)
-                .max_attempts(nonzero!(5u32))
-                .dead_letter("orders-dead");
-        });
+    let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(), |b| {
+        b.include(reprice)
+            .max_attempts(nonzero!(5u32))
+            .dead_letter("orders-dead");
+    });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.broker::<SqsTestBroker>()
-        .publish("orders", &Order { id: 5 })
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 5 })
+        .to("orders")
+        .publish()
         .await
         .expect("the publish drives the handler to a standstill");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("orders")
         .assert_called(5);
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Order>("orders-dead")
         .assert_called_once()
         .with(&Order { id: 5 });
@@ -661,10 +696,9 @@ async fn a_bare_name_declaration_reaches_the_queues_redrive_policy() {
 /// nowhere else to carry a cap, so the service would run with one the queue never received.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn half_a_bare_name_declaration_refuses_to_start() {
-    let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(reprice).max_attempts(nonzero!(2u32));
-        });
+    let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(), |b| {
+        b.include(reprice).max_attempts(nonzero!(2u32));
+    });
 
     let refused = TestApp::start(app)
         .await
@@ -680,10 +714,9 @@ async fn half_a_bare_name_declaration_refuses_to_start() {
 /// service would otherwise run with a cap the queue never received.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn half_a_declaration_refuses_to_start() {
-    let app =
-        RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(audit.name("half")).max_attempts(nonzero!(2u32));
-        });
+    let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
+        b.include(audit.name("half")).max_attempts(nonzero!(2u32));
+    });
 
     let refused = TestApp::start(app)
         .await

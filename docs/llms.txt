@@ -24,7 +24,7 @@ This site holds the entry pages. The crate's guide is its overview on docs.rs, a
 - [FIFO message groups](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#fifo-message-groups): the message group per publish or per position
 - [The prelude](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#the-prelude): what a routes file and a handler file import
 - [The generated document](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#the-generated-document): the `sqs` bindings the `asyncapi` feature reports
-- [Testing](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#testing): the in-process broker behind the `testing` feature, driven by `TestApp`
+- [Testing](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#testing): the production app under `TestApp`, with `SqsBroker` in process or against a live stack
 - [Operations](https://docs.rs/ruststream-sqs-sns/latest/ruststream_sqs_sns/index.html#operations): credentials, region, a local stack endpoint and timeouts
 
 ## Optional

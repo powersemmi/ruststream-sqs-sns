@@ -35,7 +35,7 @@
 - **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); a handler's reply takes it with one mount step, `.out_reply(SnsPublish::default())`, and `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
 - **Protocol bindings in the generated document** (feature `asyncapi`). Every channel a queue descriptor opens carries an `sqs` channel binding: the queue's name, whether it is FIFO, and the polling settings the descriptor names. Values that need a connection (a queue's ARN, a timeout the descriptor left to the queue) stay out, and so does every credential.
 - **Text bodies.** SQS bodies are text, and the service's idea of text is narrower than UTF-8: a payload it accepts passes through untouched, and anything else - binary, or valid UTF-8 carrying control characters - travels base64-encoded with a marker attribute and decodes transparently on receive. The same rule picks `String` or `Binary` for each header attribute. A handler that parses the body itself takes the framework's byte lane (`#[derive(Deserialized)]` over `&[u8]`, no codec on the path) and sees the bytes the producer sent: the base64 hop is already undone by then.
-- **In-process test broker** (feature `testing`). `SqsTestBroker` reproduces this crate's core routing with no server, so a service's handlers run under the framework's `TestApp` harness, and it answers the way the real queues do, which the crate's own tests hold it to. The crate's own types mount on it: `SqsQueue` opens a subscription there, and `SqsPublish` and `SnsPublish` pair there, so the `#[subscriber(SqsQueue::new(..))]` and the `.out_reply(Publish::default())` a service ships are what the test runs - no stand-in descriptor, no stand-in policy. A deferred retry waits out its delay there as the queue makes it wait, so `retry_after` is driven with `tb.advance(..)` and no copy is republished, and a registration's redrive policy moves a spent delivery to the dead-letter queue where `tb.published::<T>(..)` reads it. The harness reads back the per-message settings a slot publish carried, with `tb.out::<Marker>().with_options(..)`.
+- **Tests on the production app** (feature `testing`). The framework's `TestApp` runs the app `main` runs, with `SqsBroker` connected in process and no server. The in-process account behaves as SQS and SNS do - one receiver per message, visibility timeouts, the receive count and the redrive policy, FIFO groups and deduplication, topic fan-out - and refuses what they refuse. `TestApp::start_live` runs the same test against a running stack.
 
 ## Install
 
@@ -94,14 +94,11 @@ fn service() -> impl App {
 
 ## Test it
 
-App-level tests go through the framework's `TestApp`: it starts the application on the in-process transport the `testing` feature ships - no server, same routing, same ladder - injects as an external producer would, and drives the reaction to a standstill before the assertions run.
-
-The descriptor and the policies mount there as written, so the handler under test is the one the service ships: `#[subscriber(SqsQueue::new(..))]` opens a subscription on the stand-in, and `SqsPublish` and `SnsPublish` pair there.
+The app `main` runs, handed to the harness unchanged: `TestApp::start` connects `SqsBroker` in process, with no server, and the test addresses it by that type.
 
 ```rust
 use ruststream::testing::TestApp;
 use ruststream_sqs_sns::prelude::*;
-use ruststream_sqs_sns::testing::SqsTestBroker;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Outgoing)]
@@ -120,17 +117,23 @@ async fn accept(order: &PlaceOrder) -> OrderPlaced {
     OrderPlaced { id: order.id }
 }
 
+fn app() -> RustStream {
+    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+        b.include(accept);
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_accepted_order_is_announced() -> Result<(), Box<dyn std::error::Error>> {
-    let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(accept);
-        });
-    let tb = TestApp::start(app).await?;
+    let tb = TestApp::start(app()).await?;
 
-    tb.message(&PlaceOrder { id: 1 }).publish().await?;
+    // `publish` returns once the handlers it woke have settled.
+    tb.broker::<SqsBroker>()
+        .message(&PlaceOrder { id: 1 })
+        .publish()
+        .await?;
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<OrderPlaced>("orders-events")
         .assert_called_once()
         .with(&OrderPlaced { id: 1 });
@@ -138,7 +141,7 @@ async fn an_accepted_order_is_announced() -> Result<(), Box<dyn std::error::Erro
 }
 ```
 
-SQS behaviour itself (visibility, redelivery, FIFO, SNS fan-out) is covered by the env-gated live suite instead: `just test-brokers` starts LocalStack and runs the integration tests plus the framework conformance lifecycle against it.
+The in-process mode reads the broker's own settings and refuses what SQS and SNS refuse. `TestApp::start_live(app())` runs the same test against a running stack, which is where a queue's storage while nothing reads it, the visibility timeout an operator set on a queue, and credentials are exercised (`just test-brokers` starts LocalStack for it).
 
 ## Layout
 
@@ -156,7 +159,7 @@ ruststream-sqs-sns/
 
 ```bash
 just check          # fmt, clippy, feature checks
-just test           # handler-stub tests, no server
+just test           # the in-process suite, no server
 just test-brokers   # live integration + conformance against LocalStack
 ```
 
