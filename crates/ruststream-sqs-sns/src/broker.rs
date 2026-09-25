@@ -50,11 +50,11 @@ pub(crate) struct Core {
     /// A bare name carries no descriptor to hold the declaration, and the call that takes it
     /// has no queue URL yet, so the policy waits here for the `subscribe` that writes it.
     declared_redrives: StdMutex<HashMap<String, Redrive>>,
-    /// The queues this broker subscribed to each topic, by topic, which is how the test harness
-    /// learns where a fan-out publish goes. Recorded on both transports, because a live test
-    /// waits on the same answer.
+    /// Where this broker's publishes went, which is how the test harness learns which
+    /// subscriptions a publish reaches. Recorded on both transports, because a live test waits
+    /// on the same answer.
     #[cfg(feature = "testing")]
-    pub(crate) topic_queues: StdMutex<HashMap<String, Vec<String>>>,
+    pub(crate) routing: in_process::Routing,
 }
 
 /// What a connected broker and every handle paired off it speak over: the AWS clients, or, under
@@ -95,7 +95,7 @@ impl Core {
             closed: AtomicBool::new(false),
             declared_redrives: StdMutex::new(HashMap::new()),
             #[cfg(feature = "testing")]
-            topic_queues: StdMutex::new(HashMap::new()),
+            routing: in_process::Routing::default(),
         }
     }
 

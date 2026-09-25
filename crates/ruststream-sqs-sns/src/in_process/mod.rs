@@ -31,6 +31,7 @@
 
 mod bus;
 mod deliveries;
+mod routing;
 
 use std::sync::Arc;
 
@@ -40,6 +41,7 @@ use ruststream::{BytesMut, HeaderMap, OutgoingFor, OutgoingMessage, RawMessage, 
 pub(crate) use bus::Bus;
 use bus::{DEFAULT_VISIBILITY, Outbound, queue_key, topic_key};
 pub(crate) use deliveries::{BusDeliveries, BusReceipt};
+pub(crate) use routing::{Routing, Surface};
 
 use crate::SqsPublishOptions;
 use crate::broker::{ConnectedSqsBroker, Transport};
@@ -183,19 +185,9 @@ pub(crate) fn publish_topic(
 impl ConnectedSqsBroker {
     /// Notes that `queue` is subscribed to `topic`, for [`TestableBroker::routes`].
     pub(crate) fn record_topic_queue(&self, topic: &str, queue: &str) {
-        let (Ok(topic), Ok(queue)) = (topic_key(topic), queue_key(queue)) else {
-            return;
-        };
-        let mut topics = self
-            .core
-            .topic_queues
-            .lock()
-            .expect("the topic record mutex is poisoned");
-        let queues = topics.entry(topic).or_default();
-        if !queues.contains(&queue) {
-            queues.push(queue);
+        if let (Ok(topic), Ok(queue)) = (topic_key(topic), queue_key(queue)) {
+            self.core.routing.subscribe(topic, queue);
         }
-        drop(topics);
     }
 
     /// The in-process account, which is all the harness drives.
@@ -265,18 +257,18 @@ impl TestableBroker for ConnectedSqsBroker {
     /// Two names reach the same queue when they map onto the same queue name: a queue URL by its
     /// last path segment, a name through the alphabet SQS takes (`order.events` is
     /// `order-events`).
+    ///
+    /// A queue and a topic may carry one name. The publisher tells them apart: each publish a
+    /// paired [`SqsPublisher`](crate::SqsPublisher) sent reaches the queue, each one a paired
+    /// [`SnsPublisher`](crate::SnsPublisher) sent reaches the topic's queues, and the harness,
+    /// which asks once per publish on every pass, is answered with each as many times as it
+    /// happened.
     fn routes(&self, destination: &str, subscriptions: &[&str]) -> Vec<usize> {
-        let fanned_out = topic_key(destination).ok().and_then(|topic| {
-            self.core
-                .topic_queues
-                .lock()
-                .expect("the topic record mutex is poisoned")
-                .get(&topic)
-                .cloned()
-        });
-        let queues = fanned_out
-            .filter(|queues| !queues.is_empty())
-            .unwrap_or_else(|| queue_key(destination).into_iter().collect());
+        let fanned_out = topic_key(destination)
+            .ok()
+            .and_then(|topic| self.core.routing.fanned_out(&topic))
+            .filter(|_| self.core.routing.next_surface(destination) != Some(Surface::Queue));
+        let queues = fanned_out.unwrap_or_else(|| queue_key(destination).into_iter().collect());
         let mut positions: Vec<usize> = queues
             .iter()
             .filter_map(|queue| {

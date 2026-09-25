@@ -160,6 +160,10 @@ where
 pub struct SqsPublisher {
     cell: CoreCell,
     default_group: Option<String>,
+    /// Whether a policy paired this publisher, which is when the test harness records what it
+    /// publishes and asks the broker where each publish went.
+    #[cfg(feature = "testing")]
+    paired: bool,
 }
 
 impl std::fmt::Debug for SqsPublisher {
@@ -173,13 +177,30 @@ impl SqsPublisher {
         Self {
             cell,
             default_group: None,
+            #[cfg(feature = "testing")]
+            paired: false,
         }
     }
 
     /// The publisher the policy paired: the same connection, under the group the policy fixed.
-    pub(crate) fn with_default_group(mut self, group: Option<String>) -> Self {
+    pub(crate) fn paired_by_policy(mut self, group: Option<String>) -> Self {
         self.default_group = group;
+        #[cfg(feature = "testing")]
+        {
+            self.paired = true;
+        }
         self
+    }
+
+    /// Notes where a publish this paired publisher made went, for the test harness.
+    #[cfg(feature = "testing")]
+    fn note(&self, destination: &str) {
+        if self.paired
+            && let Some(core) = self.cell.get()
+        {
+            core.routing
+                .published(destination, in_process::Surface::Queue);
+        }
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -274,6 +295,24 @@ impl Publisher for SqsPublisher {
         msg: OutgoingFor<'_, Take>,
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
+        #[cfg(feature = "testing")]
+        let destination = msg.name();
+        let sent = self.send(msg, options).await;
+        #[cfg(feature = "testing")]
+        if sent.is_ok() {
+            self.note(destination);
+        }
+        sent
+    }
+}
+
+impl SqsPublisher {
+    /// `SendMessage` of one message to the queue it names.
+    async fn send(
+        &self,
+        msg: OutgoingFor<'_, Take>,
+        options: Option<&SqsPublishOptions>,
+    ) -> Result<(), SqsError> {
         let core = self.core()?;
         let aws = match &core.transport {
             Transport::Aws(aws) => aws,
@@ -446,7 +485,7 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
         self,
         connected: &ConnectedSqsBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.publisher().with_default_group(self.group_id)))
+        ready(Ok(connected.publisher().paired_by_policy(self.group_id)))
     }
 
     #[cfg(feature = "asyncapi")]
@@ -472,6 +511,10 @@ impl PublishPolicy<ConnectedSqsBroker> for SqsPublish {
 pub struct SnsPublisher {
     cell: CoreCell,
     default_group: Option<String>,
+    /// Whether a policy paired this publisher, which is when the test harness records what it
+    /// publishes and asks the broker where each publish went.
+    #[cfg(feature = "testing")]
+    paired: bool,
 }
 
 impl std::fmt::Debug for SnsPublisher {
@@ -485,13 +528,30 @@ impl SnsPublisher {
         Self {
             cell,
             default_group: None,
+            #[cfg(feature = "testing")]
+            paired: false,
         }
     }
 
     /// The publisher the policy paired: the same connection, under the group the policy fixed.
-    pub(crate) fn with_default_group(mut self, group: Option<String>) -> Self {
+    pub(crate) fn paired_by_policy(mut self, group: Option<String>) -> Self {
         self.default_group = group;
+        #[cfg(feature = "testing")]
+        {
+            self.paired = true;
+        }
         self
+    }
+
+    /// Notes where a publish this paired publisher made went, for the test harness.
+    #[cfg(feature = "testing")]
+    fn note(&self, destination: &str) {
+        if self.paired
+            && let Some(core) = self.cell.get()
+        {
+            core.routing
+                .published(destination, in_process::Surface::Topic);
+        }
     }
 
     fn core(&self) -> Result<&Core, SqsError> {
@@ -512,6 +572,24 @@ impl Publisher for SnsPublisher {
         msg: OutgoingFor<'_, Take>,
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
+        #[cfg(feature = "testing")]
+        let destination = msg.name();
+        let published = self.publish_to_topic(msg, options).await;
+        #[cfg(feature = "testing")]
+        if published.is_ok() {
+            self.note(destination);
+        }
+        published
+    }
+}
+
+impl SnsPublisher {
+    /// `Publish` of one message to the topic it names.
+    async fn publish_to_topic(
+        &self,
+        msg: OutgoingFor<'_, Take>,
+        options: Option<&SqsPublishOptions>,
+    ) -> Result<(), SqsError> {
         let core = self.core()?;
         let aws = match &core.transport {
             Transport::Aws(aws) => aws,
@@ -641,7 +719,7 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected
             .sns_publisher()
-            .with_default_group(self.group_id)))
+            .paired_by_policy(self.group_id)))
     }
 
     #[cfg(feature = "asyncapi")]

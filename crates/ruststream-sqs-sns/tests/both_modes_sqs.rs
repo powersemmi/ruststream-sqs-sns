@@ -202,3 +202,109 @@ async fn live_a_reply_fans_out_to_every_subscribed_queue() -> Result<(), Box<dyn
     }
     a_reply_fans_out_to_every_subscribed_queue(TestApp::start_live(fan_out()).await?).await
 }
+
+// --- A topic and a queue under one name ----------------------------------------------------
+
+/// The name a queue and a topic share: a parcel arrives on the queue, and its announcement fans
+/// out from the topic.
+const PARCELS: &str = "both-modes-parcels";
+const AUDIT: &str = "both-modes-parcels-audit";
+const NOTIFY: &str = "both-modes-parcels-notify";
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+struct Parcel {
+    id: u64,
+}
+
+/// The announcement names the topic, which carries the queue's name.
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+#[outgoing(name = "both-modes-parcels")]
+struct ParcelAnnounced {
+    parcel: u64,
+}
+
+#[subscriber(SqsQueue, publish)]
+async fn receive(parcel: &Parcel) -> ParcelAnnounced {
+    ParcelAnnounced { parcel: parcel.id }
+}
+
+#[subscriber(SqsQueue)]
+async fn audit(announced: &ParcelAnnounced) -> HandlerOutcome {
+    let _ = announced.parcel;
+    HandlerOutcome::ack()
+}
+
+#[subscriber(SqsQueue)]
+async fn notify(announced: &ParcelAnnounced) -> HandlerOutcome {
+    let _ = announced.parcel;
+    HandlerOutcome::ack()
+}
+
+/// Subscribes the audit and notify queues to the topic that shares the parcels queue's name.
+async fn wire_parcels(broker: SqsBroker) -> io::Result<()> {
+    let connected = broker.connect().await.map_err(io::Error::other)?;
+    for queue in [AUDIT, NOTIFY] {
+        connected
+            .subscribe_queue_to_topic(PARCELS, queue)
+            .await
+            .map_err(io::Error::other)?;
+    }
+    Ok(())
+}
+
+fn parcels() -> RustStream {
+    let broker = broker();
+    let topology = broker.clone();
+    RustStream::new(AppInfo::new("parcels", "0.1.0"))
+        .after_startup(async move |_state| wire_parcels(topology).await)
+        .with_broker(broker, |b| {
+            b.include(receive.name(PARCELS).create_if_missing())
+                .out_reply(SnsPublish::default());
+            b.include(audit.name(AUDIT).create_if_missing());
+            b.include(notify.name(NOTIFY).create_if_missing());
+        })
+}
+
+/// A publish goes where its publisher sends it, whatever else carries the name: the parcel sent to
+/// the queue reaches the queue's handler alone, and the announcement published to the topic of
+/// the same name reaches the two queues subscribed to it.
+async fn a_queue_and_a_topic_of_one_name_reach_their_own_handlers(
+    tb: TestApp<()>,
+) -> Result<(), Box<dyn Error>> {
+    tb.broker::<SqsBroker>()
+        .message(&Parcel { id: 3 })
+        .to(PARCELS)
+        .publish()
+        .await?;
+
+    tb.broker::<SqsBroker>()
+        .subscriber(PARCELS)
+        .assert_called_once()
+        .with(&Parcel { id: 3 })
+        .settled(HandlerOutcome::ack());
+    for queue in [AUDIT, NOTIFY] {
+        tb.broker::<SqsBroker>()
+            .subscriber(queue)
+            .assert_called_once()
+            .with(&ParcelAnnounced { parcel: 3 })
+            .settled(HandlerOutcome::ack());
+    }
+    tb.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_a_queue_and_a_topic_of_one_name_reach_their_own_handlers()
+-> Result<(), Box<dyn Error>> {
+    a_queue_and_a_topic_of_one_name_reach_their_own_handlers(TestApp::start(parcels()).await?).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_a_queue_and_a_topic_of_one_name_reach_their_own_handlers()
+-> Result<(), Box<dyn Error>> {
+    if live::endpoint("SQS_TEST_ENDPOINT").is_none() {
+        return Ok(());
+    }
+    a_queue_and_a_topic_of_one_name_reach_their_own_handlers(TestApp::start_live(parcels()).await?)
+        .await
+}
