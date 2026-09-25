@@ -15,7 +15,8 @@ use std::time::Duration;
 use futures::StreamExt;
 use ruststream::testing::{InProcess, TestApp, TestableBroker};
 use ruststream::{
-    BatchSubscriber, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, Subscriber,
+    BatchSubscriber, HeaderMap, IncomingMessage, OutgoingMessage, PublishPolicy, Publisher,
+    Subscriber,
 };
 use ruststream_sqs_sns::prelude::*;
 use ruststream_sqs_sns::{ConnectedSqsBroker, RECEIVE_COUNT_HEADER, SqsError};
@@ -365,5 +366,38 @@ async fn a_publish_to_a_topic_routes_to_every_subscribed_queue() -> Result<(), B
     }
     let subscriptions = ["billing", "orders", "shipping"];
     assert_eq!(connected.routes("events", &subscriptions), [0, 2]);
+    Ok(())
+}
+
+/// A topic and a queue may share a name, and a publish is routed by the publisher that sent it:
+/// the queue's own subscription is owed what was sent to the queue, the queues subscribed to the
+/// topic are owed what was published to the topic. The harness asks once per publish, in publish
+/// order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_and_a_topic_of_one_name_route_by_the_publisher() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    connected
+        .subscribe_queue_to_topic("events", "billing")
+        .await?;
+    let queue = SqsPublish::default().pair(&connected).await?;
+    let topic = SnsPublish::default().pair(&connected).await?;
+    queue
+        .publish(OutgoingMessage::new("events", b"sent".as_slice()), None)
+        .await?;
+    topic
+        .publish(
+            OutgoingMessage::new("events", b"published".as_slice()),
+            None,
+        )
+        .await?;
+
+    let subscriptions = ["events", "billing"];
+    let mut owed = [0; 2];
+    for _ in 0..2 {
+        for position in connected.routes("events", &subscriptions) {
+            owed[position] += 1;
+        }
+    }
+    assert_eq!(owed, [1, 1]);
     Ok(())
 }
