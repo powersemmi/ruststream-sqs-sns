@@ -250,10 +250,17 @@ async fn a_batch_never_holds_more_than_one_receive_returns() {
     }
     tb.settle().await.expect("the batches settle");
 
-    tb.broker::<SqsTestBroker>()
-        .subscriber("ledger")
-        .assert_batch_sizes(&[10, 10, 5])
-        .settled(HandlerOutcome::ack());
+    // Where the batches split depends on how the publishes fall against the receive's wait, so
+    // the case pins the cap and the total, not the shape.
+    let broker = tb.broker::<SqsTestBroker>();
+    let ledger = broker.subscriber("ledger");
+    let sizes: Vec<usize> = ledger.batches::<Order>().iter().map(Vec::len).collect();
+    assert!(
+        sizes.iter().all(|size| *size <= 10),
+        "a batch held more than one receive returns: {sizes:?}"
+    );
+    assert_eq!(sizes.iter().sum::<usize>(), 25, "batches {sizes:?}");
+    ledger.settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("the app shuts down");
 }
