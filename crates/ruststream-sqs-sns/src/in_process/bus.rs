@@ -85,6 +85,9 @@ struct Account {
     topics: HashMap<String, Vec<Endpoint>>,
     /// Every message that arrived at a queue or a topic, by the name it was addressed by.
     log: HashMap<String, Vec<RawMessage>>,
+    /// The deduplication ids each FIFO topic saw within the window, by topic: a repeat is
+    /// accepted and reaches no subscriber, whatever kind of queue it is.
+    topic_deduplication: HashMap<String, HashMap<String, Instant>>,
 }
 
 /// A queue subscribed to a topic.
@@ -165,15 +168,19 @@ impl Queue {
 
     /// Whether `id` arrived within the deduplication window, remembering it when not.
     fn duplicate(&mut self, id: &str) -> bool {
-        let now = Instant::now();
-        self.deduplication
-            .retain(|_, seen| now.duration_since(*seen) < DEDUPLICATION_WINDOW);
-        if self.deduplication.contains_key(id) {
-            return true;
-        }
-        self.deduplication.insert(id.to_owned(), now);
-        false
+        seen_within_window(&mut self.deduplication, id)
     }
+}
+
+/// Whether `id` is in `seen` within the deduplication window, remembering it when not.
+fn seen_within_window(seen: &mut HashMap<String, Instant>, id: &str) -> bool {
+    let now = Instant::now();
+    seen.retain(|_, at| now.duration_since(*at) < DEDUPLICATION_WINDOW);
+    if seen.contains_key(id) {
+        return true;
+    }
+    seen.insert(id.to_owned(), now);
+    false
 }
 
 fn group_of(stored: &Stored) -> Option<&str> {
@@ -458,6 +465,17 @@ impl Bus {
         let mut account = self.account();
         let entry = log_entry(name, outbound);
         account.log.entry(name.to_owned()).or_default().push(entry);
+        // A FIFO topic drops a repeat itself, before the fan-out: a standard queue subscribed to
+        // it, whose copy carries no deduplication id, does not receive the repeat either.
+        if let Some(settings) = &outbound.fifo {
+            let seen = account
+                .topic_deduplication
+                .entry(topic.to_owned())
+                .or_default();
+            if seen_within_window(seen, &settings.deduplication) {
+                return Ok(());
+            }
+        }
         let endpoints = account.topics.get(topic).cloned().unwrap_or_default();
         for endpoint in endpoints {
             let mut copy = outbound.clone();

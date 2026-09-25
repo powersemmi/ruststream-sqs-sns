@@ -296,6 +296,34 @@ async fn an_empty_body_is_refused() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// A FIFO topic drops a repeated deduplication id before its fan-out, so a standard queue
+/// subscribed to it, whose copy carries no id of its own, receives the message once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fifo_topic_fans_a_deduplication_id_out_once() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let mut inbox = connected.subscribe_queue(SqsQueue::new("audit")).await?;
+    connected
+        .subscribe_queue_to_topic("events.fifo", "audit")
+        .await?;
+    let options = SqsPublishOptions::default()
+        .group_id("orders")
+        .deduplication_id("order-1");
+    let sns = connected.sns_publisher();
+    for _ in 0..2 {
+        sns.publish(
+            OutgoingMessage::new("events.fifo", b"once".as_slice()),
+            Some(&options),
+        )
+        .await?;
+    }
+
+    let mut batches = pin!(inbox.batches(nonzero!(10)));
+    let received = batches.next().await.ok_or("the stream ended")??;
+    let bodies: Vec<&[u8]> = received.iter().map(IncomingMessage::payload).collect();
+    assert_eq!(bodies, [b"once".as_slice()]);
+    Ok(())
+}
+
 /// SNS refuses to subscribe a FIFO queue to a standard topic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fifo_queue_cannot_subscribe_to_a_standard_topic() -> Result<(), Box<dyn Error>> {

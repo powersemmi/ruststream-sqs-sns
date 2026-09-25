@@ -11,6 +11,7 @@ use std::time::Duration;
 use futures::{Stream, StreamExt};
 use ruststream::AckError;
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 use super::bus::Bus;
 use crate::error::SqsError;
@@ -120,6 +121,7 @@ impl BusDeliveries {
                                 queue: self.queue.clone(),
                                 receipt: received.receipt,
                                 visibility: self.visibility,
+                                received: Instant::now(),
                                 settled: AtomicBool::new(false),
                             },
                             self.redrive_max,
@@ -156,6 +158,8 @@ pub(crate) struct BusReceipt {
     queue: String,
     receipt: u64,
     visibility: Duration,
+    /// When the queue handed the delivery out: its visibility runs from here, not from the drop.
+    received: Instant,
     settled: AtomicBool,
 }
 
@@ -181,14 +185,28 @@ impl Drop for BusReceipt {
     fn drop(&mut self) {
         if !*self.settled.get_mut() {
             // A receipt that is no longer in flight has nothing left to return.
+            let remaining = remaining_visibility(self.visibility, self.received.elapsed());
             let _ = self
                 .bus
-                .change_visibility(&self.queue, self.receipt, self.visibility);
+                .change_visibility(&self.queue, self.receipt, remaining);
         }
         if let Some(coordinator) = self.bus.coordinator() {
             coordinator.consumed();
         }
     }
+}
+
+/// How long a delivery dropped `held` after it was received stays invisible, as a live delivery
+/// does: the visibility runs from the receive, and the handle extends it to a full timeout every
+/// half timeout (at least every second) while it is held.
+fn remaining_visibility(visibility: Duration, held: Duration) -> Duration {
+    if visibility.is_zero() {
+        return Duration::ZERO;
+    }
+    let period = (visibility / 2).max(Duration::from_secs(1));
+    let periods = held.as_nanos() / period.as_nanos();
+    let last_extension = period.saturating_mul(u32::try_from(periods).unwrap_or(u32::MAX));
+    (last_extension + visibility).saturating_sub(held)
 }
 
 impl fmt::Debug for BusReceipt {
@@ -197,5 +215,22 @@ impl fmt::Debug for BusReceipt {
             .field("queue", &self.queue)
             .field("receipt", &self.receipt)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::remaining_visibility;
+
+    #[test]
+    fn the_visibility_runs_from_the_receive_and_its_extensions() {
+        let visibility = Duration::from_secs(30);
+        let at = |held| remaining_visibility(visibility, Duration::from_secs(held));
+        assert_eq!(at(0), Duration::from_secs(30));
+        assert_eq!(at(10), Duration::from_secs(20), "no extension yet");
+        assert_eq!(at(20), Duration::from_secs(25), "extended at 15s");
+        assert_eq!(at(31), Duration::from_secs(29), "extended at 30s");
     }
 }
