@@ -406,3 +406,25 @@ async fn a_queue_and_a_topic_of_one_name_route_by_the_publisher() -> Result<(), 
     assert_eq!(owed, [1, 1]);
     Ok(())
 }
+
+/// A topic reaches the queues its policy names as subscribed outside the service, and a publish
+/// to a topic never reaches a queue merely because the queue carries the topic's name.
+#[cfg(feature = "sns")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_topic_publish_reaches_the_queues_its_policy_names() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let topic = SnsPublish::default()
+        .fans_out_to(["notify"])
+        .pair(&connected)
+        .await?;
+    topic
+        .publish(
+            OutgoingMessage::new("events", b"published".as_slice()),
+            None,
+        )
+        .await?;
+
+    let subscriptions = ["events", "notify"];
+    assert_eq!(connected.routes("events", &subscriptions), [1]);
+    Ok(())
+}

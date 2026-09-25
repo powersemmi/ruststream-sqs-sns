@@ -136,7 +136,9 @@ async fn live_a_reply_fans_out_to_every_subscribed_queue() -> Result<(), Box<dyn
 /// The name a queue and a topic share: a parcel arrives on the queue, and its announcement fans
 /// out from the topic.
 const PARCELS: &str = "both-modes-parcels";
+/// Subscribed to the topic by the service itself.
 const AUDIT: &str = "both-modes-parcels-audit";
+/// Subscribed to the topic outside the service, the way an operator provisions it.
 const NOTIFY: &str = "both-modes-parcels-notify";
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
@@ -168,16 +170,19 @@ async fn notify(announced: &ParcelAnnounced) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
-/// Subscribes the audit and notify queues to the topic that shares the parcels queue's name.
+/// Subscribes the audit queue to the topic, the one subscription the service makes itself.
 async fn wire_parcels(broker: SqsBroker) -> io::Result<()> {
     let connected = broker.connect().await.map_err(io::Error::other)?;
-    for queue in [AUDIT, NOTIFY] {
-        connected
-            .subscribe_queue_to_topic(PARCELS, queue)
-            .await
-            .map_err(io::Error::other)?;
-    }
-    Ok(())
+    connected
+        .subscribe_queue_to_topic(PARCELS, AUDIT)
+        .await
+        .map_err(io::Error::other)
+}
+
+/// The announcement position names the queue the operator subscribed to the topic, so a test
+/// knows the whole group the topic fans out to.
+fn announcements() -> SnsPublish {
+    SnsPublish::default().fans_out_to([NOTIFY])
 }
 
 fn parcels() -> RustStream {
@@ -187,15 +192,16 @@ fn parcels() -> RustStream {
         .after_startup(async move |_state| wire_parcels(topology).await)
         .with_broker(broker, |b| {
             b.include(receive.name(PARCELS).create_if_missing())
-                .out_reply(SnsPublish::default());
+                .out_reply(announcements());
             b.include(audit.name(AUDIT).create_if_missing());
             b.include(notify.name(NOTIFY).create_if_missing());
         })
 }
 
-/// A publish goes where its publisher sends it, whatever else carries the name: the parcel sent to
-/// the queue reaches the queue's handler alone, and the announcement published to the topic of
-/// the same name reaches the two queues subscribed to it.
+/// A publish goes where its publisher sends it, whatever else carries the name: the parcel sent
+/// to the queue reaches the queue's handler alone, and the announcement published to the topic of
+/// the same name reaches every queue subscribed to the topic, the one the service subscribed and
+/// the one the operator did.
 async fn a_queue_and_a_topic_of_one_name_reach_their_own_handlers(
     tb: TestApp<()>,
 ) -> Result<(), Box<dyn Error>> {
@@ -227,12 +233,29 @@ async fn in_process_a_queue_and_a_topic_of_one_name_reach_their_own_handlers()
     a_queue_and_a_topic_of_one_name_reach_their_own_handlers(TestApp::start(parcels()).await?).await
 }
 
+/// What the operator provisions outside the service: the notify queue, subscribed to the topic.
+/// A broker of its own does it, so the service's broker learns of it only from the policy.
+async fn provision_outside_the_service(endpoint: &str) -> Result<(), Box<dyn Error>> {
+    live::admin(endpoint)
+        .await
+        .create_queue()
+        .queue_name(NOTIFY)
+        .send()
+        .await?;
+    live::connect(endpoint)
+        .await
+        .subscribe_queue_to_topic(PARCELS, NOTIFY)
+        .await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_a_queue_and_a_topic_of_one_name_reach_their_own_handlers()
 -> Result<(), Box<dyn Error>> {
-    if live::endpoint("SQS_TEST_ENDPOINT").is_none() {
+    let Some(endpoint) = live::endpoint("SQS_TEST_ENDPOINT") else {
         return Ok(());
-    }
+    };
+    provision_outside_the_service(&endpoint).await?;
     a_queue_and_a_topic_of_one_name_reach_their_own_handlers(TestApp::start_live(parcels()).await?)
         .await
 }

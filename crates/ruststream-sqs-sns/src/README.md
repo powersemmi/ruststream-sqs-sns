@@ -488,9 +488,12 @@ holds at most the ten messages one receive returns. A FIFO group waits while one
 is in flight, and a deduplication id is remembered for five minutes. With `sns` on, a topic
 delivers a copy to every queue subscribed to it with
 [`subscribe_queue_to_topic`](ConnectedSqsBroker::subscribe_queue_to_topic); a broker cloned from
-the app's connects to the same account, which is how a startup hook wires the topology. A topic
-and a queue may carry one name: what [`SqsPublish`] sends reaches the queue, and what
-[`SnsPublish`] publishes reaches the topic's queues, in process and in a live test alike. What SQS
+the app's connects to the same account, which is how a startup hook wires the topology. A queue
+an operator subscribed to the topic outside the service is named on the policy with
+[`fans_out_to`](SnsPublish::fans_out_to), a step that exists only under `testing`: in process the
+account subscribes it before the publish, and a live test waits for it too. A topic and a queue
+may carry one name: what [`SqsPublish`] sends reaches the queue, and what [`SnsPublish`]
+publishes reaches every queue subscribed to the topic, in process and in a live test alike. What SQS
 or SNS refuses is refused here too: more than ten headers, a header name the service does not
 take, an empty body or header value, a message over the size limit, a queue name over 80
 characters, a dead-letter queue of the other kind, a `maxReceiveCount` over 1000, and a FIFO
