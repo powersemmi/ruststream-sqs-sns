@@ -38,6 +38,7 @@ const MAX_ATTRIBUTES: usize = 10;
 pub(crate) const SQS_MAX_MESSAGE: usize = 1_048_576;
 
 /// The largest SNS message, body and attributes together.
+#[cfg(feature = "sns")]
 pub(crate) const SNS_MAX_MESSAGE: usize = 262_144;
 
 /// The largest `maxReceiveCount` a redrive policy takes.
@@ -50,6 +51,7 @@ const MAX_VISIBILITY_SECS: u64 = 12 * 60 * 60;
 const MAX_QUEUE_NAME: usize = 80;
 
 /// The longest topic name, the `.fifo` suffix included.
+#[cfg(feature = "sns")]
 const MAX_TOPIC_NAME: usize = 256;
 
 /// The account id the queue URLs carry.
@@ -82,15 +84,18 @@ pub(crate) struct Bus {
 struct Account {
     queues: HashMap<String, Queue>,
     /// The queues subscribed to each topic, by topic.
+    #[cfg(feature = "sns")]
     topics: HashMap<String, Vec<Endpoint>>,
     /// Every message that arrived at a queue or a topic, by the name it was addressed by.
     log: HashMap<String, Vec<RawMessage>>,
     /// The deduplication ids each FIFO topic saw within the window, by topic: a repeat is
     /// accepted and reaches no subscriber, whatever kind of queue it is.
+    #[cfg(feature = "sns")]
     topic_deduplication: HashMap<String, HashMap<String, Instant>>,
 }
 
 /// A queue subscribed to a topic.
+#[cfg(feature = "sns")]
 #[derive(Clone)]
 struct Endpoint {
     queue: String,
@@ -212,6 +217,7 @@ pub(crate) fn queue_key(name: &str) -> Result<String, String> {
 
 /// The topic `name` addresses: the last segment of a topic ARN, or the name mapped the way a
 /// queue name is.
+#[cfg(feature = "sns")]
 pub(crate) fn topic_key(name: &str) -> Result<String, String> {
     let key = if name.starts_with("arn:") {
         name.rsplit(':').next().unwrap_or_default().to_owned()
@@ -444,6 +450,7 @@ impl Bus {
 
     /// `Publish` to the topic keyed `topic`, recorded under `name`: every queue subscribed to the
     /// topic receives a copy, as raw message delivery hands it over.
+    #[cfg(feature = "sns")]
     pub(crate) fn publish_topic(
         &self,
         name: &str,
@@ -496,6 +503,7 @@ impl Bus {
     }
 
     /// `Subscribe` of the queue keyed `queue` (named `name` by the service) to `topic`.
+    #[cfg(feature = "sns")]
     pub(crate) fn subscribe_topic(
         &self,
         topic: &str,
@@ -714,9 +722,14 @@ fn queue_of<'a>(account: &'a mut Account, key: &str) -> &'a mut Queue {
 impl fmt::Debug for Bus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let account = self.account();
-        f.debug_struct("Bus")
-            .field("queues", &account.queues.len())
-            .field("topics", &account.topics.len())
-            .finish_non_exhaustive()
+        let queues = account.queues.len();
+        #[cfg(feature = "sns")]
+        let topics = account.topics.len();
+        drop(account);
+        let mut debug = f.debug_struct("Bus");
+        debug.field("queues", &queues);
+        #[cfg(feature = "sns")]
+        debug.field("topics", &topics);
+        debug.finish_non_exhaustive()
     }
 }

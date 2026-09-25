@@ -21,7 +21,7 @@
 
 ---
 
-`ruststream-sqs-sns` implements the RustStream broker contract over the official [`aws-sdk-sqs`](https://crates.io/crates/aws-sdk-sqs) and [`aws-sdk-sns`](https://crates.io/crates/aws-sdk-sns). Handlers, routers, codecs, and middleware come from the framework; this crate supplies the transport - and nothing broker-specific leaks back into the framework.
+`ruststream-sqs-sns` implements the RustStream broker contract over the official [`aws-sdk-sqs`](https://crates.io/crates/aws-sdk-sqs), and over [`aws-sdk-sns`](https://crates.io/crates/aws-sdk-sns) with the `sns` feature. Handlers, routers, codecs, and middleware come from the framework; this crate supplies the transport - and nothing broker-specific leaks back into the framework.
 
 ## Features
 
@@ -32,10 +32,10 @@
 - **Explicit polling settings.** `SqsQueue::new("orders").wait(20s).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default, and are equally reachable at the mount site through the `SqsSubscription` trait. Logical destination names map onto names the services accept by replacing forbidden characters with `-`, on queues and on topics alike (a `.fifo` suffix survives, and is what opens a FIFO queue or topic).
 - **Native batches.** `ReceiveMessage` is already a batching call, so a batch handler's `batch(n)` becomes `MaxNumberOfMessages` and one receive is one batch - nothing buffers on the client. A size above the protocol's ten is clamped to ten, with a log line, rather than refused.
 - **FIFO ordering as a per-message setting.** `SqsPublishOptions` is the message group id and the deduplication id, named per call with the `group_id` / `deduplication_id` steps on the publish builder, or fixed for a whole position with `Publish::default().group_id("orders")`. A delivery carries its group back in the `partition-key` header, and a message may name its own group there too - the spelling that travels to every other broker. Naming either setting for a standard queue is a publish error rather than a value dropped in silence.
-- **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); a handler's reply takes it with one mount step, `.out_reply(SnsPublish::default())`, and `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
+- **SNS as a fan-out publisher** (feature `sns`, off by default, so a queue-only service links no SNS client). A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); a handler's reply takes it with one mount step, `.out_reply(SnsPublish::default())`, and `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
 - **Protocol bindings in the generated document** (feature `asyncapi`). Every channel a queue descriptor opens carries an `sqs` channel binding: the queue's name, whether it is FIFO, and the polling settings the descriptor names. Values that need a connection (a queue's ARN, a timeout the descriptor left to the queue) stay out, and so does every credential.
 - **Text bodies.** SQS bodies are text, and the service's idea of text is narrower than UTF-8: a payload it accepts passes through untouched, and anything else - binary, or valid UTF-8 carrying control characters - travels base64-encoded with a marker attribute and decodes transparently on receive. The same rule picks `String` or `Binary` for each header attribute. A handler that parses the body itself takes the framework's byte lane (`#[derive(Deserialized)]` over `&[u8]`, no codec on the path) and sees the bytes the producer sent: the base64 hop is already undone by then.
-- **Tests on the production app** (feature `testing`). The framework's `TestApp` runs the app `main` runs, with `SqsBroker` connected in process and no server. The in-process account behaves as SQS and SNS do - one receiver per message, visibility timeouts, the receive count and the redrive policy, FIFO groups and deduplication, topic fan-out - and refuses what they refuse. `TestApp::start_live` runs the same test against a running stack.
+- **Tests on the production app** (feature `testing`). The framework's `TestApp` runs the app `main` runs, with `SqsBroker` connected in process and no server. The in-process account behaves as SQS and SNS do - one receiver per message, visibility timeouts, the receive count and the redrive policy, FIFO groups and deduplication, topic fan-out - and refuses what they refuse. A topic and a queue may share a name: a publish reaches what its publisher addresses. `TestApp::start_live` runs the same test against a running stack.
 
 ## Install
 
@@ -49,6 +49,8 @@ serde = { version = "1", features = ["derive"] }
 ruststream-sqs-sns = { version = "0.7", features = ["testing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
+
+Publishing to SNS topics takes the `sns` feature, which the service below uses: `ruststream-sqs-sns = { version = "0.7", features = ["sns"] }`.
 
 ## Write a service
 

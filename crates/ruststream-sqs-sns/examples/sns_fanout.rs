@@ -2,7 +2,7 @@
 //! subscribed queue.
 //!
 //! Run a local stack first (`just brokers-up`), then:
-//! `cargo run --example sns_fanout`
+//! `cargo run --example sns_fanout --features sns`
 
 use std::io;
 

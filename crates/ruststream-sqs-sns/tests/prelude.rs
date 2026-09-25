@@ -20,6 +20,7 @@ fn the_uniform_mount_site_name_is_this_brokers_policy() {
     // pins the alias down: a trait under this name would not be accepted in type position.
     let _: Publish = Publish::default().group_id("orders");
     // Fan-out is the departure from the default, so it keeps its own name beside the uniform one.
+    #[cfg(feature = "sns")]
     let _ = SnsPublish::default();
 }
 

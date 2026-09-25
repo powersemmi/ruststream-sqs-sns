@@ -1,8 +1,8 @@
 # ruststream-sqs-sns
 
-> `ruststream-sqs-sns` is the Amazon SQS broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them, with SNS fan-out publishing. It runs over the official `aws-sdk-sqs` and `aws-sdk-sns` clients: a subscriber long-polls its queue, retries run through the visibility timeout, and dead-lettering through the queue's redrive policy.
+> `ruststream-sqs-sns` is the Amazon SQS broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them, with SNS fan-out publishing behind the off-by-default `sns` feature. It runs over the official `aws-sdk-sqs` client (and `aws-sdk-sns` with `sns` on): a subscriber long-polls its queue, retries run through the visibility timeout, and dead-lettering through the queue's redrive policy.
 
-A subscription is the descriptor `SqsQueue`, by queue URL or by name, with its long-polling wait, visibility timeout and batch settings. A routes file imports `ruststream_sqs_sns::prelude::*`, which offers `SqsPublish` (send to a queue) as `Publish` and `SnsPublish` (publish to a topic) under its own name. The message group of a publish to a FIFO queue is its per-message setting, set with a step from `SqsPublishSteps`.
+A subscription is the descriptor `SqsQueue`, by queue URL or by name, with its long-polling wait, visibility timeout and batch settings. A routes file imports `ruststream_sqs_sns::prelude::*`, which offers `SqsPublish` (send to a queue) as `Publish` and, with the `sns` feature, `SnsPublish` (publish to a topic) under its own name. The message group of a publish to a FIFO queue is its per-message setting, set with a step from `SqsPublishSteps`.
 
 This site holds the entry pages. The crate's guide is its overview on docs.rs, and the framework itself is documented on the RustStream site.
 

@@ -1,11 +1,11 @@
 Amazon SQS transport for the [`RustStream`](https://docs.rs/ruststream) messaging framework,
-with SNS fan-out publishing.
+with SNS fan-out publishing behind the `sns` feature.
 
 Handlers, routers, codecs and middleware come from the framework; this crate supplies the
-transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
-[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients. One subscription is one queue, long-polled.
-SNS is a publisher only: its delivery targets are queues and HTTP endpoints rather than a
-consumer this crate would own, so a topic fans out to queues and each queue is consumed the
+transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) client, and over
+[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) with `sns` on. One subscription is one queue,
+long-polled. SNS is a publisher only: its delivery targets are queues and HTTP endpoints rather
+than a consumer this crate would own, so a topic fans out to queues and each queue is consumed the
 ordinary way.
 
 A queue is not a log, and the framework's optional capabilities fall out of that.
@@ -22,8 +22,11 @@ ruststream-sqs-sns = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
-Two additive features sit on top of the default build: `testing` gives [`SqsBroker`] the in-process
-mode described under [testing](#testing), and `asyncapi` adds the `sqs` bindings described under
+Three additive features sit on top of the default build, which reads and writes queues only.
+`sns` adds publishing to SNS topics, described under [replies and fan-out](#replies-and-fan-out),
+and links the SNS client: `ruststream-sqs-sns = { version = "0.7", features = ["sns"] }`.
+`testing` gives [`SqsBroker`] the in-process mode described under [testing](#testing), and
+`asyncapi` adds the `sqs` bindings (and the `sns` ones with `sns` on) described under
 [the generated document](#the-generated-document). The runnable services this page is drawn
 from are in `examples/`:
 <https://github.com/powersemmi/ruststream-sqs-sns/tree/main/crates/ruststream-sqs-sns/examples>.
@@ -236,22 +239,24 @@ to read here; what a delivery carries beyond its payload is in its headers.
 
 A publish policy is pure declaration, constructible anywhere, and the runtime pairs it with the
 connected broker at startup. Which policy a position is bound to picks the destination kind:
-[`SqsPublish`] sends directly to a queue, [`SnsPublish`] publishes a notification to a topic,
-named by ARN or by name through the idempotent `CreateTopic`. [`SqsPublish`] is also the broker's
-default policy, so a queue-to-queue service binds nothing.
+[`SqsPublish`] sends directly to a queue, [`SnsPublish`] (the `sns` feature) publishes a
+notification to a topic, named by ARN or by name through the idempotent `CreateTopic`.
+[`SqsPublish`] is also the broker's default policy, so a queue-to-queue service binds nothing.
 
 A publisher can also be taken from the broker - [`SqsBroker::publisher`] before the application
-starts, [`ConnectedSqsBroker::publisher`] and [`ConnectedSqsBroker::sns_publisher`] from the
-connected form. Each shares the broker's connection and reports [`SqsError::NotConnected`] after
-shutdown.
+starts, [`ConnectedSqsBroker::publisher`] and, with `sns`, [`ConnectedSqsBroker::sns_publisher`]
+from the connected form. Each shares the broker's connection and reports [`SqsError::NotConnected`]
+after shutdown.
 
 ## Replies and fan-out
 
 The reply type says where the reply goes and the mount site says who takes it there. The example
-below is the whole of the fan-out wiring: without `.out_reply(..)` the same reply would ride
-[`SqsPublish`] and land on a queue of that name.
+below, on the `sns` feature, is the whole of the fan-out wiring: without `.out_reply(..)` the same
+reply would ride [`SqsPublish`] and land on a queue of that name.
 
 ```
+# #[cfg(feature = "sns")]
+# mod demo {
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -278,6 +283,8 @@ fn service() -> impl App {
         b.include(accept).out_reply(SnsPublish::default());
     })
 }
+# }
+# fn main() {}
 ```
 
 Attaching the queues to the topic is provisioning work, not application wiring, and it runs on
@@ -362,13 +369,13 @@ an ask of this broker, so a standard queue keeps ignoring it.
 
 # The prelude
 
-`use ruststream_sqs_sns::prelude::*;` is the whole import list of a routes file: the framework's
-own prelude, plus this crate's broker, its queue descriptor and mount-site settings trait, its
-publish policies and its live publishers. [`SqsPublish`] arrives there under the uniform name
-`Publish`, the one a mount site and the lifecycle hooks write; [`SnsPublish`] keeps its own name,
+`use ruststream_sqs_sns::prelude::*;` is the whole import list of a routes file: the framework's own
+prelude, plus this crate's broker, its queue descriptor and mount-site settings trait, its publish
+policies and its live publishers. [`SqsPublish`] arrives there under the uniform name `Publish`, the
+one a mount site and the lifecycle hooks write; [`SnsPublish`], with `sns` on, keeps its own name,
 fan-out being the departure rather than the default. Everything the framework contributes comes
-through unchanged, so a service on two brokers globs both preludes and what they share resolves
-to one item.
+through unchanged, so a service on two brokers globs both preludes and what they share resolves to
+one item.
 
 A handler file globs the framework's prelude instead, where `Publisher` is the capability an
 injected publisher is bounded on. The one exception is the body that names a per-message setting,
@@ -403,12 +410,12 @@ describes the crate, with the protocol `sqs` and no protocol version, and SNS pu
 
 A publish position describes its destination too, because the framework hands the policy the name
 the document reports as the channel's address. A reply through [`SqsPublish`] carries an `sqs`
-binding with the queue's `name` and `fifoQueue`; one through [`SnsPublish`] carries an `sns`
-binding with the topic's `name`. A `.fifo` topic reports `ordering.type` as `FIFO` and
+binding with the queue's `name` and `fifoQueue`; with `sns` on, one through [`SnsPublish`] carries
+an `sns` binding with the topic's `name`. A `.fifo` topic reports `ordering.type` as `FIFO` and
 `ordering.contentBasedDeduplication` as `false`, since every FIFO send this crate makes carries a
 deduplication id of its own and an explicit id wins over one the topic would derive; a standard
-topic reports no ordering, which the specification reads as unordered. The polling settings stay
-on the subscription's half of the channel, a publish position having none.
+topic reports no ordering, which the specification reads as unordered. The polling settings stay on
+the subscription's half of the channel, a publish position having none.
 
 Two things the document does not say. Neither policy answers a reply address, so none is
 reported. And the specification's `redrivePolicy` and `deadLetterQueue` fields stay empty,
@@ -478,10 +485,12 @@ queue hands each message to one of its subscriptions, a received message stays i
 it is deleted or its visibility timeout lapses, the receive count moves on with every receive,
 and a redrive policy moves a message whose receives ran out to the dead-letter queue. A batch
 holds at most the ten messages one receive returns. A FIFO group waits while one of its messages
-is in flight, and a deduplication id is remembered for five minutes. An SNS topic delivers a
-copy to every queue subscribed to it with
+is in flight, and a deduplication id is remembered for five minutes. With `sns` on, a topic
+delivers a copy to every queue subscribed to it with
 [`subscribe_queue_to_topic`](ConnectedSqsBroker::subscribe_queue_to_topic); a broker cloned from
-the app's connects to the same account, which is how a startup hook wires the topology. What SQS
+the app's connects to the same account, which is how a startup hook wires the topology. A topic
+and a queue may carry one name: what [`SqsPublish`] sends reaches the queue, and what
+[`SnsPublish`] publishes reaches the topic's queues, in process and in a live test alike. What SQS
 or SNS refuses is refused here too: more than ten headers, a header name the service does not
 take, an empty body or header value, a message over the size limit, a queue name over 80
 characters, a dead-letter queue of the other kind, a `maxReceiveCount` over 1000, and a FIFO

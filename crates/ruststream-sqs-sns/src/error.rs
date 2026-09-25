@@ -45,6 +45,7 @@ pub enum SqsError {
     },
 
     /// A topic admin call (create, subscribe) failed.
+    #[cfg(feature = "sns")]
     #[error("sns admin error for '{name}': {source}")]
     Admin {
         /// The topic or subscription the call was about.
