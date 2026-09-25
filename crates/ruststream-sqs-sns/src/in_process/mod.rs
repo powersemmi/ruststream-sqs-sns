@@ -48,6 +48,8 @@ pub(crate) use deliveries::{BusDeliveries, BusReceipt};
 pub(crate) use routing::{Routing, Surface};
 
 use crate::SqsPublishOptions;
+#[cfg(feature = "sns")]
+use crate::broker::Core;
 use crate::broker::{ConnectedSqsBroker, Transport};
 use crate::error::SqsError;
 use crate::message::{encode_attributes, encode_body};
@@ -188,13 +190,39 @@ pub(crate) fn publish_topic(
         })
 }
 
+/// Makes the queues a publish policy names as subscribed to `topic` outside the service known
+/// to the broker: the in-process account subscribes them, as the operator did on AWS, and the
+/// harness's routing answer counts them on either transport.
+///
+/// # Errors
+///
+/// Returns what subscribing the queue to the topic returns in process: [`SqsError::Admin`] for a
+/// topic name SNS refuses and a FIFO queue on a standard topic, [`SqsError::Queue`] for a queue
+/// name SQS refuses.
+#[cfg(feature = "sns")]
+pub(crate) fn declare_fan_out(core: &Core, topic: &str, queues: &[String]) -> Result<(), SqsError> {
+    for queue in queues {
+        if let Transport::InProcess(bus) = &core.transport {
+            subscribe_topic(bus, topic, queue)?;
+        }
+        record_topic_queue(core, topic, queue);
+    }
+    Ok(())
+}
+
+/// Notes that `queue` is subscribed to `topic`, for [`TestableBroker::routes`].
+#[cfg(feature = "sns")]
+fn record_topic_queue(core: &Core, topic: &str, queue: &str) {
+    if let (Ok(topic), Ok(queue)) = (topic_key(topic), queue_key(queue)) {
+        core.routing.subscribe(topic, queue);
+    }
+}
+
 impl ConnectedSqsBroker {
     /// Notes that `queue` is subscribed to `topic`, for [`TestableBroker::routes`].
     #[cfg(feature = "sns")]
     pub(crate) fn record_topic_queue(&self, topic: &str, queue: &str) {
-        if let (Ok(topic), Ok(queue)) = (topic_key(topic), queue_key(queue)) {
-            self.core.routing.subscribe(topic, queue);
-        }
+        record_topic_queue(&self.core, topic, queue);
     }
 
     /// The queues a publish to `destination` reaches: the topic's subscribed queues when the
@@ -204,12 +232,25 @@ impl ConnectedSqsBroker {
     #[cfg_attr(not(feature = "sns"), allow(clippy::unused_self))]
     fn reached_queues(&self, destination: &str) -> Vec<String> {
         #[cfg(feature = "sns")]
-        if let Some(queues) = topic_key(destination)
-            .ok()
-            .and_then(|topic| self.core.routing.fanned_out(&topic))
-            .filter(|_| self.core.routing.next_surface(destination) != Some(Surface::Queue))
         {
-            return queues;
+            let topic_queues = || {
+                topic_key(destination)
+                    .ok()
+                    .and_then(|topic| self.core.routing.fanned_out(&topic))
+            };
+            match self.core.routing.next_surface(destination) {
+                // A topic publish reaches the topic's queues and nothing else, whatever else
+                // carries the name.
+                Some(Surface::Topic) => return topic_queues().unwrap_or_default(),
+                Some(Surface::Queue) => {}
+                // No paired publisher sent there: the name reads as the topic when one with
+                // subscribed queues carries it.
+                None => {
+                    if let Some(queues) = topic_queues() {
+                        return queues;
+                    }
+                }
+            }
         }
         queue_key(destination).into_iter().collect()
     }

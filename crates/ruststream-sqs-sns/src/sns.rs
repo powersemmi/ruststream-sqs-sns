@@ -96,6 +96,9 @@ pub struct SnsPublisher {
     /// publishes and asks the broker where each publish went.
     #[cfg(feature = "testing")]
     paired: bool,
+    /// The queues subscribed to the topic outside the service, as the policy declared them.
+    #[cfg(feature = "testing")]
+    fan_out: Vec<String>,
 }
 
 impl std::fmt::Debug for SnsPublisher {
@@ -111,6 +114,8 @@ impl SnsPublisher {
             default_group: None,
             #[cfg(feature = "testing")]
             paired: false,
+            #[cfg(feature = "testing")]
+            fan_out: Vec::new(),
         }
     }
 
@@ -121,6 +126,13 @@ impl SnsPublisher {
         {
             self.paired = true;
         }
+        self
+    }
+
+    /// The queues the policy declared as subscribed to its topics outside the service.
+    #[cfg(feature = "testing")]
+    fn fanning_out_to(mut self, queues: Vec<String>) -> Self {
+        self.fan_out = queues;
         self
     }
 
@@ -155,6 +167,8 @@ impl Publisher for SnsPublisher {
     ) -> Result<(), Self::Error> {
         #[cfg(feature = "testing")]
         let destination = msg.name();
+        #[cfg(feature = "testing")]
+        in_process::declare_fan_out(self.core()?, destination, &self.fan_out)?;
         let published = self.publish_to_topic(msg, options).await;
         #[cfg(feature = "testing")]
         if published.is_ok() {
@@ -284,6 +298,8 @@ impl SnsPublisher {
 #[must_use]
 pub struct SnsPublish {
     group_id: Option<String>,
+    #[cfg(feature = "testing")]
+    fan_out: Vec<String>,
 }
 
 impl SnsPublish {
@@ -291,6 +307,38 @@ impl SnsPublish {
     /// See [`SqsPublish::group_id`](crate::SqsPublish::group_id).
     pub fn group_id(mut self, group: impl Into<String>) -> Self {
         self.group_id = Some(group.into());
+        self
+    }
+
+    /// Names queues subscribed to this position's topics outside the service, for the test
+    /// harness. Available with the `testing` feature only; a production build has no such step.
+    ///
+    /// A queue the service subscribes itself, through
+    /// [`subscribe_queue_to_topic`](crate::ConnectedSqsBroker::subscribe_queue_to_topic), is
+    /// known already. One an operator subscribed in AWS is not, and naming it here makes a test
+    /// see the whole group the topic delivers to: in process the account subscribes the queue to
+    /// the topic before the publish, as the operator did, and a live test waits for that queue's
+    /// subscription to handle the copy. The queues apply to every topic the position publishes
+    /// to. A queue SNS would refuse (a FIFO queue on a standard topic) fails the publish.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream_sqs_sns::prelude::*;
+    ///
+    /// // The topic fans out to `billing`, which the operator subscribed; production builds the
+    /// // policy without the step, which exists only under `testing`.
+    /// fn announcements() -> SnsPublish {
+    ///     let policy = SnsPublish::default();
+    ///     #[cfg(feature = "testing")]
+    ///     let policy = policy.fans_out_to(["billing"]);
+    ///     policy
+    /// }
+    /// # let _ = announcements;
+    /// ```
+    #[cfg(feature = "testing")]
+    pub fn fans_out_to(mut self, queues: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.fan_out.extend(queues.into_iter().map(Into::into));
         self
     }
 }
@@ -302,9 +350,10 @@ impl PublishPolicy<ConnectedSqsBroker> for SnsPublish {
         self,
         connected: &ConnectedSqsBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected
-            .sns_publisher()
-            .paired_by_policy(self.group_id)))
+        let publisher = connected.sns_publisher().paired_by_policy(self.group_id);
+        #[cfg(feature = "testing")]
+        let publisher = publisher.fanning_out_to(self.fan_out);
+        ready(Ok(publisher))
     }
 
     #[cfg(feature = "asyncapi")]

@@ -1,18 +1,22 @@
 //! What the test harness asks a connected broker after a publish: which of the app's
 //! subscriptions the publish reaches.
 //!
-//! A queue and a topic may carry one name, and the name is all the harness hands over. What
-//! tells them apart is the publisher: [`SqsPublisher`](crate::SqsPublisher) sends to the queue,
-//! [`SnsPublisher`](crate::SnsPublisher) publishes to the topic. Each publisher a policy paired
-//! notes here which of the two it went through, per destination, and the answer for a name both
-//! a queue and a topic carry follows those notes.
+//! The answer follows the publisher. A publish through [`SqsPublisher`](crate::SqsPublisher)
+//! reaches the queue its name addresses; one through [`SnsPublisher`](crate::SnsPublisher)
+//! reaches every queue subscribed to the topic, those the service subscribed with
+//! `subscribe_queue_to_topic` and those its policy names with `fans_out_to`, and nothing else.
+//! Each publisher a policy paired notes which of the two it went through, per destination.
 //!
-//! The harness asks once per publish it recorded, in publish order, and asks again from the
-//! start on every pass of a settle. The notes keep a count per surface and a turn that walks
-//! them round, so every pass over the publishes of a name hands out each surface as many times
-//! as it was published to, whichever publish the pass starts at. A publish the harness never
-//! records (one from a publisher the service built itself rather than a policy paired) is never
-//! noted, so the two lists stay the same length.
+//! The harness hands over only the destination's name, once per publish it recorded, in publish
+//! order, and again from the start on every pass of a settle. Where every publish to a name went
+//! through one publisher the answer is fixed. Where a queue and a topic share the name and the
+//! test published to both, a call cannot say which of those publishes it is about, so the notes
+//! keep a count per surface and a turn that walks them round: every pass over the publishes of
+//! the name hands out each surface as many times as it was published to, whichever publish the
+//! pass starts at. A publish the harness never records (one from a publisher the service built
+//! itself rather than a policy paired) is never noted. One the harness does not record although a
+//! policy paired its publisher (made outside a task the harness drives) is noted all the same,
+//! and for a name both surfaces share it tips the count.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
