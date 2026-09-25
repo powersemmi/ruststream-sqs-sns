@@ -31,8 +31,12 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process::{self, Bus};
-use crate::publisher::{SnsPublisher, SqsPublish, SqsPublisher, is_fifo};
+#[cfg(feature = "sns")]
+use crate::publisher::is_fifo;
+use crate::publisher::{SqsPublish, SqsPublisher};
 use crate::queue::{Redrive, SqsQueue};
+#[cfg(feature = "sns")]
+use crate::sns::SnsPublisher;
 use crate::subscriber::SqsSubscriber;
 
 /// The client state shared by the connected form and every handle derived from it.
@@ -50,10 +54,10 @@ pub(crate) struct Core {
     /// A bare name carries no descriptor to hold the declaration, and the call that takes it
     /// has no queue URL yet, so the policy waits here for the `subscribe` that writes it.
     declared_redrives: StdMutex<HashMap<String, Redrive>>,
-    /// Where this broker's publishes went, which is how the test harness learns which
-    /// subscriptions a publish reaches. Recorded on both transports, because a live test waits
-    /// on the same answer.
-    #[cfg(feature = "testing")]
+    /// Which topics this broker subscribed queues to and which surface each publish went
+    /// through, which is how the test harness learns which subscriptions a publish reaches.
+    /// Recorded on both transports, because a live test waits on the same answer.
+    #[cfg(all(feature = "testing", feature = "sns"))]
     pub(crate) routing: in_process::Routing,
 }
 
@@ -80,11 +84,13 @@ const _: () = assert!(size_of::<Transport>() == size_of::<Aws>());
 /// The live SDK clients and the name caches every resolution goes through.
 pub(crate) struct Aws {
     pub(crate) sqs: aws_sdk_sqs::Client,
+    #[cfg(feature = "sns")]
     pub(crate) sns: aws_sdk_sns::Client,
     pub(crate) endpoint: Option<String>,
     /// Queue-name -> URL cache shared by publishers and subscriptions.
     pub(crate) queue_urls: Mutex<HashMap<String, String>>,
     /// Topic-name -> ARN cache for the SNS publisher.
+    #[cfg(feature = "sns")]
     pub(crate) topic_arns: Mutex<HashMap<String, String>>,
 }
 
@@ -94,7 +100,7 @@ impl Core {
             transport,
             closed: AtomicBool::new(false),
             declared_redrives: StdMutex::new(HashMap::new()),
-            #[cfg(feature = "testing")]
+            #[cfg(all(feature = "testing", feature = "sns"))]
             routing: in_process::Routing::default(),
         }
     }
@@ -171,6 +177,7 @@ impl Aws {
     /// `CreateTopic` is documented idempotent: an existing topic's ARN is returned as-is.
     // The cache guard intentionally spans the resolve so two callers cannot race a double
     // create for the same name.
+    #[cfg(feature = "sns")]
     #[allow(clippy::significant_drop_tightening)]
     pub(crate) async fn topic_arn(&self, topic: &str) -> Result<String, SqsError> {
         if topic.starts_with("arn:") {
@@ -340,8 +347,8 @@ fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
     )
 }
 
-/// An Amazon SQS broker (with SNS fan-out publishing) for the `RustStream` messaging
-/// framework.
+/// An Amazon SQS broker (with SNS fan-out publishing on the `sns` feature) for the `RustStream`
+/// messaging framework.
 ///
 /// `new` is synchronous and records only configuration; the runtime resolves credentials and
 /// builds the clients once at startup via the consuming [`Broker::connect`]. That is what lets
@@ -446,15 +453,16 @@ impl Broker for SqsBroker {
                     loader.load().await
                 };
                 let sqs = aws_sdk_sqs::Client::new(&config);
-                let sns = aws_sdk_sns::Client::new(&config);
                 Ok::<_, SqsError>(Arc::new(Core::new(Transport::Aws(Aws {
                     sqs,
-                    sns,
+                    #[cfg(feature = "sns")]
+                    sns: aws_sdk_sns::Client::new(&config),
                     endpoint: self
                         .endpoint
                         .clone()
                         .or_else(|| config.endpoint_url().map(str::to_owned)),
                     queue_urls: Mutex::new(HashMap::new()),
+                    #[cfg(feature = "sns")]
                     topic_arns: Mutex::new(HashMap::new()),
                 }))))
             })
@@ -558,19 +566,22 @@ impl ConnectedSqsBroker {
         SqsPublisher::new(Arc::clone(&self.cell))
     }
 
-    /// An SNS fan-out publisher from the connected form.
+    /// An SNS fan-out publisher from the connected form. Available with the `sns` feature.
+    #[cfg(feature = "sns")]
     #[must_use]
     pub fn sns_publisher(&self) -> SnsPublisher {
         SnsPublisher::new(Arc::clone(&self.cell))
     }
 
     /// Subscribes `queue` to `topic` (both names or ARN/URL) with raw message delivery, so
-    /// payloads and headers arrive unwrapped as plain SQS messages.
+    /// payloads and headers arrive unwrapped as plain SQS messages. Available with the `sns`
+    /// feature.
     ///
     /// # Errors
     ///
     /// Returns [`SqsError`] when the topic or queue cannot be resolved or the subscription
     /// call fails.
+    #[cfg(feature = "sns")]
     pub async fn subscribe_queue_to_topic(&self, topic: &str, queue: &str) -> Result<(), SqsError> {
         self.core.ensure_open()?;
         let aws = match &self.core.transport {

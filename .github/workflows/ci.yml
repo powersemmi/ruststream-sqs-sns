@@ -219,6 +219,14 @@ jobs:
       - name: cargo test
         run: cargo test --locked --workspace --all-features --no-fail-fast
 
+      # SNS is an opt-in feature, so the build a queue-only service ships is a leg of its own: the
+      # default feature set, and the in-process mode without the topic transport.
+      - name: cargo test (without SNS)
+        run: |
+          cargo test --locked --workspace --no-default-features --no-fail-fast
+          cargo test --locked -p ruststream-sqs-sns --no-default-features --features testing \
+            --no-fail-fast
+
       # The gate the later toolchains wait on: it succeeds only when every stable step did.
       - name: Stable passed
         id: stable
@@ -327,6 +335,8 @@ jobs:
           --test dead_letter_sqs
           --test fifo_sqs
           --test sns_fanout_sqs
+          --test both_modes_sqs
+          --test both_modes_sns
           -- --test-threads=1
 
       - name: Cleanup

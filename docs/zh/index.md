@@ -5,9 +5,10 @@ Amazon SQS Broker，并支持 SNS 扇出发布。订阅者用长轮询读自己�
 取得原生的批次。重试走消息的可见性超时，进死信队列则由队列的重新驱动策略决定。向 FIFO 队列发布
 时，你可以逐条指定消息组，也可以为整个发布位置固定一个，并从收到的消息里读回它。
 
-传输建立在官方的 [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) 和
-[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) 客户端之上。`testing` feature 给 Broker 一个进程内
-模式，测试无需服务器就能运行生产应用；`asyncapi` feature 则把 `sqs` 绑定写进框架生成的文档。
+传输建立在官方的 [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) 客户端之上。`sns` feature 通过
+[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) 加上向 SNS 主题发布的能力；它默认关闭，只用队列的服务
+不会链接 SNS 客户端。`testing` feature 给 Broker 一个进程内模式，测试无需服务器就能运行生产应用；
+`asyncapi` feature 则把 `sqs` 绑定写进框架生成的文档。
 
 这个 crate 跟随已发布的 `ruststream` 0.7 线：
 

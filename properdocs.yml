@@ -1,5 +1,5 @@
 site_name: ruststream-sqs-sns
-site_description: The Amazon SQS broker for RustStream - long polling, visibility-based retries, FIFO groups, SNS fan-out publishing, and an in-process test broker.
+site_description: The Amazon SQS broker for RustStream - long polling, visibility-based retries, FIFO groups, optional SNS fan-out publishing, and an in-process test broker.
 site_url: https://powersemmi.github.io/ruststream-sqs-sns/
 repo_url: https://github.com/powersemmi/ruststream-sqs-sns
 repo_name: powersemmi/ruststream-sqs-sns
