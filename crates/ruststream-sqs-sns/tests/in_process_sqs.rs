@@ -356,7 +356,7 @@ async fn a_publish_to_a_queue_routes_to_one_subscription_of_it() -> Result<(), B
         ),
         [2],
     );
-    assert!(connected.routes("payments", &subscriptions).is_empty());
+    assert_eq!(connected.routes("payments", &subscriptions), [0_usize; 0]);
     Ok(())
 }
 
