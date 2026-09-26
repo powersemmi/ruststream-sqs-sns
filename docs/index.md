@@ -8,9 +8,9 @@ redrive policy. You set a message group per publish to a FIFO queue, or fix one 
 publish position, and read it back from the message you receive.
 
 The transport is built on the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
-[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients. The `testing` feature ships an in-process
-test broker, and the `asyncapi` feature adds the `sqs` bindings to the document the framework
-generates.
+[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients. The `testing` feature gives the broker an
+in-process mode, so a test runs the production app with no server, and the `asyncapi` feature adds
+the `sqs` bindings to the document the framework generates.
 
 The crate tracks the released `ruststream` 0.7 line:
 
@@ -42,6 +42,6 @@ goes, and what a publish may carry.
 ## How this site relates to the RustStream docs
 
 This site is the entry page. What SQS and SNS do is in the crate's
-[rustdoc](https://docs.rs/ruststream-sqs-sns), including testing against the in-process broker
+[rustdoc](https://docs.rs/ruststream-sqs-sns), including testing the production app in process
 and the operational surface. Framework concepts that apply to every broker live in the
 [RustStream documentation](https://powersemmi.github.io/ruststream/).

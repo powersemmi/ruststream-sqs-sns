@@ -3,8 +3,8 @@
 //! The policy itself is topology and the suite next door reads it back off the queue. This one
 //! asks the question that matters to a service: once a registration's cap is spent, does the
 //! message actually end up in the dead-letter queue, or does it quietly disappear? The answer
-//! only exists on the service, because SQS counts the receives and performs the move; the
-//! in-process stand-in mirrors the rule, and mirroring is not proof.
+//! is the service's own, because SQS counts the receives and performs the move; the in-process
+//! mode models the rule, and a model is not proof.
 //!
 //! Start a stack with `just brokers-up`, then:
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.

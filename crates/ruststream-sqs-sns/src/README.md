@@ -22,8 +22,8 @@ ruststream-sqs-sns = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
-Two additive features sit on top of the default build: `testing` ships the in-process transport
-of the [`testing`](crate::testing) module, and `asyncapi` adds the `sqs` bindings described under
+Two additive features sit on top of the default build: `testing` gives [`SqsBroker`] the in-process
+mode described under [testing](#testing), and `asyncapi` adds the `sqs` bindings described under
 [the generated document](#the-generated-document). The runnable services this page is drawn
 from are in `examples/`:
 <https://github.com/powersemmi/ruststream-sqs-sns/tree/main/crates/ruststream-sqs-sns/examples>.
@@ -418,12 +418,9 @@ channel the registration sends to, which covers the same ground.
 
 # Testing
 
-The `testing` feature ships [`SqsTestBroker`](crate::testing::SqsTestBroker), an in-process
-transport on the same ladder as the real one, teardown included. The declaration a service ships
-mounts on it unchanged: [`SqsQueue`] is a subscription source there too, and [`SqsPublish`] and
-[`SnsPublish`] pair into one publisher, so a routes file is tested as written rather than
-rewritten. Drive it with the framework's harness, whose overview covers the assertions and what
-a test can say:
+A test runs the service's production app. With the `testing` feature in the dev-dependencies,
+the framework's `TestApp::start` connects [`SqsBroker`] in process, with no server, and the test
+addresses it by that type. The harness's overview covers the assertions and what a test can say:
 <https://docs.rs/ruststream/latest/ruststream/testing/index.html#what-a-test-can-say>.
 
 ```
@@ -431,7 +428,6 @@ a test can say:
 # mod demo {
 use ruststream::testing::TestApp;
 use ruststream_sqs_sns::prelude::*;
-use ruststream_sqs_sns::testing::SqsTestBroker;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
@@ -445,41 +441,57 @@ async fn handle(order: &Order) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
-#[tokio::main(worker_threads = 2)]
-pub async fn run() {
-    let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
-        .with_broker(SqsTestBroker::new(), |b| {
-            b.include(handle);
-        });
-    let tb = TestApp::start(app).await.expect("the app starts");
+/// The app `main` runs.
+fn app() -> RustStream {
+    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+        b.include(handle);
+    })
+}
 
-    tb.broker::<SqsTestBroker>()
-        .publish("orders", &Order { id: 1 })
-        .await
-        .expect("the publish drives the handler to a standstill");
-    tb.broker::<SqsTestBroker>()
+#[tokio::main(worker_threads = 2)]
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let tb = TestApp::start(app()).await?;
+
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 1 })
+        .to("orders")
+        .publish()
+        .await?;
+    tb.broker::<SqsBroker>()
         .subscriber("orders")
         .assert_called_once()
         .with(&Order { id: 1 })
         .settled(HandlerOutcome::ack());
 
-    tb.shutdown().await.expect("the app shuts down");
+    tb.shutdown().await?;
+    Ok(())
 }
 # }
 # fn main() {
 #     #[cfg(feature = "testing")]
-#     demo::run();
+#     demo::run().expect("the test passes");
 # }
 ```
 
-What the stand-in answers is routing by exact queue name and the settlement a handler asked for,
-the delay and the cap included: `retry_after` holds a delivery back and returns it once the delay
-has passed, receives are counted the way the queue counts them, and a registration's redrive
-policy moves a spent delivery to the dead-letter queue. A batch holds at most the ten messages one
-receive returns, whatever size the mount site named, and the same log line says so. What belongs to the queue itself it does
-not answer - a visibility timeout that lapses on its own, what a long poll costs, FIFO ordering,
-and the onward delivery of an SNS fan-out. Those hold against SQS, and the repository's live
-suite asserts them against the service itself.
+In process, the queues and topics the service names exist in an account inside the test. A
+queue hands each message to one of its subscriptions, a received message stays invisible until
+it is deleted or its visibility timeout lapses, the receive count moves on with every receive,
+and a redrive policy moves a message whose receives ran out to the dead-letter queue. A batch
+holds at most the ten messages one receive returns. A FIFO group waits while one of its messages
+is in flight, and a deduplication id is remembered for five minutes. An SNS topic delivers a
+copy to every queue subscribed to it with
+[`subscribe_queue_to_topic`](ConnectedSqsBroker::subscribe_queue_to_topic); a broker cloned from
+the app's connects to the same account, which is how a startup hook wires the topology. What SQS
+or SNS refuses is refused here too: more than ten headers, a header name the service does not
+take, an empty body or header value, a message over the size limit, a queue name over 80
+characters, a dead-letter queue of the other kind, a `maxReceiveCount` over 1000, and a FIFO
+queue on a standard topic.
+
+`TestApp::start_live(app())` runs the same test against a running stack, which is where what
+belongs to the service is exercised: a message kept on a queue no subscription reads, the
+visibility timeout an operator set on a queue (in process a descriptor that names none gets the
+30 seconds of a new queue), the queues and topics the service expects to find without creating
+them, and credentials. The repository's own tests run one body both ways.
 
 # Operations
 

@@ -5,6 +5,13 @@
 //! body: SQS bodies are text, and a payload the service will not take as text travels
 //! base64-encoded with a marker attribute, decoded transparently on receive.
 
+// Without the `testing` feature a delivery settles one way, so a `match` on how it settles has a
+// single arm; the matches stay so that the in-process arm has its place when the feature is on.
+#![cfg_attr(
+    not(feature = "testing"),
+    allow(clippy::infallible_destructuring_match)
+)]
+
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -20,6 +27,8 @@ use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, St
 use tokio::task::JoinHandle;
 
 use crate::error::sdk_err;
+#[cfg(feature = "testing")]
+use crate::in_process::BusReceipt;
 
 /// Header carrying the partition key, mapped onto the FIFO message group id.
 ///
@@ -49,32 +58,64 @@ pub(crate) const ENCODING_ATTRIBUTE: &str = "ruststream-payload-encoding";
 pub struct SqsMessage {
     payload: Bytes,
     headers: HeaderMap,
-    client: Client,
-    queue_url: String,
-    receipt: String,
     /// The queue's `ApproximateReceiveCount` for this delivery: the first receive answers one.
     receives: Option<u32>,
     /// The `maxReceiveCount` the registration's declaration wrote onto the queue, where it
     /// declared one.
     redrive_max: Option<NonZeroU32>,
+    receipt: Receipt,
+}
+
+/// How a delivery settles: through the SDK client against the live queue, or, under the
+/// `testing` feature, against the in-process account the harness connected instead.
+///
+/// Without the feature there is one variant, so the type is the live receipt itself and every
+/// `match` on it resolves at compile time.
+enum Receipt {
+    Aws(AwsReceipt),
+    #[cfg(feature = "testing")]
+    InProcess(BusReceipt),
+}
+
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<Receipt>() == size_of::<AwsReceipt>());
+
+/// A live delivery's settlement handle, and the task keeping it invisible meanwhile.
+struct AwsReceipt {
+    client: Client,
+    queue_url: String,
+    receipt: String,
     extender: JoinHandle<()>,
 }
 
 impl std::fmt::Debug for SqsMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SqsMessage")
-            .field("payload_len", &self.payload.len())
-            .field("queue_url", &self.queue_url)
-            .finish_non_exhaustive()
+        let mut debug = f.debug_struct("SqsMessage");
+        debug.field("payload_len", &self.payload.len());
+        match &self.receipt {
+            Receipt::Aws(aws) => debug.field("queue_url", &aws.queue_url),
+            #[cfg(feature = "testing")]
+            Receipt::InProcess(receipt) => debug.field("in_process", receipt),
+        };
+        debug.finish_non_exhaustive()
     }
 }
 
 impl Drop for SqsMessage {
     fn drop(&mut self) {
         // An unsettled drop stops the extension; the message redelivers when its current
-        // visibility lapses, which is the at-least-once contract.
-        self.extender.abort();
+        // visibility lapses, which is the at-least-once contract. The in-process receipt does the
+        // same from its own `Drop`.
+        self.stop_extending();
     }
+}
+
+/// The receive count the queue reported with `message`.
+fn receives_of(message: &AwsMessage) -> Option<u32> {
+    message
+        .attributes()
+        .and_then(|system| system.get(&MessageSystemAttributeName::ApproximateReceiveCount))
+        .and_then(|count| count.trim().parse().ok())
 }
 
 impl SqsMessage {
@@ -87,10 +128,6 @@ impl SqsMessage {
         redrive_max: Option<NonZeroU32>,
     ) -> Self {
         let (payload, headers) = decode_message(message);
-        let receives = message
-            .attributes()
-            .and_then(|system| system.get(&MessageSystemAttributeName::ApproximateReceiveCount))
-            .and_then(|count| count.trim().parse().ok());
         // Why a per-message watchdog: SQS has no lease API - a handler outliving the
         // visibility timeout would get a concurrent redelivery, so the crate extends the
         // visibility for as long as the handle is held (the issue's one piece of real
@@ -104,12 +141,41 @@ impl SqsMessage {
         Self {
             payload,
             headers,
-            client,
-            queue_url,
-            receipt,
-            receives,
+            receives: receives_of(message),
             redrive_max,
-            extender,
+            receipt: Receipt::Aws(AwsReceipt {
+                client,
+                queue_url,
+                receipt,
+                extender,
+            }),
+        }
+    }
+
+    /// A delivery of the in-process account, decoded from the message the account handed over
+    /// exactly as a live one is decoded from the service's answer.
+    #[cfg(feature = "testing")]
+    pub(crate) fn in_process(
+        message: &AwsMessage,
+        receipt: BusReceipt,
+        redrive_max: Option<NonZeroU32>,
+    ) -> Self {
+        let (payload, headers) = decode_message(message);
+        Self {
+            payload,
+            headers,
+            receives: receives_of(message),
+            redrive_max,
+            receipt: Receipt::InProcess(receipt),
+        }
+    }
+
+    /// Stops keeping the delivery invisible, ahead of a settlement.
+    fn stop_extending(&self) {
+        match &self.receipt {
+            Receipt::Aws(aws) => aws.extender.abort(),
+            #[cfg(feature = "testing")]
+            Receipt::InProcess(_) => {}
         }
     }
 
@@ -125,10 +191,18 @@ impl SqsMessage {
     }
 
     async fn delete(&self) -> Result<(), AckError> {
-        self.client
+        let aws = match &self.receipt {
+            Receipt::Aws(aws) => aws,
+            #[cfg(feature = "testing")]
+            Receipt::InProcess(receipt) => {
+                receipt.delete();
+                return Ok(());
+            }
+        };
+        aws.client
             .delete_message()
-            .queue_url(&self.queue_url)
-            .receipt_handle(&self.receipt)
+            .queue_url(&aws.queue_url)
+            .receipt_handle(&aws.receipt)
             .send()
             .await
             .map(|_| ())
@@ -136,10 +210,15 @@ impl SqsMessage {
     }
 
     async fn set_visibility(&self, seconds: i32) -> Result<(), AckError> {
-        self.client
+        let aws = match &self.receipt {
+            Receipt::Aws(aws) => aws,
+            #[cfg(feature = "testing")]
+            Receipt::InProcess(receipt) => return receipt.change_visibility(seconds),
+        };
+        aws.client
             .change_message_visibility()
-            .queue_url(&self.queue_url)
-            .receipt_handle(&self.receipt)
+            .queue_url(&aws.queue_url)
+            .receipt_handle(&aws.receipt)
             .visibility_timeout(seconds)
             .send()
             .await
@@ -164,7 +243,7 @@ impl IncomingMessage for SqsMessage {
     }
 
     async fn ack(self) -> Result<(), AckError> {
-        self.extender.abort();
+        self.stop_extending();
         self.delete().await
     }
 
@@ -176,7 +255,7 @@ impl IncomingMessage for SqsMessage {
     }
 
     async fn nack(self, requeue: bool) -> Result<(), AckError> {
-        self.extender.abort();
+        self.stop_extending();
         if requeue || self.spent() {
             // Deleting IS the drop: SQS cannot discard without deleting, and the redrive policy
             // owns poison-message routing. The exception is the delivery that has run the policy
@@ -196,7 +275,7 @@ impl IncomingMessage for SqsMessage {
     }
 
     async fn nack_after(self, delay: Duration) -> Result<(), AckError> {
-        self.extender.abort();
+        self.stop_extending();
         // Setting the visibility to the delay is the native deferred retry (capped at the
         // protocol's 12 hours).
         let seconds = i32::try_from(delay.as_secs().min(43_200)).unwrap_or(43_200);
@@ -244,7 +323,8 @@ async fn extend_visibility(
     }
 }
 
-fn decode_message(message: &AwsMessage) -> (Bytes, HeaderMap) {
+/// The payload and the headers a delivery carries, read off the message the queue returned.
+pub(crate) fn decode_message(message: &AwsMessage) -> (Bytes, HeaderMap) {
     let mut headers = HeaderMap::new();
     let mut base64_payload = false;
     if let Some(attributes) = message.message_attributes() {
