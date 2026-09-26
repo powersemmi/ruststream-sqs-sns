@@ -21,6 +21,8 @@ use std::time::Duration;
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_sqs::types::QueueAttributeName;
 #[cfg(feature = "testing")]
+use futures::future::lazy;
+#[cfg(feature = "testing")]
 use ruststream::testing::InProcess;
 use ruststream::{
     Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, DescribeServer,
@@ -497,48 +499,51 @@ impl Broker for SqsBroker {
 impl InProcess for SqsBroker {
     // The body awaits nothing, but it has to run where the future is polled: the runtime it
     // captures is the one the harness connects on, and a caller outside any runtime may build
-    // the future before handing it to one.
-    #[allow(clippy::unused_async_trait_impl)]
-    async fn connect_in_process(self) -> Result<Self::Connected, Self::Error> {
-        let region = self
-            .region
-            .clone()
-            .or_else(|| {
+    // the future before handing it to one. `lazy` defers the body to the first poll.
+    fn connect_in_process(
+        self,
+    ) -> impl Future<Output = Result<Self::Connected, Self::Error>> + Send {
+        lazy(move |_| {
+            let region = self
+                .region
+                .clone()
+                .or_else(|| {
+                    self.sdk_config
+                        .as_ref()
+                        .and_then(SdkConfig::region)
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_else(|| "us-east-1".to_owned());
+            let endpoint = self.endpoint.clone().or_else(|| {
                 self.sdk_config
                     .as_ref()
-                    .and_then(SdkConfig::region)
-                    .map(ToString::to_string)
-            })
-            .unwrap_or_else(|| "us-east-1".to_owned());
-        let endpoint = self.endpoint.clone().or_else(|| {
-            self.sdk_config
-                .as_ref()
-                .and_then(SdkConfig::endpoint_url)
-                .map(str::to_owned)
-        });
-        let fresh = Arc::new(Core::new(Transport::InProcess(Bus::new(
-            endpoint.as_deref(),
-            &region,
-            Handle::current(),
-        ))));
-        let core = match self.cell.set(Arc::clone(&fresh)) {
-            Ok(()) => Ok(fresh),
-            Err(_) => self
-                .cell
-                .get()
-                .filter(|core| matches!(core.transport, Transport::InProcess(_)))
-                .cloned()
-                .ok_or_else(|| {
-                    SqsError::Config(
-                        "this broker's handles already connected to AWS, so it cannot connect \
+                    .and_then(SdkConfig::endpoint_url)
+                    .map(str::to_owned)
+            });
+            let fresh = Arc::new(Core::new(Transport::InProcess(Bus::new(
+                endpoint.as_deref(),
+                &region,
+                Handle::current(),
+            ))));
+            let core = match self.cell.set(Arc::clone(&fresh)) {
+                Ok(()) => Ok(fresh),
+                Err(_) => self
+                    .cell
+                    .get()
+                    .filter(|core| matches!(core.transport, Transport::InProcess(_)))
+                    .cloned()
+                    .ok_or_else(|| {
+                        SqsError::Config(
+                            "this broker's handles already connected to AWS, so it cannot connect \
                          in process as well"
-                            .to_owned(),
-                    )
-                }),
-        };
-        core.map(|core| ConnectedSqsBroker {
-            core,
-            cell: self.cell,
+                                .to_owned(),
+                        )
+                    }),
+            };
+            core.map(|core| ConnectedSqsBroker {
+                core,
+                cell: self.cell,
+            })
         })
     }
 }
