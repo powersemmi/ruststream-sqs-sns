@@ -24,6 +24,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
 use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Str};
+use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 use crate::error::sdk_err;
@@ -121,6 +122,7 @@ fn receives_of(message: &AwsMessage) -> Option<u32> {
 impl SqsMessage {
     pub(crate) fn new(
         message: &AwsMessage,
+        runtime: &Handle,
         client: Client,
         queue_url: String,
         receipt: String,
@@ -131,8 +133,10 @@ impl SqsMessage {
         // Why a per-message watchdog: SQS has no lease API - a handler outliving the
         // visibility timeout would get a concurrent redelivery, so the crate extends the
         // visibility for as long as the handle is held (the issue's one piece of real
-        // machinery). Aborted on settle or drop.
-        let extender = tokio::spawn(extend_visibility(
+        // machinery). Aborted on settle or drop. It runs on the runtime the broker connected on,
+        // not on the thread that holds the delivery: a handler computing on a thread of its own
+        // would otherwise hold the extension back until the visibility lapsed.
+        let extender = runtime.spawn(extend_visibility(
             client.clone(),
             queue_url.clone(),
             receipt.clone(),
@@ -542,6 +546,7 @@ mod tests {
         }
         SqsMessage::new(
             &raw.build(),
+            &Handle::current(),
             offline_client(),
             "http://localhost:4566/000000000000/queue".to_owned(),
             "receipt".to_owned(),
