@@ -19,6 +19,7 @@ use aws_sdk_sqs::types::MessageSystemAttributeName;
 use futures::future::Either;
 use futures::{Stream, StreamExt};
 use ruststream::{BatchSubscriber, Subscriber, nonzero};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use crate::broker::Aws;
@@ -129,6 +130,9 @@ const _: () = assert!(size_of::<Lane>() == size_of::<Receiver>());
 /// The receive loop's parameters against the live queue.
 struct Receiver {
     client: aws_sdk_sqs::Client,
+    /// The runtime the broker connected on: the pump and the extenders run there, whichever
+    /// thread opens the stream.
+    runtime: Handle,
     queue_url: String,
     wait: Duration,
     visibility: Visibility,
@@ -185,6 +189,7 @@ impl SqsSubscriber {
         Ok(Self {
             lane: Lane::Aws(Receiver {
                 client: aws.sqs.clone(),
+                runtime: aws.runtime.clone(),
                 queue_url,
                 wait: descriptor.wait_value(),
                 visibility,
@@ -214,8 +219,9 @@ impl Receiver {
     fn pump(&self, size: usize) -> mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>> {
         // One batch in flight, so the pump stays exactly one receive ahead of the consumer.
         let (tx, rx) = mpsc::channel(1);
-        tokio::spawn(pump(
+        self.runtime.spawn(pump(
             self.client.clone(),
+            self.runtime.clone(),
             self.queue_url.clone(),
             Receive {
                 size: receive_size(size),
@@ -307,6 +313,7 @@ impl BatchSubscriber for SqsSubscriber {
 
 async fn pump(
     client: aws_sdk_sqs::Client,
+    runtime: Handle,
     queue_url: String,
     call: Receive,
     out: mpsc::Sender<Result<Vec<SqsMessage>, SqsError>>,
@@ -341,6 +348,7 @@ async fn pump(
                         let receipt = message.receipt_handle()?;
                         Some(SqsMessage::new(
                             message,
+                            &runtime,
                             client.clone(),
                             queue_url.clone(),
                             receipt.to_owned(),
