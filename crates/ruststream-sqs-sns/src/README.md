@@ -475,7 +475,8 @@ pub async fn run() {
 What the stand-in answers is routing by exact queue name and the settlement a handler asked for,
 the delay and the cap included: `retry_after` holds a delivery back and returns it once the delay
 has passed, receives are counted the way the queue counts them, and a registration's redrive
-policy moves a spent delivery to the dead-letter queue. What belongs to the queue itself it does
+policy moves a spent delivery to the dead-letter queue. A batch holds at most the ten messages one
+receive returns, whatever size the mount site named, and the same log line says so. What belongs to the queue itself it does
 not answer - a visibility timeout that lapses on its own, what a long poll costs, FIFO ordering,
 and the onward delivery of an SNS fan-out. Those hold against SQS, and the repository's live
 suite asserts them against the service itself.

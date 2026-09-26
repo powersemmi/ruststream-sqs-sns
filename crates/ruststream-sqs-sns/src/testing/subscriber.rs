@@ -15,6 +15,7 @@ use tokio::time::sleep;
 
 use crate::error::SqsError;
 use crate::queue::Redrive;
+use crate::subscriber::receive_batch;
 use crate::testing::broker::TestState;
 use crate::testing::router::{Delivery, DeliveryReceiver, DeliverySender, SubscriptionId};
 use crate::{PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER};
@@ -33,8 +34,12 @@ const BATCH_WINDOW: Duration = Duration::from_millis(100);
 /// The real subscriber batches on the wire, one `ReceiveMessage` per batch; the in-process
 /// router has no such call, so batches here are assembled by the framework's own client-side
 /// buffer. The mount site reads the same either way: it names a size and gets batches of at most
-/// that.
-pub struct SqsTestSubscriber(BufferedSubscriber<Deliveries>);
+/// that, and never more than the ten one receive returns.
+pub struct SqsTestSubscriber {
+    /// The queue the subscription reads, which the batch cap's warning names.
+    queue: String,
+    inner: BufferedSubscriber<Deliveries>,
+}
 
 impl std::fmt::Debug for SqsTestSubscriber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,6 +49,7 @@ impl std::fmt::Debug for SqsTestSubscriber {
 
 impl SqsTestSubscriber {
     pub(crate) fn new(
+        queue: String,
         state: Arc<TestState>,
         id: SubscriptionId,
         rx: DeliveryReceiver,
@@ -51,8 +57,9 @@ impl SqsTestSubscriber {
         redrive: Option<Redrive>,
         coordinator: Option<Coordinator>,
     ) -> Self {
-        Self(
-            BufferedSubscriber::new(Deliveries {
+        Self {
+            queue,
+            inner: BufferedSubscriber::new(Deliveries {
                 state,
                 id,
                 rx,
@@ -61,7 +68,7 @@ impl SqsTestSubscriber {
                 coordinator,
             })
             .max_wait(BATCH_WINDOW),
-        )
+        }
     }
 }
 
@@ -70,10 +77,13 @@ impl Subscriber for SqsTestSubscriber {
     type Error = SqsError;
 
     fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
-        self.0.stream()
+        self.inner.stream()
     }
 }
 
+/// Batches are capped where the queue caps them: one `ReceiveMessage` returns at most ten
+/// messages, so a registration that asks for more gets batches of ten here, as it does from the
+/// queue, and the same warning says so.
 impl BatchSubscriber for SqsTestSubscriber {
     type Batch = Vec<SqsTestMessage>;
 
@@ -81,7 +91,8 @@ impl BatchSubscriber for SqsTestSubscriber {
         &mut self,
         size: NonZeroUsize,
     ) -> impl Stream<Item = Result<Self::Batch, SqsError>> + Send + '_ {
-        self.0.batches(size)
+        let size = receive_batch(size, &self.queue);
+        self.inner.batches(size)
     }
 }
 
