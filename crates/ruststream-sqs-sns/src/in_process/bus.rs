@@ -75,6 +75,10 @@ pub(crate) struct Received {
 pub(crate) struct Bus {
     account: Mutex<Account>,
     coordinator: OnceLock<Coordinator>,
+    /// The runtime the broker connected on, where a visibility timeout runs out: a delivery
+    /// settled from a thread of its own must come back after that thread's runtime is gone, as
+    /// it does on the service.
+    runtime: Handle,
     /// Scheme and host of the queue URLs: the broker's endpoint, or the region's public one.
     url_base: String,
     next_id: AtomicU64,
@@ -323,8 +327,8 @@ fn wire_message(outbound: &Outbound, receipt: Option<u64>, receives: Option<u32>
 
 impl Bus {
     /// An empty account, its queue URLs built on `endpoint` or, without one, on the public
-    /// service of `region`.
-    pub(crate) fn new(endpoint: Option<&str>, region: &str) -> Arc<Self> {
+    /// service of `region`, its timers on `runtime`.
+    pub(crate) fn new(endpoint: Option<&str>, region: &str, runtime: Handle) -> Arc<Self> {
         let url_base = endpoint.map_or_else(
             || format!("https://sqs.{region}.amazonaws.com"),
             |endpoint| endpoint.trim_end_matches('/').to_owned(),
@@ -332,6 +336,7 @@ impl Bus {
         Arc::new(Self {
             account: Mutex::default(),
             coordinator: OnceLock::new(),
+            runtime,
             url_base,
             next_id: AtomicU64::new(1),
         })
@@ -674,16 +679,13 @@ impl Bus {
 
     /// Arms the timer that makes an in-flight message visible again.
     fn lapse_after(self: &Arc<Self>, delay: Duration, key: String, receipt: u64, generation: u64) {
-        // Why a runtime check: a delivery can be dropped after the test's runtime is gone, and
-        // then there is no clock left to arm and no receiver left to hand the message to.
-        let Ok(runtime) = Handle::try_current() else {
-            return;
-        };
         let bus = Arc::clone(self);
         let lapse = move || bus.lapse(&key, receipt, generation);
         match self.coordinator() {
             Some(coordinator) => coordinator.schedule_redelivery(delay, lapse),
-            None => drop(runtime.spawn(async move {
+            // A delivery dropped after that runtime is gone spawns nothing: there is no clock left
+            // to arm and no receiver left to hand the message to.
+            None => drop(self.runtime.spawn(async move {
                 tokio::time::sleep(delay).await;
                 lapse();
             })),

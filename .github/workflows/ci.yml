@@ -337,6 +337,7 @@ jobs:
           --test sns_fanout_sqs
           --test both_modes_sqs
           --test both_modes_sns
+          --test connect_runtime
           -- --test-threads=1
 
       - name: Cleanup

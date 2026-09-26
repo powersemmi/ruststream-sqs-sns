@@ -26,6 +26,7 @@ use ruststream::{
     Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, DescribeServer,
     RetryDeclaration, ServerSpec, Subscribe,
 };
+use tokio::runtime::Handle;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::error::{SqsError, sdk_err};
@@ -84,6 +85,11 @@ const _: () = assert!(size_of::<Transport>() == size_of::<Aws>());
 /// The live SDK clients and the name caches every resolution goes through.
 pub(crate) struct Aws {
     pub(crate) sqs: aws_sdk_sqs::Client,
+    /// The runtime `connect` ran on, which every task the broker starts on its own behalf (a
+    /// subscription's pump, a delivery's visibility extender) is spawned through, whichever
+    /// thread subscribes: a task left on a caller's runtime would wait behind that thread's work
+    /// and stop with it, while the queue it serves lives on.
+    pub(crate) runtime: Handle,
     #[cfg(feature = "sns")]
     pub(crate) sns: aws_sdk_sns::Client,
     pub(crate) endpoint: Option<String>,
@@ -455,6 +461,7 @@ impl Broker for SqsBroker {
                 let sqs = aws_sdk_sqs::Client::new(&config);
                 Ok::<_, SqsError>(Arc::new(Core::new(Transport::Aws(Aws {
                     sqs,
+                    runtime: Handle::current(),
                     #[cfg(feature = "sns")]
                     sns: aws_sdk_sns::Client::new(&config),
                     endpoint: self
@@ -488,9 +495,11 @@ impl Broker for SqsBroker {
 /// it gave out share one connection, and it cannot be two transports at once.
 #[cfg(feature = "testing")]
 impl InProcess for SqsBroker {
-    fn connect_in_process(
-        self,
-    ) -> impl Future<Output = Result<Self::Connected, Self::Error>> + Send {
+    // The body awaits nothing, but it has to run where the future is polled: the runtime it
+    // captures is the one the harness connects on, and a caller outside any runtime may build
+    // the future before handing it to one.
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn connect_in_process(self) -> Result<Self::Connected, Self::Error> {
         let region = self
             .region
             .clone()
@@ -510,6 +519,7 @@ impl InProcess for SqsBroker {
         let fresh = Arc::new(Core::new(Transport::InProcess(Bus::new(
             endpoint.as_deref(),
             &region,
+            Handle::current(),
         ))));
         let core = match self.cell.set(Arc::clone(&fresh)) {
             Ok(()) => Ok(fresh),
@@ -526,10 +536,10 @@ impl InProcess for SqsBroker {
                     )
                 }),
         };
-        ready(core.map(|core| ConnectedSqsBroker {
+        core.map(|core| ConnectedSqsBroker {
             core,
             cell: self.cell,
-        }))
+        })
     }
 }
 
