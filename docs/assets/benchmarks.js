@@ -102,9 +102,9 @@
   };
 
   // The honesty rule of the methodology, enforced where it is read: a difference smaller than the
-  // run-to-run spread is a verdict, never a percentage. The document decides it for the column the
-  // schema carries a verdict for; the adapter column is decided here from the spreads next to it,
-  // by the same rule.
+  // run-to-run spread is a verdict, never a percentage. The document decides it; a document from
+  // before it carried the adapter's verdict has it decided here from the spreads next to it, by
+  // the same rule.
   function percent(value, distinguishable, labels) {
     if (!distinguishable || typeof value !== "number") {
       return labels.indistinguishable;
@@ -127,6 +127,13 @@
   function adapterOverhead(scenario, labels) {
     if (!scenario.adapter) {
       return "-";
+    }
+    if (scenario.adapter_verdict) {
+      return percent(
+        scenario.adapter_overhead_percent,
+        scenario.adapter_verdict !== "indistinguishable",
+        labels,
+      );
     }
     const difference = Math.abs(figure(scenario.raw) - figure(scenario.adapter));
     const noise = Math.max(spread(scenario.raw), spread(scenario.adapter));
@@ -208,6 +215,14 @@
       results.crate + " " + results.crate_version + ", ruststream " + results.core_version,
     );
     row(labels.measured, results.measured_at);
+    const coded = results.code_measured;
+    if (coded) {
+      row(
+        labels.codeMeasured,
+        results.crate + " " + coded.crate_version + ", ruststream " + coded.core_version + ", " +
+          coded.measured_at,
+      );
+    }
     return element;
   }
 
@@ -248,7 +263,8 @@
     if (results.code?.length) {
       codeTable?.replaceChildren(code(results, labels, lang));
     } else {
-      codeTable?.replaceChildren(text("p", labels.unavailable.replace("{url}", new URL(url, location.href).href)));
+      // The document loaded: it only predates the code costs, or was published without them.
+      codeTable?.replaceChildren(text("p", labels.codeUnpublished));
     }
   }
 

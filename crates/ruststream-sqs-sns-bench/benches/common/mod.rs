@@ -310,6 +310,8 @@ struct Stand {
     endpoint: String,
     config: SdkConfig,
     queue_url: String,
+    /// The reply queue, which the run removes with its own: nothing drains it.
+    replies_url: String,
 }
 
 impl Stand {
@@ -340,10 +342,12 @@ impl Stand {
                     );
                 }
                 let queue_url = rebase(&endpoint, &urls[0]);
+                let replies_url = rebase(&endpoint, &urls[1]);
                 Self {
                     endpoint: endpoint.clone(),
                     config,
                     queue_url,
+                    replies_url,
                 }
             })
         })
@@ -393,16 +397,20 @@ impl Stand {
         });
     }
 
-    /// Deletes the run's queue, so a later run starts from an empty one.
+    /// Deletes the run's queue and the reply queue, so a later run starts from empty ones and
+    /// no reply is left on the stand.
     fn remove(self) {
         aside(|runtime| {
             runtime.block_on(async {
-                Client::new(&self.config)
-                    .delete_queue()
-                    .queue_url(&self.queue_url)
-                    .send()
-                    .await
-                    .expect("the stand deletes the queue");
+                let client = Client::new(&self.config);
+                for url in [&self.queue_url, &self.replies_url] {
+                    client
+                        .delete_queue()
+                        .queue_url(url)
+                        .send()
+                        .await
+                        .expect("the stand deletes the queue");
+                }
             });
         });
     }
