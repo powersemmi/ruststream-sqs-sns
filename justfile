@@ -52,6 +52,25 @@ bench *ARGS: brokers-up
         cargo bench -p ruststream-sqs-sns-bench --bench paired {{ ARGS }}
     python3 scripts/bench_results.py target/bench-paired.json docs/benchmarks/results.json
 
+# What this crate's own code costs per message, counted under valgrind: instructions through
+# callgrind and allocations through DHAT, each scenario a service on the production broker against
+# the stand the tests use, started, filled from another thread and drained. The page it feeds is
+# the code table of docs/benchmarks.md. RUSTFLAGS is cleared because valgrind aborts on the
+# instructions a recent CPU advertises. Needs valgrind and the runner the benches pin:
+# cargo install --locked gungraun-runner --version =0.19.4
+# Extra arguments reach the runner: `just bench-code --save-baseline=main` records a baseline,
+# `just bench-code --baseline=main` compares against it.
+bench-code *ARGS: brokers-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'just brokers-down' EXIT
+    mkdir -p target
+    RUSTFLAGS="" SQS_TEST_ENDPOINT=http://127.0.0.1:4566 \
+        cargo bench -p ruststream-sqs-sns-bench \
+        --bench consume --bench reply --bench batch \
+        -- --output-format=json {{ ARGS }} > target/bench-code.json
+    python3 scripts/bench_results.py --code target/bench-code.json docs/benchmarks/results.json
+
 fmt:
     cargo fmt --all
 
