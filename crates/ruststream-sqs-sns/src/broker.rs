@@ -19,6 +19,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
+#[cfg(feature = "sns")]
+use aws_sdk_sns::Client as SnsClient;
+use aws_sdk_sqs::Client as SqsClient;
 use aws_sdk_sqs::types::QueueAttributeName;
 #[cfg(feature = "testing")]
 use futures::future::lazy;
@@ -31,6 +34,7 @@ use ruststream::{
 use tokio::runtime::Handle;
 use tokio::sync::{Mutex, OnceCell};
 
+use crate::clients::Clients;
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process::{self, Bus};
@@ -86,14 +90,13 @@ const _: () = assert!(size_of::<Transport>() == size_of::<Aws>());
 
 /// The live SDK clients and the name caches every resolution goes through.
 pub(crate) struct Aws {
-    pub(crate) sqs: aws_sdk_sqs::Client,
+    /// The SDK clients, chosen per request by the runtime that sends it.
+    pub(crate) clients: Arc<Clients>,
     /// The runtime `connect` ran on, which every task the broker starts on its own behalf (a
     /// subscription's pump, a delivery's visibility extender) is spawned through, whichever
     /// thread subscribes: a task left on a caller's runtime would wait behind that thread's work
     /// and stop with it, while the queue it serves lives on.
     pub(crate) runtime: Handle,
-    #[cfg(feature = "sns")]
-    pub(crate) sns: aws_sdk_sns::Client,
     pub(crate) endpoint: Option<String>,
     /// Queue-name -> URL cache shared by publishers and subscriptions.
     pub(crate) queue_urls: Mutex<HashMap<String, String>>,
@@ -161,8 +164,8 @@ impl Aws {
             return Ok(url.clone());
         }
         let resolved = self
-            .sqs
-            .get_queue_url()
+            .clients
+            .sqs(SqsClient::get_queue_url)
             .queue_name(resource_name(queue))
             .send()
             .await
@@ -196,7 +199,7 @@ impl Aws {
             return Ok(arn.clone());
         }
         let name = resource_name(topic);
-        let mut create = self.sns.create_topic().name(&name);
+        let mut create = self.clients.sns(SnsClient::create_topic).name(&name);
         if is_fifo(&name) {
             // SNS refuses a `.fifo` name outright unless the topic is declared FIFO, so the
             // suffix that makes a queue FIFO makes a topic FIFO here too. Deduplication stays
@@ -221,8 +224,8 @@ impl Aws {
     /// The queue's ARN, which is how every SQS resource names another one: an SNS subscription
     /// endpoint, a redrive policy's dead-letter target.
     pub(crate) async fn queue_arn(&self, queue: &str, queue_url: &str) -> Result<String, SqsError> {
-        self.sqs
-            .get_queue_attributes()
+        self.clients
+            .sqs(SqsClient::get_queue_attributes)
             .queue_url(queue_url)
             .attribute_names(QueueAttributeName::QueueArn)
             .send()
@@ -251,8 +254,8 @@ impl Aws {
         queue_url: &str,
     ) -> Result<Duration, SqsError> {
         let attributes = self
-            .sqs
-            .get_queue_attributes()
+            .clients
+            .sqs(SqsClient::get_queue_attributes)
             .queue_url(queue_url)
             .attribute_names(QueueAttributeName::VisibilityTimeout)
             .send()
@@ -392,6 +395,10 @@ impl SqsBroker {
     }
 
     /// Uses an already built AWS config instead of resolving one from the environment.
+    ///
+    /// A dedicated handler thread sends through clients of its own built from this config. An
+    /// HTTP client the config names is shared by all of them, and so is its connection pool;
+    /// leaving the HTTP client to the SDK gives every thread a pool of its own.
     pub fn from_config(config: SdkConfig) -> Self {
         Self {
             sdk_config: Some(config),
@@ -460,16 +467,15 @@ impl Broker for SqsBroker {
                     );
                     loader.load().await
                 };
-                let sqs = aws_sdk_sqs::Client::new(&config);
+                let runtime = Handle::current();
+                let endpoint = self
+                    .endpoint
+                    .clone()
+                    .or_else(|| config.endpoint_url().map(str::to_owned));
                 Ok::<_, SqsError>(Arc::new(Core::new(Transport::Aws(Aws {
-                    sqs,
-                    runtime: Handle::current(),
-                    #[cfg(feature = "sns")]
-                    sns: aws_sdk_sns::Client::new(&config),
-                    endpoint: self
-                        .endpoint
-                        .clone()
-                        .or_else(|| config.endpoint_url().map(str::to_owned)),
+                    clients: Clients::new(config, &runtime),
+                    runtime,
+                    endpoint,
                     queue_urls: Mutex::new(HashMap::new()),
                     #[cfg(feature = "sns")]
                     topic_arns: Mutex::new(HashMap::new()),
@@ -611,8 +617,8 @@ impl ConnectedSqsBroker {
         let queue_url = aws.queue_url(queue).await?;
         let queue_arn = aws.queue_arn(queue, &queue_url).await?;
         let subscribed = aws
-            .sns
-            .subscribe()
+            .clients
+            .sns(SnsClient::subscribe)
             .topic_arn(&topic_arn)
             .protocol("sqs")
             .endpoint(queue_arn)
@@ -688,8 +694,8 @@ impl Aws {
         let dead_letter_arn = self
             .queue_arn(&redrive.dead_letter, &dead_letter_url)
             .await?;
-        self.sqs
-            .set_queue_attributes()
+        self.clients
+            .sqs(SqsClient::set_queue_attributes)
             .queue_url(queue_url)
             .attributes(
                 QueueAttributeName::RedrivePolicy,
@@ -710,7 +716,10 @@ impl Aws {
         if let Ok(url) = self.queue_url(queue).await {
             return Ok(url);
         }
-        let mut create = self.sqs.create_queue().queue_name(resource_name(queue));
+        let mut create = self
+            .clients
+            .sqs(SqsClient::create_queue)
+            .queue_name(resource_name(queue));
         if queue.to_ascii_lowercase().ends_with(".fifo") {
             create = create
                 .attributes(QueueAttributeName::FifoQueue, "true")

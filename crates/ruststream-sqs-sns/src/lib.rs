@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod broker;
+mod clients;
 mod error;
 #[cfg(feature = "testing")]
 mod in_process;
