@@ -21,16 +21,18 @@
 //! visibility is changed, or its handle is dropped and the visibility timeout lapses; the receive
 //! count, and the redrive policy that moves a message whose receives ran out to the dead-letter
 //! queue on the receive after; FIFO queues, where a group with a message in flight hands out
-//! nothing and a deduplication id is remembered for five minutes; SNS topics, which deliver a
-//! copy to every queue subscribed to them. What belongs to the service and is left to the live
-//! mode: a queue's storage while no subscription reads it (a message sent to such a queue is
-//! dropped here), the visibility timeout an operator set on a queue (a descriptor that names none
-//! gets the 30 seconds SQS gives a new queue), a topology the service expects to find but did not
-//! create (every queue and topic it names exists here), the ordering of a standard queue, which
-//! SQS does not keep and this transport does, and credentials.
+//! nothing and a deduplication id is remembered for five minutes; with the `sns` feature, SNS
+//! topics, which deliver a copy to every queue subscribed to them. What belongs to the service and
+//! is left to the live mode: a queue's storage while no subscription reads it (a message sent to
+//! such a queue is dropped here), the visibility timeout an operator set on a queue (a descriptor
+//! that names none gets the 30 seconds SQS gives a new queue), a topology the service expects to
+//! find but did not create (every queue and topic it names exists here), the ordering of a standard
+//! queue, which SQS does not keep and this transport does, and credentials.
 
 mod bus;
 mod deliveries;
+#[cfg(feature = "sns")]
+mod routing;
 
 use std::sync::Arc;
 
@@ -38,10 +40,16 @@ use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{BytesMut, HeaderMap, OutgoingFor, OutgoingMessage, RawMessage, Take};
 
 pub(crate) use bus::Bus;
-use bus::{DEFAULT_VISIBILITY, Outbound, queue_key, topic_key};
+#[cfg(feature = "sns")]
+use bus::topic_key;
+use bus::{DEFAULT_VISIBILITY, Outbound, queue_key};
 pub(crate) use deliveries::{BusDeliveries, BusReceipt};
+#[cfg(feature = "sns")]
+pub(crate) use routing::{Routing, Surface};
 
 use crate::SqsPublishOptions;
+#[cfg(feature = "sns")]
+use crate::broker::Core;
 use crate::broker::{ConnectedSqsBroker, Transport};
 use crate::error::SqsError;
 use crate::message::{encode_attributes, encode_body};
@@ -82,6 +90,7 @@ pub(crate) fn subscribe(bus: &Arc<Bus>, queue: &SqsQueue) -> Result<SqsSubscribe
 ///
 /// Returns [`SqsError::Admin`] for a topic name SNS refuses and a FIFO queue on a standard
 /// topic, and [`SqsError::Queue`] for a queue name SQS refuses.
+#[cfg(feature = "sns")]
 pub(crate) fn subscribe_topic(bus: &Bus, topic: &str, queue: &str) -> Result<(), SqsError> {
     let admin = |reason: String| SqsError::Admin {
         name: topic.to_owned(),
@@ -154,6 +163,7 @@ pub(crate) fn send(
 ///
 /// Returns [`SqsError::Admin`] for a topic name SNS refuses, [`SqsError::NotFifo`] for a FIFO
 /// setting on a standard topic, and [`SqsError::Publish`] for a message SNS refuses.
+#[cfg(feature = "sns")]
 pub(crate) fn publish_topic(
     bus: &Bus,
     msg: OutgoingFor<'_, Take>,
@@ -180,22 +190,69 @@ pub(crate) fn publish_topic(
         })
 }
 
+/// Makes the queues a publish policy names as subscribed to `topic` outside the service known
+/// to the broker: the in-process account subscribes them, as the operator did on AWS, and the
+/// harness's routing answer counts them on either transport.
+///
+/// # Errors
+///
+/// Returns what subscribing the queue to the topic returns in process: [`SqsError::Admin`] for a
+/// topic name SNS refuses and a FIFO queue on a standard topic, [`SqsError::Queue`] for a queue
+/// name SQS refuses.
+#[cfg(feature = "sns")]
+pub(crate) fn declare_fan_out(core: &Core, topic: &str, queues: &[String]) -> Result<(), SqsError> {
+    for queue in queues {
+        if let Transport::InProcess(bus) = &core.transport {
+            subscribe_topic(bus, topic, queue)?;
+        }
+        record_topic_queue(core, topic, queue);
+    }
+    Ok(())
+}
+
+/// Notes that `queue` is subscribed to `topic`, for [`TestableBroker::routes`].
+#[cfg(feature = "sns")]
+fn record_topic_queue(core: &Core, topic: &str, queue: &str) {
+    if let (Ok(topic), Ok(queue)) = (topic_key(topic), queue_key(queue)) {
+        core.routing.subscribe(topic, queue);
+    }
+}
+
 impl ConnectedSqsBroker {
     /// Notes that `queue` is subscribed to `topic`, for [`TestableBroker::routes`].
+    #[cfg(feature = "sns")]
     pub(crate) fn record_topic_queue(&self, topic: &str, queue: &str) {
-        let (Ok(topic), Ok(queue)) = (topic_key(topic), queue_key(queue)) else {
-            return;
-        };
-        let mut topics = self
-            .core
-            .topic_queues
-            .lock()
-            .expect("the topic record mutex is poisoned");
-        let queues = topics.entry(topic).or_default();
-        if !queues.contains(&queue) {
-            queues.push(queue);
+        record_topic_queue(&self.core, topic, queue);
+    }
+
+    /// The queues a publish to `destination` reaches: the topic's subscribed queues when the
+    /// publish went to a topic of that name, otherwise the queue the name addresses.
+    // Without `sns` a name only ever addresses a queue, so the broker's records have nothing to
+    // add; the method keeps its receiver for the build that reads them.
+    #[cfg_attr(not(feature = "sns"), allow(clippy::unused_self))]
+    fn reached_queues(&self, destination: &str) -> Vec<String> {
+        #[cfg(feature = "sns")]
+        {
+            let topic_queues = || {
+                topic_key(destination)
+                    .ok()
+                    .and_then(|topic| self.core.routing.fanned_out(&topic))
+            };
+            match self.core.routing.next_surface(destination) {
+                // A topic publish reaches the topic's queues and nothing else, whatever else
+                // carries the name.
+                Some(Surface::Topic) => return topic_queues().unwrap_or_default(),
+                Some(Surface::Queue) => {}
+                // No paired publisher sent there: the name reads as the topic when one with
+                // subscribed queues carries it.
+                None => {
+                    if let Some(queues) = topic_queues() {
+                        return queues;
+                    }
+                }
+            }
         }
-        drop(topics);
+        queue_key(destination).into_iter().collect()
     }
 
     /// The in-process account, which is all the harness drives.
@@ -260,23 +317,18 @@ impl TestableBroker for ConnectedSqsBroker {
     }
 
     /// SQS and SNS routing. A destination that names a topic this broker subscribed queues to
-    /// reaches those queues; any other destination names a queue. A queue hands each message to
-    /// one receiver, so of the subscriptions that read one queue the first is the one owed it.
-    /// Two names reach the same queue when they map onto the same queue name: a queue URL by its
-    /// last path segment, a name through the alphabet SQS takes (`order.events` is
-    /// `order-events`).
+    /// reaches those queues (with the `sns` feature); any other destination names a queue. A
+    /// queue hands each message to one receiver, so of the subscriptions that read one queue the
+    /// first is the one owed it. Two names reach the same queue when they map onto the same queue
+    /// name: a queue URL by its last path segment, a name through the alphabet SQS takes
+    /// (`order.events` is `order-events`).
+    ///
+    /// A queue and a topic may carry one name. The publisher tells them apart: each publish a
+    /// paired [`SqsPublisher`](crate::SqsPublisher) sent reaches the queue, each one a paired
+    /// `SnsPublisher` sent reaches the topic's queues, and the harness, which asks once per
+    /// publish on every pass, is answered with each as many times as it happened.
     fn routes(&self, destination: &str, subscriptions: &[&str]) -> Vec<usize> {
-        let fanned_out = topic_key(destination).ok().and_then(|topic| {
-            self.core
-                .topic_queues
-                .lock()
-                .expect("the topic record mutex is poisoned")
-                .get(&topic)
-                .cloned()
-        });
-        let queues = fanned_out
-            .filter(|queues| !queues.is_empty())
-            .unwrap_or_else(|| queue_key(destination).into_iter().collect());
+        let queues = self.reached_queues(destination);
         let mut positions: Vec<usize> = queues
             .iter()
             .filter_map(|queue| {

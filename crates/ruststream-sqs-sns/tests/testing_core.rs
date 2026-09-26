@@ -318,6 +318,7 @@ async fn the_production_publish_policy_mounts_in_process() {
     tb.shutdown().await.expect("the app shuts down");
 }
 
+#[cfg(feature = "sns")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fan_out_policy_mounts_the_same_way() {
     let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {

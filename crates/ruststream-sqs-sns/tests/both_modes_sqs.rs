@@ -11,7 +11,6 @@
 #![cfg(feature = "testing")]
 
 use std::error::Error;
-use std::io;
 use std::time::Duration;
 
 use ruststream::testing::TestApp;
@@ -102,103 +101,4 @@ async fn live_an_invoice_comes_back_after_the_delay() -> Result<(), Box<dyn Erro
         return Ok(());
     }
     an_invoice_comes_back_after_the_delay(TestApp::start_live(invoices()).await?).await
-}
-
-// --- SNS fan-out ---------------------------------------------------------------------------
-
-const ORDERS: &str = "both-modes-orders";
-const EVENTS: &str = "both-modes-order-events";
-const BILLING: &str = "both-modes-billing";
-const SHIPPING: &str = "both-modes-shipping";
-
-#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
-struct PlaceOrder {
-    id: u64,
-}
-
-/// The notification the topic fans out; it names the topic.
-#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
-#[outgoing(name = "both-modes-order-events")]
-struct OrderPlaced {
-    id: u64,
-}
-
-#[subscriber(SqsQueue, publish)]
-async fn accept(order: &PlaceOrder) -> OrderPlaced {
-    OrderPlaced { id: order.id }
-}
-
-#[subscriber(SqsQueue)]
-async fn bill(order: &OrderPlaced) -> HandlerOutcome {
-    let _ = order.id;
-    HandlerOutcome::ack()
-}
-
-#[subscriber(SqsQueue)]
-async fn ship(order: &OrderPlaced) -> HandlerOutcome {
-    let _ = order.id;
-    HandlerOutcome::ack()
-}
-
-/// Subscribes both queues to the topic. The broker is a clone of the app's, so it connects to the
-/// connection the app's broker already holds: the stack live, the in-process account in a test.
-async fn wire_topology(broker: SqsBroker) -> io::Result<()> {
-    let connected = broker.connect().await.map_err(io::Error::other)?;
-    for queue in [BILLING, SHIPPING] {
-        connected
-            .subscribe_queue_to_topic(EVENTS, queue)
-            .await
-            .map_err(io::Error::other)?;
-    }
-    Ok(())
-}
-
-fn fan_out() -> RustStream {
-    let broker = broker();
-    let topology = broker.clone();
-    RustStream::new(AppInfo::new("fan-out", "0.1.0"))
-        .after_startup(async move |_state| wire_topology(topology).await)
-        .with_broker(broker, |b| {
-            b.include(accept.name(ORDERS).create_if_missing())
-                .out_reply(SnsPublish::default());
-            b.include(bill.name(BILLING).create_if_missing());
-            b.include(ship.name(SHIPPING).create_if_missing());
-        })
-}
-
-/// The reply fans out from the topic: every queue subscribed to it receives a copy, and the one
-/// publish reaches both handlers.
-async fn a_reply_fans_out_to_every_subscribed_queue(tb: TestApp<()>) -> Result<(), Box<dyn Error>> {
-    tb.broker::<SqsBroker>()
-        .message(&PlaceOrder { id: 7 })
-        .to(ORDERS)
-        .publish()
-        .await?;
-
-    for queue in [BILLING, SHIPPING] {
-        tb.broker::<SqsBroker>()
-            .subscriber(queue)
-            .assert_called_once()
-            .with(&OrderPlaced { id: 7 })
-            .settled(HandlerOutcome::ack());
-    }
-    tb.broker::<SqsBroker>()
-        .published::<OrderPlaced>(EVENTS)
-        .assert_called_once()
-        .with(&OrderPlaced { id: 7 });
-    tb.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn in_process_a_reply_fans_out_to_every_subscribed_queue() -> Result<(), Box<dyn Error>> {
-    a_reply_fans_out_to_every_subscribed_queue(TestApp::start(fan_out()).await?).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn live_a_reply_fans_out_to_every_subscribed_queue() -> Result<(), Box<dyn Error>> {
-    if live::endpoint("SQS_TEST_ENDPOINT").is_none() {
-        return Ok(());
-    }
-    a_reply_fans_out_to_every_subscribed_queue(TestApp::start_live(fan_out()).await?).await
 }

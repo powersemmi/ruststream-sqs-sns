@@ -1,6 +1,6 @@
 [package]
 name = "ruststream-sqs-sns"
-description = "Amazon SQS broker implementation for the RustStream messaging framework, with SNS fan-out publishing."
+description = "Amazon SQS broker implementation for the RustStream messaging framework, with optional SNS fan-out publishing."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -25,15 +25,19 @@ default = []
 # enables it in its dev-dependencies. The conformance harness is a broker-author tool and stays in
 # this repo's dev-dependencies, not in the user-facing feature.
 testing = ["ruststream/testing"]
-# What this broker contributes to the AsyncAPI document the framework generates: the `sqs` and
-# `sns` protocol bindings of the channels a subscription reads and a publish position writes.
+# What this broker contributes to the AsyncAPI document the framework generates: the `sqs`
+# protocol bindings of the channels a subscription reads and a publish position writes, and the
+# `sns` ones of a fan-out position when `sns` is on too.
 asyncapi = ["ruststream/asyncapi", "dep:serde"]
+# Publishing to SNS topics: `SnsPublish` / `SnsPublisher` and subscribing a queue to a topic.
+# Off by default, so a service that only reads and writes queues builds without the SNS client.
+sns = ["dep:aws-sdk-sns"]
 
 [dependencies]
 ruststream = { workspace = true, default-features = false }
 aws-config.workspace = true
 aws-sdk-sqs.workspace = true
-aws-sdk-sns.workspace = true
+aws-sdk-sns = { workspace = true, optional = true }
 base64.workspace = true
 bytes.workspace = true
 futures.workspace = true
@@ -47,3 +51,7 @@ ruststream = { workspace = true, features = ["asyncapi", "conformance", "testing
 serde.workspace = true
 serde_json = "1"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[[example]]
+name = "sns_fanout"
+required-features = ["sns"]

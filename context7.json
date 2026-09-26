@@ -6,7 +6,7 @@
     "Take a batch as a `&[T]` parameter and name its size with `.batch(n)`: one `ReceiveMessage` call is one batch, and the service returns at most ten messages per call.",
     "Cap redeliveries with `.max_attempts(n).dead_letter(name)` right after `include`, always both halves; they become the queue's redrive policy, and `.out_retry(..)` does not compile on an `SqsQueue`.",
     "Return `HandlerOutcome::retry_after(delay)` as it is: SQS defers through the visibility timeout, so no copy is published and the queue's receive count survives.",
-    "Bind a reply position with `.out_reply(SnsPublish::default())` for topic fan-out; `SqsPublish` is the broker's default policy, so a queue-to-queue reply binds nothing.",
+    "Enable the `sns` feature and bind a reply position with `.out_reply(SnsPublish::default())` for topic fan-out; `SqsPublish` is the broker's default policy, so a queue-to-queue reply binds nothing.",
     "Set a FIFO message group per message with the `group_id` and `deduplication_id` steps of `SqsPublishSteps`, or fix a position's group with `Publish::default().group_id(..)`; naming either for a standard queue or topic is an error.",
     "Bound a handler that names one of those steps as `Out<impl Publisher<Options = SqsPublishOptions>, Marker>`; a handler signature never names `SqsPublisher` or `SnsPublisher`.",
     "Test the production app: with feature `testing`, hand the builder `main` runs to `ruststream::testing::TestApp::start`, which connects `SqsBroker` in process, and address it as `tb.broker::<SqsBroker>()`; `TestApp::start_live` runs the same test against a running stack, which is where a queue's storage while nothing reads it, an operator's visibility timeout and credentials are exercised."

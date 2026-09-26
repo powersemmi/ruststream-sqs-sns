@@ -17,6 +17,9 @@ check:
 
 test:
     cargo test --workspace --all-features
+    # The build a queue-only service ships: SNS is an opt-in feature.
+    cargo test --workspace --no-default-features
+    cargo test -p ruststream-sqs-sns --no-default-features --features testing
 
 brokers-up:
     docker compose -f docker-compose.test.yml up -d --wait
