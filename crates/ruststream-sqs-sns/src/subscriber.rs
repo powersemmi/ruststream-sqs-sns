@@ -12,6 +12,7 @@
 //! the stream is dropped, where the cost (one closed HTTP connection) does not matter.
 
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::sync::Arc;
 use std::time::Duration;
 
 use aws_sdk_sqs::types::MessageSystemAttributeName;
@@ -23,6 +24,7 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use crate::broker::Aws;
+use crate::clients::Clients;
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process::BusDeliveries;
@@ -129,7 +131,9 @@ const _: () = assert!(size_of::<Lane>() == size_of::<Receiver>());
 
 /// The receive loop's parameters against the live queue.
 struct Receiver {
-    client: aws_sdk_sqs::Client,
+    /// The broker's clients: the pump and the extenders send through the set of the broker's
+    /// runtime, and each delivery settles through the set of the runtime that settles it.
+    clients: Arc<Clients>,
     /// The runtime the broker connected on: the pump and the extenders run there, whichever
     /// thread opens the stream.
     runtime: Handle,
@@ -188,7 +192,7 @@ impl SqsSubscriber {
         };
         Ok(Self {
             lane: Lane::Aws(Receiver {
-                client: aws.sqs.clone(),
+                clients: Arc::clone(&aws.clients),
                 runtime: aws.runtime.clone(),
                 queue_url,
                 wait: descriptor.wait_value(),
@@ -220,7 +224,7 @@ impl Receiver {
         // One batch in flight, so the pump stays exactly one receive ahead of the consumer.
         let (tx, rx) = mpsc::channel(1);
         self.runtime.spawn(pump(
-            self.client.clone(),
+            Arc::clone(&self.clients),
             self.runtime.clone(),
             self.queue_url.clone(),
             Receive {
@@ -312,13 +316,15 @@ impl BatchSubscriber for SqsSubscriber {
 }
 
 async fn pump(
-    client: aws_sdk_sqs::Client,
+    clients: Arc<Clients>,
     runtime: Handle,
     queue_url: String,
     call: Receive,
     out: mpsc::Sender<Result<Vec<SqsMessage>, SqsError>>,
 ) {
     let visibility = call.visibility.held();
+    // The pump runs on the broker's runtime, so it receives through that runtime's client.
+    let client = &clients.home().sqs;
     loop {
         let mut receive = client
             .receive_message()
@@ -349,7 +355,7 @@ async fn pump(
                         Some(SqsMessage::new(
                             message,
                             &runtime,
-                            client.clone(),
+                            Arc::clone(&clients),
                             queue_url.clone(),
                             receipt.to_owned(),
                             visibility,

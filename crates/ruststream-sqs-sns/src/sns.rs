@@ -12,6 +12,7 @@
 
 use std::future::{Future, ready};
 
+use aws_sdk_sns::Client as SnsClient;
 use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 #[cfg(feature = "asyncapi")]
@@ -198,7 +199,11 @@ impl SnsPublisher {
         let (destination, payload, headers) = msg.into_parts();
         let (body, base64_marker) = encode_body(payload);
 
-        let mut publish = aws.sns.publish().topic_arn(&arn).message(body);
+        let mut publish = aws
+            .clients
+            .sns(SnsClient::publish)
+            .topic_arn(&arn)
+            .message(body);
         let mut partition_key = None;
         for (name, value) in headers.iter() {
             if name == PARTITION_KEY_HEADER {

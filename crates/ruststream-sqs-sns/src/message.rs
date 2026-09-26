@@ -13,6 +13,7 @@
 )]
 
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aws_sdk_sqs::Client;
@@ -27,6 +28,7 @@ use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, St
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
+use crate::clients::Clients;
 use crate::error::sdk_err;
 #[cfg(feature = "testing")]
 use crate::in_process::BusReceipt;
@@ -83,7 +85,8 @@ const _: () = assert!(size_of::<Receipt>() == size_of::<AwsReceipt>());
 
 /// A live delivery's settlement handle, and the task keeping it invisible meanwhile.
 struct AwsReceipt {
-    client: Client,
+    /// The broker's clients: a settlement goes out through the set of the runtime that settles.
+    clients: Arc<Clients>,
     queue_url: String,
     receipt: String,
     extender: JoinHandle<()>,
@@ -123,7 +126,7 @@ impl SqsMessage {
     pub(crate) fn new(
         message: &AwsMessage,
         runtime: &Handle,
-        client: Client,
+        clients: Arc<Clients>,
         queue_url: String,
         receipt: String,
         visibility: Duration,
@@ -137,7 +140,7 @@ impl SqsMessage {
         // not on the thread that holds the delivery: a handler computing on a thread of its own
         // would otherwise hold the extension back until the visibility lapsed.
         let extender = runtime.spawn(extend_visibility(
-            client.clone(),
+            clients.home().sqs.clone(),
             queue_url.clone(),
             receipt.clone(),
             visibility,
@@ -148,7 +151,7 @@ impl SqsMessage {
             receives: receives_of(message),
             redrive_max,
             receipt: Receipt::Aws(AwsReceipt {
-                client,
+                clients,
                 queue_url,
                 receipt,
                 extender,
@@ -203,8 +206,8 @@ impl SqsMessage {
                 return Ok(());
             }
         };
-        aws.client
-            .delete_message()
+        aws.clients
+            .sqs(Client::delete_message)
             .queue_url(&aws.queue_url)
             .receipt_handle(&aws.receipt)
             .send()
@@ -219,8 +222,8 @@ impl SqsMessage {
             #[cfg(feature = "testing")]
             Receipt::InProcess(receipt) => return receipt.change_visibility(seconds),
         };
-        aws.client
-            .change_message_visibility()
+        aws.clients
+            .sqs(Client::change_message_visibility)
             .queue_url(&aws.queue_url)
             .receipt_handle(&aws.receipt)
             .visibility_timeout(seconds)
@@ -442,6 +445,8 @@ pub(crate) fn encode_attributes(
 
 #[cfg(test)]
 mod tests {
+    use aws_config::{BehaviorVersion, Region, SdkConfig};
+
     use super::*;
 
     /// Content equality cannot tell a hand-over from a copy, so the buffer the framework wrote is
@@ -524,14 +529,14 @@ mod tests {
         assert!(!attributes.contains_key(PARTITION_KEY_HEADER));
     }
 
-    /// A client built from a bare config: no network happens until an operation is sent, and
+    /// Clients built from a bare config: no network happens until an operation is sent, and
     /// this test never sends one.
-    fn offline_client() -> Client {
-        let config = aws_config::SdkConfig::builder()
-            .behavior_version(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new("us-east-1"))
+    fn offline_clients() -> Arc<Clients> {
+        let config = SdkConfig::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
             .build();
-        Client::new(&config)
+        Clients::new(config, &Handle::current())
     }
 
     /// One delivery as the service hands it over, with `receives` as its
@@ -547,7 +552,7 @@ mod tests {
         SqsMessage::new(
             &raw.build(),
             &Handle::current(),
-            offline_client(),
+            offline_clients(),
             "http://localhost:4566/000000000000/queue".to_owned(),
             "receipt".to_owned(),
             Duration::from_secs(30),
