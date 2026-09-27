@@ -100,7 +100,8 @@ fn key_in_header(key: &[u8], headers: &mut HeaderMap) -> Option<SqsPublishOption
 }
 
 /// The FIFO settings the options check publishes with: a group of the call's own, a call that
-/// names only a deduplication id and so keeps the policy's group.
+/// names only a deduplication id and so keeps the policy's group, and the ids SQS refuses: one
+/// character over its 128, and a character outside letters, digits and punctuation.
 fn option_cases() -> OptionCases<SqsPublishOptions, Option<String>> {
     OptionCases::new(Some(POLICY_GROUP.to_owned()))
         .overrides(
@@ -111,6 +112,9 @@ fn option_cases() -> OptionCases<SqsPublishOptions, Option<String>> {
             SqsPublishOptions::default().deduplication_id("call-dedup"),
             Some(POLICY_GROUP.to_owned()),
         )
+        .refuses(SqsPublishOptions::default().group_id("g".repeat(129)))
+        .refuses(SqsPublishOptions::default().group_id("a group"))
+        .refuses(SqsPublishOptions::default().deduplication_id("d".repeat(129)))
 }
 
 // ---------------------------------------------------------------------------------------------
