@@ -270,6 +270,34 @@ pub(crate) fn check_message(outbound: &Outbound, limit: usize) -> Result<(), Str
     Ok(())
 }
 
+/// The longest message group id and deduplication id the service takes.
+const MAX_FIFO_ID: usize = 128;
+
+/// Refuses the FIFO settings the service refuses: a group id or a deduplication id is 1 to 128
+/// of letters, digits and punctuation.
+fn check_fifo(outbound: &Outbound) -> Result<(), String> {
+    let Some(settings) = &outbound.fifo else {
+        return Ok(());
+    };
+    for (what, id) in [
+        ("MessageGroupId", &settings.group),
+        ("MessageDeduplicationId", &settings.deduplication),
+    ] {
+        let valid = !id.is_empty()
+            && id.len() <= MAX_FIFO_ID
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c.is_ascii_punctuation());
+        if !valid {
+            return Err(format!(
+                "{what} {id:?} is not one the service takes: it is 1 to {MAX_FIFO_ID} of \
+                 letters, digits and punctuation"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A message attribute name as the service takes it.
 fn check_attribute_name(name: &str) -> Result<(), String> {
     let lower = name.to_ascii_lowercase();
@@ -445,6 +473,7 @@ impl Bus {
             }
             _ => {}
         }
+        check_fifo(&outbound)?;
         let entry = log_entry(name, &outbound);
         let mut account = self.account();
         account.log.entry(name.to_owned()).or_default().push(entry);
@@ -474,6 +503,7 @@ impl Bus {
             }
             _ => {}
         }
+        check_fifo(outbound)?;
         let mut account = self.account();
         let entry = log_entry(name, outbound);
         account.log.entry(name.to_owned()).or_default().push(entry);
