@@ -10,7 +10,8 @@
 //!
 //! * the routing contract ([`harness::run_suite`], in process only: it drives the
 //!   `TestableBroker` surface, which no live broker has);
-//! * what a shutdown must finish ([`lifecycle::shutdown_flushes`]);
+//! * the lifecycle ladder ([`harness::lifecycle`]) through the crate's descriptor and through a
+//!   bare name, and what a shutdown must finish ([`lifecycle::shutdown_flushes`]);
 //! * what a settlement means ([`settlement`]), and the in-process answers held to the server's;
 //! * the queue's own redrive ([`retry::broker_moves`]): a queue moves a spent delivery itself, so
 //!   no subscription reports an address for a retry copy;
@@ -99,7 +100,8 @@ fn key_in_header(key: &[u8], headers: &mut HeaderMap) -> Option<SqsPublishOption
 }
 
 /// The FIFO settings the options check publishes with: a group of the call's own, a call that
-/// names only a deduplication id and so keeps the policy's group.
+/// names only a deduplication id and so keeps the policy's group, and the ids SQS refuses: one
+/// character over its 128, and a character outside letters, digits and punctuation.
 fn option_cases() -> OptionCases<SqsPublishOptions, Option<String>> {
     OptionCases::new(Some(POLICY_GROUP.to_owned()))
         .overrides(
@@ -110,6 +112,9 @@ fn option_cases() -> OptionCases<SqsPublishOptions, Option<String>> {
             SqsPublishOptions::default().deduplication_id("call-dedup"),
             Some(POLICY_GROUP.to_owned()),
         )
+        .refuses(SqsPublishOptions::default().group_id("g".repeat(129)))
+        .refuses(SqsPublishOptions::default().group_id("a group"))
+        .refuses(SqsPublishOptions::default().deduplication_id("d".repeat(129)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -121,8 +126,27 @@ async fn the_in_process_mode_passes_conformance_suite() {
     harness::run_suite(|| SqsBroker::new().region("us-east-1")).await;
 }
 
+/// The lifecycle ladder in process: the same walk the live leg below makes, through the crate's
+/// descriptor and through the bare-name form, which resolves through `Subscribe`.
 // The closures below cannot become method paths: their bounds are higher-ranked, so a bare path
 // would bind one concrete lifetime.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_passes_lifecycle() {
+    harness::lifecycle(
+        in_process,
+        |name| SqsQueue::new(name),
+        |connected| connected.publisher(),
+    )
+    .await;
+    harness::lifecycle(
+        in_process,
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn in_process_honours_the_batch_size() {
@@ -219,6 +243,25 @@ fn the_publish_policies_describe_themselves_without_credentials() {
 // ---------------------------------------------------------------------------------------------
 // Against the local stack
 // ---------------------------------------------------------------------------------------------
+
+// `make_source` / `make_publisher` must stay closures: their bounds are higher-ranked
+// (`Fn(&str) -> _` / `Fn(&B) -> _`), so a bare method path - which binds one concrete lifetime -
+// would not type-check.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sqs_broker_passes_lifecycle() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    // The suite future is larger than a stack frame should carry; boxing it once costs nothing
+    // that matters in a test.
+    Box::pin(harness::lifecycle(
+        move || live_broker(&endpoint),
+        |name| SqsQueue::new(name).create_if_missing(),
+        |connected| connected.publisher(),
+    ))
+    .await;
+}
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
