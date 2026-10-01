@@ -40,11 +40,65 @@ use crate::queue::SQS_BINDING_VERSION;
 /// # Examples
 ///
 /// ```
-/// use ruststream_sqs_sns::SqsPublishOptions;
+/// # #[cfg(feature = "testing")]
+/// # mod demo {
+/// use std::error::Error;
 ///
-/// let expected = SqsPublishOptions::default().group_id("user-42");
-/// assert_eq!(expected.group_id.as_deref(), Some("user-42"));
-/// assert_eq!(expected.deduplication_id, None);
+/// use ruststream::testing::TestApp;
+/// use ruststream_sqs_sns::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize, Serialize, Outgoing)]
+/// struct Order {
+///     id: u64,
+///     customer: String,
+/// }
+///
+/// #[derive(OutSlot)]
+/// #[publishes(Order)]
+/// struct Shipments;
+///
+/// #[subscriber(SqsQueue::new("orders"))]
+/// async fn ship(
+///     order: &Order,
+///     Out(shipments): Out<impl Publisher<Options = SqsPublishOptions>, Shipments>,
+/// ) -> HandlerOutcome {
+///     if shipments
+///         .message(order)
+///         .to("shipments.fifo")
+///         .group_id(&order.customer)
+///         .publish()
+///         .await
+///         .is_err()
+///     {
+///         return HandlerOutcome::retry();
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// fn app() -> RustStream {
+///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         b.include(ship).out(Shipments, Publish::default()).build();
+///     })
+/// }
+///
+/// pub async fn an_order_ships_in_its_customers_group() -> Result<(), Box<dyn Error>> {
+///     let tb = TestApp::start(app()).await?;
+///
+///     let order = Order { id: 1, customer: "user-42".into() };
+///     tb.broker::<SqsBroker>().message(&order).to("orders").publish().await?;
+///     tb.out::<Shipments>()
+///         .assert_called_once()
+///         .with_options(&SqsPublishOptions::default().group_id("user-42"));
+///     Ok(())
+/// }
+/// # }
+/// # #[cfg(feature = "testing")]
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// #     tokio::runtime::Runtime::new()?.block_on(demo::an_order_ships_in_its_customers_group())
+/// # }
+/// # #[cfg(not(feature = "testing"))]
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -114,7 +168,13 @@ impl SqsPublishOptions {
 ///     }
 ///     HandlerOutcome::ack()
 /// }
-/// # let _ = ship;
+///
+/// #[app]
+/// fn service() -> impl App {
+///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         b.include(ship).out(Shipments, Publish::default()).build();
+///     })
+/// }
 /// ```
 pub trait SqsPublishSteps: Sized {
     /// Orders this one message within `group` (a `.fifo` destination only).
@@ -414,11 +474,35 @@ fn sqs_channel_binding(channel: &str) -> Bindings {
 /// # Examples
 ///
 /// ```
-/// use ruststream_sqs_sns::SqsPublish;
+/// use ruststream_sqs_sns::prelude::*;
+/// use serde::{Deserialize, Serialize};
 ///
-/// // Everything this position publishes is ordered within one group.
-/// let policy = SqsPublish::default().group_id("orders");
-/// # let _ = policy;
+/// #[derive(Deserialize, Serialize, Outgoing)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[derive(OutSlot)]
+/// #[publishes(Order)]
+/// struct Shipments;
+///
+/// #[subscriber(SqsQueue::new("orders"))]
+/// async fn ship(order: &Order, Out(shipments): Out<impl Publisher, Shipments>) -> HandlerOutcome {
+///     match shipments.message(order).to("shipments.fifo").publish().await {
+///         Ok(()) => HandlerOutcome::ack(),
+///         Err(_) => HandlerOutcome::retry(),
+///     }
+/// }
+///
+/// #[app]
+/// fn service() -> impl App {
+///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         // Everything this position publishes is ordered within one group.
+///         b.include(ship)
+///             .out(Shipments, SqsPublish::default().group_id("orders"))
+///             .build();
+///     })
+/// }
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]

@@ -32,7 +32,9 @@
 //!
 //! #[subscriber(SqsQueue::new("orders").wait(Duration::from_secs(20)))]
 //! async fn handle(order: &Order<'_>) -> HandlerOutcome {
-//!     let _ = order.0.len();
+//!     if order.0.is_empty() {
+//!         return HandlerOutcome::drop();
+//!     }
 //!     HandlerOutcome::ack()
 //! }
 //!

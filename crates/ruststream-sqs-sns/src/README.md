@@ -438,6 +438,8 @@ addresses it by that type. The harness's overview covers the assertions and what
 ```
 # #[cfg(feature = "testing")]
 # mod demo {
+use std::error::Error;
+
 use ruststream::testing::TestApp;
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -449,7 +451,9 @@ struct Order {
 
 #[subscriber(SqsQueue::new("orders"))]
 async fn handle(order: &Order) -> HandlerOutcome {
-    let _ = order.id;
+    if order.id == 0 {
+        return HandlerOutcome::retry();
+    }
     HandlerOutcome::ack()
 }
 
@@ -460,8 +464,7 @@ fn app() -> RustStream {
     })
 }
 
-#[tokio::main(worker_threads = 2)]
-pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn a_valid_order_is_acked() -> Result<(), Box<dyn Error>> {
     let tb = TestApp::start(app()).await?;
 
     tb.broker::<SqsBroker>()
@@ -479,10 +482,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 # }
-# fn main() {
-#     #[cfg(feature = "testing")]
-#     demo::run().expect("the test passes");
+# #[cfg(feature = "testing")]
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+#     tokio::runtime::Runtime::new()?.block_on(demo::a_valid_order_is_acked())
 # }
+# #[cfg(not(feature = "testing"))]
+# fn main() {}
 ```
 
 In process, the queues and topics the service names exist in an account inside the test. A
