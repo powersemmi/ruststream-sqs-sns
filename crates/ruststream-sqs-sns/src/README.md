@@ -69,6 +69,11 @@ after it does not compile. What stays dynamic is aliasing: a publisher handed ou
 shutdown reports [`SqsError::NotConnected`] afterwards instead of succeeding against a connection
 the application has given up.
 
+A request goes out through SDK clients of the runtime that sends it. The runtime `connect` ran on
+uses the clients `connect` built; a dedicated handler thread gets clients of its own on its first
+request, built from the same config and sharing its credentials. A connection that thread opens
+stays in its own pool, so the broker's requests never wait on a thread that is busy computing.
+
 # Subscribing
 
 ## The queue descriptor
