@@ -35,7 +35,8 @@ come from the framework; this crate is the transport.
 - **Long polling by default,** with the polling settings on the queue descriptor.
 - **Native batches:** one `ReceiveMessage` is one batch.
 - **FIFO queues:** the message group and deduplication ids are per-message settings.
-- **SNS fan-out** as a publish policy, with queues subscribed to topics by raw message delivery.
+- **SNS fan-out** as a publish policy behind the `sns` feature, with queues subscribed to
+  topics by raw message delivery.
 - **Binary-safe bodies:** a payload SQS cannot carry as text travels base64-encoded and decodes on
   receive.
 - **AsyncAPI** with the specification's `sqs` binding, behind the `asyncapi` feature.
@@ -46,7 +47,7 @@ come from the framework; this crate is the transport.
 ```toml
 [dependencies]
 ruststream = { version = "0.7", features = ["macros", "json"] }
-ruststream-sqs-sns = "0.7"
+ruststream-sqs-sns = { version = "0.7", features = ["sns"] }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
@@ -92,24 +93,20 @@ the `orders-events` SNS topic; without the `out_reply` step it goes to a queue o
 
 ## Test it
 
-`TestApp` runs the handlers against an in-process SQS, with no AWS account.
+`TestApp` runs the service's own app with `SqsBroker` in process, with no AWS account.
 
 ```rust
 use ruststream::testing::TestApp;
-use ruststream_sqs_sns::testing::SqsTestBroker;
 
-let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-    b.include(accept);
-});
-let tb = TestApp::start(app).await?;
+let tb = TestApp::start(service()).await?;
 
-tb.broker::<SqsTestBroker>()
+tb.broker::<SqsBroker>()
     .message(&PlaceOrder { id: 1 })
     .to("orders")
     .publish()
     .await?;
 
-tb.broker::<SqsTestBroker>()
+tb.broker::<SqsBroker>()
     .published::<OrderPlaced>("orders-events")
     .assert_called_once()
     .with(&OrderPlaced { id: 1 });
