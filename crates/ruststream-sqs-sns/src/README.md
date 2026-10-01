@@ -1,11 +1,11 @@
 Amazon SQS transport for the [`RustStream`](https://docs.rs/ruststream) messaging framework,
-with SNS fan-out publishing.
+with SNS fan-out publishing behind the `sns` feature.
 
 Handlers, routers, codecs and middleware come from the framework; this crate supplies the
-transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
-[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients. One subscription is one queue, long-polled.
-SNS is a publisher only: its delivery targets are queues and HTTP endpoints rather than a
-consumer this crate would own, so a topic fans out to queues and each queue is consumed the
+transport over the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) client, and over
+[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) with `sns` on. One subscription is one queue,
+long-polled. SNS is a publisher only: its delivery targets are queues and HTTP endpoints rather
+than a consumer this crate would own, so a topic fans out to queues and each queue is consumed the
 ordinary way.
 
 A queue is not a log, and the framework's optional capabilities fall out of that.
@@ -22,8 +22,11 @@ ruststream-sqs-sns = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
-Two additive features sit on top of the default build: `testing` ships the in-process transport
-of the [`testing`](crate::testing) module, and `asyncapi` adds the `sqs` bindings described under
+Three additive features sit on top of the default build, which reads and writes queues only.
+`sns` adds publishing to SNS topics, described under [replies and fan-out](#replies-and-fan-out),
+and links the SNS client: `ruststream-sqs-sns = { version = "0.7", features = ["sns"] }`.
+`testing` gives [`SqsBroker`] the in-process mode described under [testing](#testing), and
+`asyncapi` adds the `sqs` bindings (and the `sns` ones with `sns` on) described under
 [the generated document](#the-generated-document). The runnable services this page is drawn
 from are in `examples/`:
 <https://github.com/powersemmi/ruststream-sqs-sns/tree/main/crates/ruststream-sqs-sns/examples>.
@@ -65,6 +68,11 @@ builds the SDK clients, and `shutdown` consumes the connected form, so subscribi
 after it does not compile. What stays dynamic is aliasing: a publisher handed out before
 shutdown reports [`SqsError::NotConnected`] afterwards instead of succeeding against a connection
 the application has given up.
+
+A request goes out through SDK clients of the runtime that sends it. The runtime `connect` ran on
+uses the clients `connect` built; a dedicated handler thread gets clients of its own on its first
+request, built from the same config and sharing its credentials. A connection that thread opens
+stays in its own pool, so the broker's requests never wait on a thread that is busy computing.
 
 # Subscribing
 
@@ -236,22 +244,24 @@ to read here; what a delivery carries beyond its payload is in its headers.
 
 A publish policy is pure declaration, constructible anywhere, and the runtime pairs it with the
 connected broker at startup. Which policy a position is bound to picks the destination kind:
-[`SqsPublish`] sends directly to a queue, [`SnsPublish`] publishes a notification to a topic,
-named by ARN or by name through the idempotent `CreateTopic`. [`SqsPublish`] is also the broker's
-default policy, so a queue-to-queue service binds nothing.
+[`SqsPublish`] sends directly to a queue, [`SnsPublish`] (the `sns` feature) publishes a
+notification to a topic, named by ARN or by name through the idempotent `CreateTopic`.
+[`SqsPublish`] is also the broker's default policy, so a queue-to-queue service binds nothing.
 
 A publisher can also be taken from the broker - [`SqsBroker::publisher`] before the application
-starts, [`ConnectedSqsBroker::publisher`] and [`ConnectedSqsBroker::sns_publisher`] from the
-connected form. Each shares the broker's connection and reports [`SqsError::NotConnected`] after
-shutdown.
+starts, [`ConnectedSqsBroker::publisher`] and, with `sns`, [`ConnectedSqsBroker::sns_publisher`]
+from the connected form. Each shares the broker's connection and reports [`SqsError::NotConnected`]
+after shutdown.
 
 ## Replies and fan-out
 
 The reply type says where the reply goes and the mount site says who takes it there. The example
-below is the whole of the fan-out wiring: without `.out_reply(..)` the same reply would ride
-[`SqsPublish`] and land on a queue of that name.
+below, on the `sns` feature, is the whole of the fan-out wiring: without `.out_reply(..)` the same
+reply would ride [`SqsPublish`] and land on a queue of that name.
 
 ```
+# #[cfg(feature = "sns")]
+# mod demo {
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -278,6 +288,8 @@ fn service() -> impl App {
         b.include(accept).out_reply(SnsPublish::default());
     })
 }
+# }
+# fn main() {}
 ```
 
 Attaching the queues to the topic is provisioning work, not application wiring, and it runs on
@@ -362,13 +374,13 @@ an ask of this broker, so a standard queue keeps ignoring it.
 
 # The prelude
 
-`use ruststream_sqs_sns::prelude::*;` is the whole import list of a routes file: the framework's
-own prelude, plus this crate's broker, its queue descriptor and mount-site settings trait, its
-publish policies and its live publishers. [`SqsPublish`] arrives there under the uniform name
-`Publish`, the one a mount site and the lifecycle hooks write; [`SnsPublish`] keeps its own name,
+`use ruststream_sqs_sns::prelude::*;` is the whole import list of a routes file: the framework's own
+prelude, plus this crate's broker, its queue descriptor and mount-site settings trait, its publish
+policies and its live publishers. [`SqsPublish`] arrives there under the uniform name `Publish`, the
+one a mount site and the lifecycle hooks write; [`SnsPublish`], with `sns` on, keeps its own name,
 fan-out being the departure rather than the default. Everything the framework contributes comes
-through unchanged, so a service on two brokers globs both preludes and what they share resolves
-to one item.
+through unchanged, so a service on two brokers globs both preludes and what they share resolves to
+one item.
 
 A handler file globs the framework's prelude instead, where `Publisher` is the capability an
 injected publisher is bounded on. The one exception is the body that names a per-message setting,
@@ -403,12 +415,12 @@ describes the crate, with the protocol `sqs` and no protocol version, and SNS pu
 
 A publish position describes its destination too, because the framework hands the policy the name
 the document reports as the channel's address. A reply through [`SqsPublish`] carries an `sqs`
-binding with the queue's `name` and `fifoQueue`; one through [`SnsPublish`] carries an `sns`
-binding with the topic's `name`. A `.fifo` topic reports `ordering.type` as `FIFO` and
+binding with the queue's `name` and `fifoQueue`; with `sns` on, one through [`SnsPublish`] carries
+an `sns` binding with the topic's `name`. A `.fifo` topic reports `ordering.type` as `FIFO` and
 `ordering.contentBasedDeduplication` as `false`, since every FIFO send this crate makes carries a
 deduplication id of its own and an explicit id wins over one the topic would derive; a standard
-topic reports no ordering, which the specification reads as unordered. The polling settings stay
-on the subscription's half of the channel, a publish position having none.
+topic reports no ordering, which the specification reads as unordered. The polling settings stay on
+the subscription's half of the channel, a publish position having none.
 
 Two things the document does not say. Neither policy answers a reply address, so none is
 reported. And the specification's `redrivePolicy` and `deadLetterQueue` fields stay empty,
@@ -418,12 +430,9 @@ channel the registration sends to, which covers the same ground.
 
 # Testing
 
-The `testing` feature ships [`SqsTestBroker`](crate::testing::SqsTestBroker), an in-process
-transport on the same ladder as the real one, teardown included. The declaration a service ships
-mounts on it unchanged: [`SqsQueue`] is a subscription source there too, and [`SqsPublish`] and
-[`SnsPublish`] pair into one publisher, so a routes file is tested as written rather than
-rewritten. Drive it with the framework's harness, whose overview covers the assertions and what
-a test can say:
+A test runs the service's production app. With the `testing` feature in the dev-dependencies,
+the framework's `TestApp::start` connects [`SqsBroker`] in process, with no server, and the test
+addresses it by that type. The harness's overview covers the assertions and what a test can say:
 <https://docs.rs/ruststream/latest/ruststream/testing/index.html#what-a-test-can-say>.
 
 ```
@@ -431,7 +440,6 @@ a test can say:
 # mod demo {
 use ruststream::testing::TestApp;
 use ruststream_sqs_sns::prelude::*;
-use ruststream_sqs_sns::testing::SqsTestBroker;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
@@ -445,41 +453,62 @@ async fn handle(order: &Order) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
-#[tokio::main(worker_threads = 2)]
-pub async fn run() {
-    let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
-        .with_broker(SqsTestBroker::new(), |b| {
-            b.include(handle);
-        });
-    let tb = TestApp::start(app).await.expect("the app starts");
+/// The app `main` runs.
+fn app() -> RustStream {
+    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+        b.include(handle);
+    })
+}
 
-    tb.broker::<SqsTestBroker>()
-        .publish("orders", &Order { id: 1 })
-        .await
-        .expect("the publish drives the handler to a standstill");
-    tb.broker::<SqsTestBroker>()
+#[tokio::main(worker_threads = 2)]
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let tb = TestApp::start(app()).await?;
+
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 1 })
+        .to("orders")
+        .publish()
+        .await?;
+    tb.broker::<SqsBroker>()
         .subscriber("orders")
         .assert_called_once()
         .with(&Order { id: 1 })
         .settled(HandlerOutcome::ack());
 
-    tb.shutdown().await.expect("the app shuts down");
+    tb.shutdown().await?;
+    Ok(())
 }
 # }
 # fn main() {
 #     #[cfg(feature = "testing")]
-#     demo::run();
+#     demo::run().expect("the test passes");
 # }
 ```
 
-What the stand-in answers is routing by exact queue name and the settlement a handler asked for,
-the delay and the cap included: `retry_after` holds a delivery back and returns it once the delay
-has passed, receives are counted the way the queue counts them, and a registration's redrive
-policy moves a spent delivery to the dead-letter queue. A batch holds at most the ten messages one
-receive returns, whatever size the mount site named, and the same log line says so. What belongs to the queue itself it does
-not answer - a visibility timeout that lapses on its own, what a long poll costs, FIFO ordering,
-and the onward delivery of an SNS fan-out. Those hold against SQS, and the repository's live
-suite asserts them against the service itself.
+In process, the queues and topics the service names exist in an account inside the test. A
+queue hands each message to one of its subscriptions, a received message stays invisible until
+it is deleted or its visibility timeout lapses, the receive count moves on with every receive,
+and a redrive policy moves a message whose receives ran out to the dead-letter queue. A batch
+holds at most the ten messages one receive returns. A FIFO group waits while one of its messages
+is in flight, and a deduplication id is remembered for five minutes. With `sns` on, a topic
+delivers a copy to every queue subscribed to it with
+[`subscribe_queue_to_topic`](ConnectedSqsBroker::subscribe_queue_to_topic); a broker cloned from
+the app's connects to the same account, which is how a startup hook wires the topology. A queue
+an operator subscribed to the topic outside the service is named on the policy with
+[`fans_out_to`](SnsPublish::fans_out_to), a step that exists only under `testing`: in process the
+account subscribes it before the publish, and a live test waits for it too. A topic and a queue
+may carry one name: what [`SqsPublish`] sends reaches the queue, and what [`SnsPublish`]
+publishes reaches every queue subscribed to the topic, in process and in a live test alike. What SQS
+or SNS refuses is refused here too: more than ten headers, a header name the service does not
+take, an empty body or header value, a message over the size limit, a queue name over 80
+characters, a dead-letter queue of the other kind, a `maxReceiveCount` over 1000, and a FIFO
+queue on a standard topic.
+
+`TestApp::start_live(app())` runs the same test against a running stack, which is where what
+belongs to the service is exercised: a message kept on a queue no subscription reads, the
+visibility timeout an operator set on a queue (in process a descriptor that names none gets the
+30 seconds of a new queue), the queues and topics the service expects to find without creating
+them, and credentials. The repository's own tests run one body both ways.
 
 # Operations
 
