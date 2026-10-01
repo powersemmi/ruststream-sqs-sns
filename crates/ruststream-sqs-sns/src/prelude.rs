@@ -53,12 +53,14 @@ pub use ruststream::prelude::*;
 // `IncomingMessage::partition_key` is already in scope through the framework's prelude, so
 // re-exporting the trait would make `msg.partition_key()` on a delivery ambiguous (E0034).
 
+#[cfg(feature = "sns")]
+pub use crate::{SnsPublish, SnsPublisher};
 pub use crate::{
-    SnsPublish, SnsPublisher, SqsBroker, SqsPublish, SqsPublishOptions, SqsPublishSteps,
-    SqsPublisher, SqsQueue, SqsSubscription,
+    SqsBroker, SqsPublish, SqsPublishOptions, SqsPublishSteps, SqsPublisher, SqsQueue,
+    SqsSubscription,
 };
 
 /// The publish policy a mount site hands to `include` and the lifecycle hooks, [`SqsPublish`]
-/// under the name every broker crate gives it. `SnsPublish` keeps its own name: fan-out is the
-/// departure from the default, not the mount site's default choice.
+/// under the name every broker crate gives it. `SnsPublish` (the `sns` feature) keeps its own
+/// name: fan-out is the departure from the default, not the mount site's default choice.
 pub use crate::SqsPublish as Publish;
