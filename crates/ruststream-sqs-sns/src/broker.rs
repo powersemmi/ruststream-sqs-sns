@@ -19,20 +19,31 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
+#[cfg(feature = "sns")]
+use aws_sdk_sns::Client as SnsClient;
+use aws_sdk_sqs::Client as SqsClient;
 use aws_sdk_sqs::types::QueueAttributeName;
+#[cfg(feature = "testing")]
+use futures::future::lazy;
 #[cfg(feature = "testing")]
 use ruststream::testing::InProcess;
 use ruststream::{
     Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, DescribeServer,
     RetryDeclaration, ServerSpec, Subscribe,
 };
+use tokio::runtime::Handle;
 use tokio::sync::{Mutex, OnceCell};
 
+use crate::clients::Clients;
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process::{self, Bus};
-use crate::publisher::{SnsPublisher, SqsPublish, SqsPublisher, is_fifo};
+#[cfg(feature = "sns")]
+use crate::publisher::is_fifo;
+use crate::publisher::{SqsPublish, SqsPublisher};
 use crate::queue::{Redrive, SqsQueue};
+#[cfg(feature = "sns")]
+use crate::sns::SnsPublisher;
 use crate::subscriber::SqsSubscriber;
 
 /// The client state shared by the connected form and every handle derived from it.
@@ -50,11 +61,11 @@ pub(crate) struct Core {
     /// A bare name carries no descriptor to hold the declaration, and the call that takes it
     /// has no queue URL yet, so the policy waits here for the `subscribe` that writes it.
     declared_redrives: StdMutex<HashMap<String, Redrive>>,
-    /// The queues this broker subscribed to each topic, by topic, which is how the test harness
-    /// learns where a fan-out publish goes. Recorded on both transports, because a live test
-    /// waits on the same answer.
-    #[cfg(feature = "testing")]
-    pub(crate) topic_queues: StdMutex<HashMap<String, Vec<String>>>,
+    /// Which topics this broker subscribed queues to and which surface each publish went
+    /// through, which is how the test harness learns which subscriptions a publish reaches.
+    /// Recorded on both transports, because a live test waits on the same answer.
+    #[cfg(all(feature = "testing", feature = "sns"))]
+    pub(crate) routing: in_process::Routing,
 }
 
 /// What a connected broker and every handle paired off it speak over: the AWS clients, or, under
@@ -79,12 +90,18 @@ const _: () = assert!(size_of::<Transport>() == size_of::<Aws>());
 
 /// The live SDK clients and the name caches every resolution goes through.
 pub(crate) struct Aws {
-    pub(crate) sqs: aws_sdk_sqs::Client,
-    pub(crate) sns: aws_sdk_sns::Client,
+    /// The SDK clients, chosen per request by the runtime that sends it.
+    pub(crate) clients: Arc<Clients>,
+    /// The runtime `connect` ran on, which every task the broker starts on its own behalf (a
+    /// subscription's pump, a delivery's visibility extender) is spawned through, whichever
+    /// thread subscribes: a task left on a caller's runtime would wait behind that thread's work
+    /// and stop with it, while the queue it serves lives on.
+    pub(crate) runtime: Handle,
     pub(crate) endpoint: Option<String>,
     /// Queue-name -> URL cache shared by publishers and subscriptions.
     pub(crate) queue_urls: Mutex<HashMap<String, String>>,
     /// Topic-name -> ARN cache for the SNS publisher.
+    #[cfg(feature = "sns")]
     pub(crate) topic_arns: Mutex<HashMap<String, String>>,
 }
 
@@ -94,8 +111,8 @@ impl Core {
             transport,
             closed: AtomicBool::new(false),
             declared_redrives: StdMutex::new(HashMap::new()),
-            #[cfg(feature = "testing")]
-            topic_queues: StdMutex::new(HashMap::new()),
+            #[cfg(all(feature = "testing", feature = "sns"))]
+            routing: in_process::Routing::default(),
         }
     }
 
@@ -147,8 +164,8 @@ impl Aws {
             return Ok(url.clone());
         }
         let resolved = self
-            .sqs
-            .get_queue_url()
+            .clients
+            .sqs(SqsClient::get_queue_url)
             .queue_name(resource_name(queue))
             .send()
             .await
@@ -171,6 +188,7 @@ impl Aws {
     /// `CreateTopic` is documented idempotent: an existing topic's ARN is returned as-is.
     // The cache guard intentionally spans the resolve so two callers cannot race a double
     // create for the same name.
+    #[cfg(feature = "sns")]
     #[allow(clippy::significant_drop_tightening)]
     pub(crate) async fn topic_arn(&self, topic: &str) -> Result<String, SqsError> {
         if topic.starts_with("arn:") {
@@ -181,7 +199,7 @@ impl Aws {
             return Ok(arn.clone());
         }
         let name = resource_name(topic);
-        let mut create = self.sns.create_topic().name(&name);
+        let mut create = self.clients.sns(SnsClient::create_topic).name(&name);
         if is_fifo(&name) {
             // SNS refuses a `.fifo` name outright unless the topic is declared FIFO, so the
             // suffix that makes a queue FIFO makes a topic FIFO here too. Deduplication stays
@@ -206,8 +224,8 @@ impl Aws {
     /// The queue's ARN, which is how every SQS resource names another one: an SNS subscription
     /// endpoint, a redrive policy's dead-letter target.
     pub(crate) async fn queue_arn(&self, queue: &str, queue_url: &str) -> Result<String, SqsError> {
-        self.sqs
-            .get_queue_attributes()
+        self.clients
+            .sqs(SqsClient::get_queue_attributes)
             .queue_url(queue_url)
             .attribute_names(QueueAttributeName::QueueArn)
             .send()
@@ -236,8 +254,8 @@ impl Aws {
         queue_url: &str,
     ) -> Result<Duration, SqsError> {
         let attributes = self
-            .sqs
-            .get_queue_attributes()
+            .clients
+            .sqs(SqsClient::get_queue_attributes)
             .queue_url(queue_url)
             .attribute_names(QueueAttributeName::VisibilityTimeout)
             .send()
@@ -340,8 +358,8 @@ fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
     )
 }
 
-/// An Amazon SQS broker (with SNS fan-out publishing) for the `RustStream` messaging
-/// framework.
+/// An Amazon SQS broker (with SNS fan-out publishing on the `sns` feature) for the `RustStream`
+/// messaging framework.
 ///
 /// `new` is synchronous and records only configuration; the runtime resolves credentials and
 /// builds the clients once at startup via the consuming [`Broker::connect`]. That is what lets
@@ -377,6 +395,10 @@ impl SqsBroker {
     }
 
     /// Uses an already built AWS config instead of resolving one from the environment.
+    ///
+    /// A dedicated handler thread sends through clients of its own built from this config. An
+    /// HTTP client the config names is shared by all of them, and so is its connection pool;
+    /// leaving the HTTP client to the SDK gives every thread a pool of its own.
     pub fn from_config(config: SdkConfig) -> Self {
         Self {
             sdk_config: Some(config),
@@ -445,16 +467,17 @@ impl Broker for SqsBroker {
                     );
                     loader.load().await
                 };
-                let sqs = aws_sdk_sqs::Client::new(&config);
-                let sns = aws_sdk_sns::Client::new(&config);
+                let runtime = Handle::current();
+                let endpoint = self
+                    .endpoint
+                    .clone()
+                    .or_else(|| config.endpoint_url().map(str::to_owned));
                 Ok::<_, SqsError>(Arc::new(Core::new(Transport::Aws(Aws {
-                    sqs,
-                    sns,
-                    endpoint: self
-                        .endpoint
-                        .clone()
-                        .or_else(|| config.endpoint_url().map(str::to_owned)),
+                    clients: Clients::new(config, &runtime),
+                    runtime,
+                    endpoint,
                     queue_urls: Mutex::new(HashMap::new()),
+                    #[cfg(feature = "sns")]
                     topic_arns: Mutex::new(HashMap::new()),
                 }))))
             })
@@ -480,48 +503,54 @@ impl Broker for SqsBroker {
 /// it gave out share one connection, and it cannot be two transports at once.
 #[cfg(feature = "testing")]
 impl InProcess for SqsBroker {
+    // The body awaits nothing, but it has to run where the future is polled: the runtime it
+    // captures is the one the harness connects on, and a caller outside any runtime may build
+    // the future before handing it to one. `lazy` defers the body to the first poll.
     fn connect_in_process(
         self,
     ) -> impl Future<Output = Result<Self::Connected, Self::Error>> + Send {
-        let region = self
-            .region
-            .clone()
-            .or_else(|| {
+        lazy(move |_| {
+            let region = self
+                .region
+                .clone()
+                .or_else(|| {
+                    self.sdk_config
+                        .as_ref()
+                        .and_then(SdkConfig::region)
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_else(|| "us-east-1".to_owned());
+            let endpoint = self.endpoint.clone().or_else(|| {
                 self.sdk_config
                     .as_ref()
-                    .and_then(SdkConfig::region)
-                    .map(ToString::to_string)
-            })
-            .unwrap_or_else(|| "us-east-1".to_owned());
-        let endpoint = self.endpoint.clone().or_else(|| {
-            self.sdk_config
-                .as_ref()
-                .and_then(SdkConfig::endpoint_url)
-                .map(str::to_owned)
-        });
-        let fresh = Arc::new(Core::new(Transport::InProcess(Bus::new(
-            endpoint.as_deref(),
-            &region,
-        ))));
-        let core = match self.cell.set(Arc::clone(&fresh)) {
-            Ok(()) => Ok(fresh),
-            Err(_) => self
-                .cell
-                .get()
-                .filter(|core| matches!(core.transport, Transport::InProcess(_)))
-                .cloned()
-                .ok_or_else(|| {
-                    SqsError::Config(
-                        "this broker's handles already connected to AWS, so it cannot connect \
+                    .and_then(SdkConfig::endpoint_url)
+                    .map(str::to_owned)
+            });
+            let fresh = Arc::new(Core::new(Transport::InProcess(Bus::new(
+                endpoint.as_deref(),
+                &region,
+                Handle::current(),
+            ))));
+            let core = match self.cell.set(Arc::clone(&fresh)) {
+                Ok(()) => Ok(fresh),
+                Err(_) => self
+                    .cell
+                    .get()
+                    .filter(|core| matches!(core.transport, Transport::InProcess(_)))
+                    .cloned()
+                    .ok_or_else(|| {
+                        SqsError::Config(
+                            "this broker's handles already connected to AWS, so it cannot connect \
                          in process as well"
-                            .to_owned(),
-                    )
-                }),
-        };
-        ready(core.map(|core| ConnectedSqsBroker {
-            core,
-            cell: self.cell,
-        }))
+                                .to_owned(),
+                        )
+                    }),
+            };
+            core.map(|core| ConnectedSqsBroker {
+                core,
+                cell: self.cell,
+            })
+        })
     }
 }
 
@@ -558,19 +587,22 @@ impl ConnectedSqsBroker {
         SqsPublisher::new(Arc::clone(&self.cell))
     }
 
-    /// An SNS fan-out publisher from the connected form.
+    /// An SNS fan-out publisher from the connected form. Available with the `sns` feature.
+    #[cfg(feature = "sns")]
     #[must_use]
     pub fn sns_publisher(&self) -> SnsPublisher {
         SnsPublisher::new(Arc::clone(&self.cell))
     }
 
     /// Subscribes `queue` to `topic` (both names or ARN/URL) with raw message delivery, so
-    /// payloads and headers arrive unwrapped as plain SQS messages.
+    /// payloads and headers arrive unwrapped as plain SQS messages. Available with the `sns`
+    /// feature.
     ///
     /// # Errors
     ///
     /// Returns [`SqsError`] when the topic or queue cannot be resolved or the subscription
     /// call fails.
+    #[cfg(feature = "sns")]
     pub async fn subscribe_queue_to_topic(&self, topic: &str, queue: &str) -> Result<(), SqsError> {
         self.core.ensure_open()?;
         let aws = match &self.core.transport {
@@ -585,8 +617,8 @@ impl ConnectedSqsBroker {
         let queue_url = aws.queue_url(queue).await?;
         let queue_arn = aws.queue_arn(queue, &queue_url).await?;
         let subscribed = aws
-            .sns
-            .subscribe()
+            .clients
+            .sns(SnsClient::subscribe)
             .topic_arn(&topic_arn)
             .protocol("sqs")
             .endpoint(queue_arn)
@@ -662,8 +694,8 @@ impl Aws {
         let dead_letter_arn = self
             .queue_arn(&redrive.dead_letter, &dead_letter_url)
             .await?;
-        self.sqs
-            .set_queue_attributes()
+        self.clients
+            .sqs(SqsClient::set_queue_attributes)
             .queue_url(queue_url)
             .attributes(
                 QueueAttributeName::RedrivePolicy,
@@ -684,7 +716,10 @@ impl Aws {
         if let Ok(url) = self.queue_url(queue).await {
             return Ok(url);
         }
-        let mut create = self.sqs.create_queue().queue_name(resource_name(queue));
+        let mut create = self
+            .clients
+            .sqs(SqsClient::create_queue)
+            .queue_name(resource_name(queue));
         if queue.to_ascii_lowercase().ends_with(".fifo") {
             create = create
                 .attributes(QueueAttributeName::FifoQueue, "true")

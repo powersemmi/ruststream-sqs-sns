@@ -3,7 +3,7 @@
   "crate": "ruststream-sqs-sns",
   "crate_version": "0.7.0",
   "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-21",
+  "measured_at": "2026-09-23",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -13,56 +13,106 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "localstack/localstack:4.14.0 (the LocalStack emulator, not the hosted service) in Docker on localhost",
-    "round_trip": "610 us per request to the stand",
+    "round_trip": "641 us per request to the stand",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-sqs-sns default (none), ruststream macros,json",
-    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)"
+    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)",
+    "valgrind": "3.25.1"
   },
   "scenarios": [
     {
       "name": "Standard queue, 512 B JSON, delete per message",
       "unit": "msg/s",
-      "messages": 4245,
+      "messages": 4476,
       "pairs": 3,
       "raw": {
-        "best": 760,
-        "worst": 750
+        "best": 714,
+        "median": 704,
+        "worst": 702
       },
       "adapter": {
-        "best": 756,
-        "worst": 738
+        "best": 694,
+        "median": 694,
+        "worst": 692
       },
       "framework": {
-        "best": 755,
-        "worst": 737
+        "best": 699,
+        "median": 695,
+        "worst": 693
       },
-      "overhead_percent": 0.7,
-      "adapter_overhead_percent": 0.6,
-      "verdict": "indistinguishable",
+      "overhead_percent": 2.1,
+      "adapter_overhead_percent": 2.8,
+      "adapter_verdict": "measured",
+      "verdict": "measured",
       "broker_bound": true
     },
     {
       "name": "FIFO queue, 64 message groups, 512 B JSON, delete per message",
       "unit": "msg/s",
-      "messages": 4535,
+      "messages": 4339,
       "pairs": 3,
       "raw": {
-        "best": 755,
-        "worst": 749
+        "best": 696,
+        "median": 695,
+        "worst": 692
       },
       "adapter": {
-        "best": 745,
-        "worst": 724
+        "best": 676,
+        "median": 675,
+        "worst": 673
       },
       "framework": {
-        "best": 737,
-        "worst": 727
+        "best": 679,
+        "median": 677,
+        "worst": 677
       },
       "overhead_percent": 2.4,
-      "adapter_overhead_percent": 1.3,
+      "adapter_overhead_percent": 2.9,
+      "adapter_verdict": "measured",
       "verdict": "measured",
-      "broker_bound": true
+      "broker_bound": false
+    }
+  ],
+  "code": [
+    {
+      "name": "standard queue, JSON decode into a small struct, delete per message",
+      "messages": 1000,
+      "framework": {
+        "instructions": 494759.0,
+        "allocations": 461.3
+      },
+      "cold": {
+        "instructions": 3919564,
+        "allocations": 3725
+      },
+      "gated": true
+    },
+    {
+      "name": "reply through the default SqsPublish policy, one SendMessage each",
+      "messages": 1000,
+      "framework": {
+        "instructions": 895058.5,
+        "allocations": 871.3
+      },
+      "cold": {
+        "instructions": 3889704,
+        "allocations": 3726
+      },
+      "gated": true
+    },
+    {
+      "name": "batches of 10, one ReceiveMessage each, delete per message",
+      "messages": 1000,
+      "framework": {
+        "instructions": 491688.4,
+        "allocations": 461.3
+      },
+      "cold": {
+        "instructions": 3930188,
+        "allocations": 3727
+      },
+      "gated": true
     }
   ]
 }

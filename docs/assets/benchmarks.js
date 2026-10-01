@@ -2,6 +2,11 @@
  * Renders the Benchmarks page from the document the crate publishes next to it,
  * `benchmarks/results.json`.
  *
+ * The scenario table has three measured columns - the raw client, this crate's own consumer and
+ * publisher, and the whole service - and the two differences that matter between them. The code
+ * table is the crate's own cost per message in instructions and allocations, with what starting
+ * the service cost once.
+ *
  * The figures are fetched in the reader's browser rather than written into the page. A
  * re-measurement rewrites one JSON document, and a table copied into three translated pages
  * would be stale from the moment the next run finished. The pages therefore carry prose and no
@@ -21,8 +26,8 @@
 
   // The schema this page renders. A later revision may retype a field, and rendering it as if it
   // were this one would print wrong numbers instead of no numbers.
-  // Schema 3 reports each loop as its best and worst round; a schema 1 document carried a
-  // median with its extremes, and both render.
+  // Schema 3 reports each loop as its best, median and worst round and may carry the `code`
+  // section; a schema 1 document carried a median with its extremes, and both render.
   const SCHEMAS = [1, 3];
   const TIMEOUT_MS = 8000;
   // Where the document sits when the page does not say. The English page is the one it sits
@@ -35,7 +40,7 @@
     ["machine", ["cpu", "architecture", "cpu_frequency", "cores", "memory", "memory_speed"]],
     ["os", ["os"]],
     ["broker", ["broker", "round_trip"]],
-    ["build", ["rustc", "profile", "features", "rustflags"]],
+    ["build", ["rustc", "valgrind", "profile", "features", "rustflags"]],
   ];
 
   const text = (tag, value) => {
@@ -66,10 +71,15 @@
     }
     if (typeof measurement.best === "number") {
       const best = number(measurement.best, lang) + " " + unit;
-      if (typeof measurement.worst !== "number") {
+      // The parenthesis is the typical round: the median where the document carries one, and the
+      // worst round where it does not. The worst round stays out of the cell otherwise, because
+      // what it is there for is the spread the verdict rule reads.
+      const typical =
+        typeof measurement.median === "number" ? measurement.median : measurement.worst;
+      if (typeof typical !== "number") {
         return best;
       }
-      return best + " (" + number(measurement.worst, lang) + ")";
+      return best + " (" + number(typical, lang) + ")";
     }
     const median = number(measurement.median, lang) + " " + unit;
     if (typeof measurement.min !== "number" || typeof measurement.max !== "number") {
@@ -78,7 +88,8 @@
     return median + " (" + number(measurement.min, lang) + "-" + number(measurement.max, lang) + ")";
   }
 
-  // A schema 3 loop is its best and worst round; a schema 1 loop was a median with its extremes.
+  // A schema 3 loop is its best, median and worst round; a schema 1 loop was a median with its
+  // extremes.
   const figure = (measurement) =>
     typeof measurement?.best === "number" ? measurement.best : measurement?.median;
   const spread = (measurement) => {
@@ -91,9 +102,9 @@
   };
 
   // The honesty rule of the methodology, enforced where it is read: a difference smaller than the
-  // run-to-run spread is a verdict, never a percentage. The document decides it for the column the
-  // schema carries a verdict for; the adapter column is decided here from the spreads next to it,
-  // by the same rule.
+  // run-to-run spread is a verdict, never a percentage. The document decides it; a document from
+  // before it carried the adapter's verdict has it decided here from the spreads next to it, by
+  // the same rule.
   function percent(value, distinguishable, labels) {
     if (!distinguishable || typeof value !== "number") {
       return labels.indistinguishable;
@@ -116,6 +127,13 @@
   function adapterOverhead(scenario, labels) {
     if (!scenario.adapter) {
       return "-";
+    }
+    if (scenario.adapter_verdict) {
+      return percent(
+        scenario.adapter_overhead_percent,
+        scenario.adapter_verdict !== "indistinguishable",
+        labels,
+      );
     }
     const difference = Math.abs(figure(scenario.raw) - figure(scenario.adapter));
     const noise = Math.max(spread(scenario.raw), spread(scenario.adapter));
@@ -148,6 +166,33 @@
     return element;
   }
 
+  function code(results, labels, lang) {
+    const element = document.createElement("table");
+    const head = element.createTHead().insertRow();
+    for (const column of [labels.scenario, labels.instructions, labels.allocations, labels.cold]) {
+      head.appendChild(text("th", column));
+    }
+    const body = element.createTBody();
+    for (const scenario of results.code) {
+      const row = body.insertRow();
+      row.appendChild(text("td", scenario.name));
+      row.appendChild(text("td", number(scenario.framework?.instructions, lang)));
+      row.appendChild(text("td", number(scenario.framework?.allocations, lang)));
+      // Two numbers in one cell: what starting cost in instructions, and in allocations.
+      row.appendChild(
+        text(
+          "td",
+          scenario.cold
+            ? number(scenario.cold.instructions, lang) +
+                " / " +
+                number(scenario.cold.allocations, lang)
+            : "-",
+        ),
+      );
+    }
+    return element;
+  }
+
   function environment(results, labels) {
     const values = results.environment || {};
     const element = document.createElement("table");
@@ -170,6 +215,14 @@
       results.crate + " " + results.crate_version + ", ruststream " + results.core_version,
     );
     row(labels.measured, results.measured_at);
+    const coded = results.code_measured;
+    if (coded) {
+      row(
+        labels.codeMeasured,
+        results.crate + " " + coded.crate_version + ", ruststream " + coded.core_version + ", " +
+          coded.measured_at,
+      );
+    }
     return element;
   }
 
@@ -179,10 +232,11 @@
       return;
     }
     const machine = document.getElementById("benchmark-environment");
+    const codeTable = document.getElementById("benchmark-code");
     const lang = document.documentElement.lang || "en";
     const labels = JSON.parse(container.dataset.benchmarkLabels);
     const url = container.dataset.benchmarkResults || DEFAULT_RESULTS;
-    for (const element of [container, machine]) {
+    for (const element of [container, machine, codeTable]) {
       element?.replaceChildren(text("p", labels.loading));
     }
 
@@ -190,6 +244,7 @@
     const decline = (message) => {
       container.replaceChildren(text("p", message));
       machine?.replaceChildren();
+      codeTable?.replaceChildren(text("p", message));
     };
     if (!results) {
       decline(labels.unavailable.replace("{url}", new URL(url, location.href).href));
@@ -205,6 +260,12 @@
     }
     container.replaceChildren(scenarios(results, labels, lang));
     machine?.replaceChildren(environment(results, labels));
+    if (results.code?.length) {
+      codeTable?.replaceChildren(code(results, labels, lang));
+    } else {
+      // The document loaded: it only predates the code costs, or was published without them.
+      codeTable?.replaceChildren(text("p", labels.codeUnpublished));
+    }
   }
 
   // Material swaps page content without a reload, so the tables are built on every navigation

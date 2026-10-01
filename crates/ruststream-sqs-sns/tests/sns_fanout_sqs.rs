@@ -8,6 +8,8 @@
 //! Start a stack with `just brokers-up`, then:
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.
 
+#![cfg(feature = "sns")]
+
 use std::pin::pin;
 use std::time::Duration;
 

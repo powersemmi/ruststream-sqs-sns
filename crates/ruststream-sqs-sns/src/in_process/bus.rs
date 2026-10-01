@@ -38,6 +38,7 @@ const MAX_ATTRIBUTES: usize = 10;
 pub(crate) const SQS_MAX_MESSAGE: usize = 1_048_576;
 
 /// The largest SNS message, body and attributes together.
+#[cfg(feature = "sns")]
 pub(crate) const SNS_MAX_MESSAGE: usize = 262_144;
 
 /// The largest `maxReceiveCount` a redrive policy takes.
@@ -50,6 +51,7 @@ const MAX_VISIBILITY_SECS: u64 = 12 * 60 * 60;
 const MAX_QUEUE_NAME: usize = 80;
 
 /// The longest topic name, the `.fifo` suffix included.
+#[cfg(feature = "sns")]
 const MAX_TOPIC_NAME: usize = 256;
 
 /// The account id the queue URLs carry.
@@ -73,6 +75,10 @@ pub(crate) struct Received {
 pub(crate) struct Bus {
     account: Mutex<Account>,
     coordinator: OnceLock<Coordinator>,
+    /// The runtime the broker connected on, where a visibility timeout runs out: a delivery
+    /// settled from a thread of its own must come back after that thread's runtime is gone, as
+    /// it does on the service.
+    runtime: Handle,
     /// Scheme and host of the queue URLs: the broker's endpoint, or the region's public one.
     url_base: String,
     next_id: AtomicU64,
@@ -82,15 +88,18 @@ pub(crate) struct Bus {
 struct Account {
     queues: HashMap<String, Queue>,
     /// The queues subscribed to each topic, by topic.
+    #[cfg(feature = "sns")]
     topics: HashMap<String, Vec<Endpoint>>,
     /// Every message that arrived at a queue or a topic, by the name it was addressed by.
     log: HashMap<String, Vec<RawMessage>>,
     /// The deduplication ids each FIFO topic saw within the window, by topic: a repeat is
     /// accepted and reaches no subscriber, whatever kind of queue it is.
+    #[cfg(feature = "sns")]
     topic_deduplication: HashMap<String, HashMap<String, Instant>>,
 }
 
 /// A queue subscribed to a topic.
+#[cfg(feature = "sns")]
 #[derive(Clone)]
 struct Endpoint {
     queue: String,
@@ -212,6 +221,7 @@ pub(crate) fn queue_key(name: &str) -> Result<String, String> {
 
 /// The topic `name` addresses: the last segment of a topic ARN, or the name mapped the way a
 /// queue name is.
+#[cfg(feature = "sns")]
 pub(crate) fn topic_key(name: &str) -> Result<String, String> {
     let key = if name.starts_with("arn:") {
         name.rsplit(':').next().unwrap_or_default().to_owned()
@@ -256,6 +266,34 @@ pub(crate) fn check_message(outbound: &Outbound, limit: usize) -> Result<(), Str
         return Err(format!(
             "the message is {size} bytes with its attributes, over the {limit}-byte limit"
         ));
+    }
+    Ok(())
+}
+
+/// The longest message group id and deduplication id the service takes.
+const MAX_FIFO_ID: usize = 128;
+
+/// Refuses the FIFO settings the service refuses: a group id or a deduplication id is 1 to 128
+/// of letters, digits and punctuation.
+fn check_fifo(outbound: &Outbound) -> Result<(), String> {
+    let Some(settings) = &outbound.fifo else {
+        return Ok(());
+    };
+    for (what, id) in [
+        ("MessageGroupId", &settings.group),
+        ("MessageDeduplicationId", &settings.deduplication),
+    ] {
+        let valid = !id.is_empty()
+            && id.len() <= MAX_FIFO_ID
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c.is_ascii_punctuation());
+        if !valid {
+            return Err(format!(
+                "{what} {id:?} is not one the service takes: it is 1 to {MAX_FIFO_ID} of \
+                 letters, digits and punctuation"
+            ));
+        }
     }
     Ok(())
 }
@@ -317,8 +355,8 @@ fn wire_message(outbound: &Outbound, receipt: Option<u64>, receives: Option<u32>
 
 impl Bus {
     /// An empty account, its queue URLs built on `endpoint` or, without one, on the public
-    /// service of `region`.
-    pub(crate) fn new(endpoint: Option<&str>, region: &str) -> Arc<Self> {
+    /// service of `region`, its timers on `runtime`.
+    pub(crate) fn new(endpoint: Option<&str>, region: &str, runtime: Handle) -> Arc<Self> {
         let url_base = endpoint.map_or_else(
             || format!("https://sqs.{region}.amazonaws.com"),
             |endpoint| endpoint.trim_end_matches('/').to_owned(),
@@ -326,6 +364,7 @@ impl Bus {
         Arc::new(Self {
             account: Mutex::default(),
             coordinator: OnceLock::new(),
+            runtime,
             url_base,
             next_id: AtomicU64::new(1),
         })
@@ -434,6 +473,7 @@ impl Bus {
             }
             _ => {}
         }
+        check_fifo(&outbound)?;
         let entry = log_entry(name, &outbound);
         let mut account = self.account();
         account.log.entry(name.to_owned()).or_default().push(entry);
@@ -444,6 +484,7 @@ impl Bus {
 
     /// `Publish` to the topic keyed `topic`, recorded under `name`: every queue subscribed to the
     /// topic receives a copy, as raw message delivery hands it over.
+    #[cfg(feature = "sns")]
     pub(crate) fn publish_topic(
         &self,
         name: &str,
@@ -462,6 +503,7 @@ impl Bus {
             }
             _ => {}
         }
+        check_fifo(outbound)?;
         let mut account = self.account();
         let entry = log_entry(name, outbound);
         account.log.entry(name.to_owned()).or_default().push(entry);
@@ -496,6 +538,7 @@ impl Bus {
     }
 
     /// `Subscribe` of the queue keyed `queue` (named `name` by the service) to `topic`.
+    #[cfg(feature = "sns")]
     pub(crate) fn subscribe_topic(
         &self,
         topic: &str,
@@ -666,16 +709,13 @@ impl Bus {
 
     /// Arms the timer that makes an in-flight message visible again.
     fn lapse_after(self: &Arc<Self>, delay: Duration, key: String, receipt: u64, generation: u64) {
-        // Why a runtime check: a delivery can be dropped after the test's runtime is gone, and
-        // then there is no clock left to arm and no receiver left to hand the message to.
-        let Ok(runtime) = Handle::try_current() else {
-            return;
-        };
         let bus = Arc::clone(self);
         let lapse = move || bus.lapse(&key, receipt, generation);
         match self.coordinator() {
             Some(coordinator) => coordinator.schedule_redelivery(delay, lapse),
-            None => drop(runtime.spawn(async move {
+            // A delivery dropped after that runtime is gone spawns nothing: there is no clock left
+            // to arm and no receiver left to hand the message to.
+            None => drop(self.runtime.spawn(async move {
                 tokio::time::sleep(delay).await;
                 lapse();
             })),
@@ -714,9 +754,14 @@ fn queue_of<'a>(account: &'a mut Account, key: &str) -> &'a mut Queue {
 impl fmt::Debug for Bus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let account = self.account();
-        f.debug_struct("Bus")
-            .field("queues", &account.queues.len())
-            .field("topics", &account.topics.len())
-            .finish_non_exhaustive()
+        let queues = account.queues.len();
+        #[cfg(feature = "sns")]
+        let topics = account.topics.len();
+        drop(account);
+        let mut debug = f.debug_struct("Bus");
+        debug.field("queues", &queues);
+        #[cfg(feature = "sns")]
+        debug.field("topics", &topics);
+        debug.finish_non_exhaustive()
     }
 }

@@ -7,10 +7,12 @@ Retries run through the message's visibility timeout, and dead-lettering through
 redrive policy. You set a message group per publish to a FIFO queue, or fix one for a whole
 publish position, and read it back from the message you receive.
 
-The transport is built on the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) and
-[`aws-sdk-sns`](https://docs.rs/aws-sdk-sns) clients. The `testing` feature gives the broker an
-in-process mode, so a test runs the production app with no server, and the `asyncapi` feature adds
-the `sqs` bindings to the document the framework generates.
+The transport is built on the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) client. The
+`sns` feature adds publishing to SNS topics over [`aws-sdk-sns`](https://docs.rs/aws-sdk-sns); it
+is off by default, so a service that only works with queues does not link the SNS client. The
+`testing` feature gives the broker an in-process mode, so a test runs the production app with no
+server, and the `asyncapi` feature adds the `sqs` bindings to the document the framework
+generates.
 
 The crate tracks the released `ruststream` 0.7 line:
 
