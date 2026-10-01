@@ -11,10 +11,11 @@
 //! (the FIFO settings ladder, the base64 lane, the discard that returns a spent delivery) runs
 //! over it as it runs over AWS. It never succeeds where the service fails: a message the service
 //! refuses (an empty body, more than ten attributes, an attribute name it does not take, an empty
-//! attribute value, over the size limit), a queue name over 80 characters, a redrive policy SQS
-//! refuses (a dead-letter queue of the other kind, a `maxReceiveCount` over 1000), a FIFO queue
-//! subscribed to a standard topic, and a publish after `shutdown` are refused here with the error
-//! a live call reports.
+//! attribute value, over the size limit, a message group or deduplication id over 128 characters
+//! or outside letters, digits and punctuation), a queue name over 80 characters, a redrive policy
+//! SQS refuses (a dead-letter queue of the other kind, a `maxReceiveCount` over 1000), a FIFO
+//! queue subscribed to a standard topic, and a publish after `shutdown` are refused here with the
+//! error a live call reports.
 //!
 //! What it models: a queue hands each message to one receiver among its subscriptions; a receive
 //! returns up to ten messages; a received message stays invisible until it is deleted, its
