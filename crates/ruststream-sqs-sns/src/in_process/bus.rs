@@ -75,6 +75,10 @@ pub(crate) struct Received {
 pub(crate) struct Bus {
     account: Mutex<Account>,
     coordinator: OnceLock<Coordinator>,
+    /// The runtime the broker connected on, where a visibility timeout runs out: a delivery
+    /// settled from a thread of its own must come back after that thread's runtime is gone, as
+    /// it does on the service.
+    runtime: Handle,
     /// Scheme and host of the queue URLs: the broker's endpoint, or the region's public one.
     url_base: String,
     next_id: AtomicU64,
@@ -266,6 +270,34 @@ pub(crate) fn check_message(outbound: &Outbound, limit: usize) -> Result<(), Str
     Ok(())
 }
 
+/// The longest message group id and deduplication id the service takes.
+const MAX_FIFO_ID: usize = 128;
+
+/// Refuses the FIFO settings the service refuses: a group id or a deduplication id is 1 to 128
+/// of letters, digits and punctuation.
+fn check_fifo(outbound: &Outbound) -> Result<(), String> {
+    let Some(settings) = &outbound.fifo else {
+        return Ok(());
+    };
+    for (what, id) in [
+        ("MessageGroupId", &settings.group),
+        ("MessageDeduplicationId", &settings.deduplication),
+    ] {
+        let valid = !id.is_empty()
+            && id.len() <= MAX_FIFO_ID
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c.is_ascii_punctuation());
+        if !valid {
+            return Err(format!(
+                "{what} {id:?} is not one the service takes: it is 1 to {MAX_FIFO_ID} of \
+                 letters, digits and punctuation"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A message attribute name as the service takes it.
 fn check_attribute_name(name: &str) -> Result<(), String> {
     let lower = name.to_ascii_lowercase();
@@ -323,8 +355,8 @@ fn wire_message(outbound: &Outbound, receipt: Option<u64>, receives: Option<u32>
 
 impl Bus {
     /// An empty account, its queue URLs built on `endpoint` or, without one, on the public
-    /// service of `region`.
-    pub(crate) fn new(endpoint: Option<&str>, region: &str) -> Arc<Self> {
+    /// service of `region`, its timers on `runtime`.
+    pub(crate) fn new(endpoint: Option<&str>, region: &str, runtime: Handle) -> Arc<Self> {
         let url_base = endpoint.map_or_else(
             || format!("https://sqs.{region}.amazonaws.com"),
             |endpoint| endpoint.trim_end_matches('/').to_owned(),
@@ -332,6 +364,7 @@ impl Bus {
         Arc::new(Self {
             account: Mutex::default(),
             coordinator: OnceLock::new(),
+            runtime,
             url_base,
             next_id: AtomicU64::new(1),
         })
@@ -440,6 +473,7 @@ impl Bus {
             }
             _ => {}
         }
+        check_fifo(&outbound)?;
         let entry = log_entry(name, &outbound);
         let mut account = self.account();
         account.log.entry(name.to_owned()).or_default().push(entry);
@@ -469,6 +503,7 @@ impl Bus {
             }
             _ => {}
         }
+        check_fifo(outbound)?;
         let mut account = self.account();
         let entry = log_entry(name, outbound);
         account.log.entry(name.to_owned()).or_default().push(entry);
@@ -674,16 +709,13 @@ impl Bus {
 
     /// Arms the timer that makes an in-flight message visible again.
     fn lapse_after(self: &Arc<Self>, delay: Duration, key: String, receipt: u64, generation: u64) {
-        // Why a runtime check: a delivery can be dropped after the test's runtime is gone, and
-        // then there is no clock left to arm and no receiver left to hand the message to.
-        let Ok(runtime) = Handle::try_current() else {
-            return;
-        };
         let bus = Arc::clone(self);
         let lapse = move || bus.lapse(&key, receipt, generation);
         match self.coordinator() {
             Some(coordinator) => coordinator.schedule_redelivery(delay, lapse),
-            None => drop(runtime.spawn(async move {
+            // A delivery dropped after that runtime is gone spawns nothing: there is no clock left
+            // to arm and no receiver left to hand the message to.
+            None => drop(self.runtime.spawn(async move {
                 tokio::time::sleep(delay).await;
                 lapse();
             })),

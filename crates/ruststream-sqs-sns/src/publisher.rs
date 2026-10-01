@@ -10,6 +10,7 @@
 
 use std::future::{Future, ready};
 
+use aws_sdk_sqs::Client as SqsClient;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
@@ -332,7 +333,11 @@ impl SqsPublisher {
             self.default_group.as_deref(),
         )?;
 
-        let mut send = aws.sqs.send_message().queue_url(&url).message_body(body);
+        let mut send = aws
+            .clients
+            .sqs(SqsClient::send_message)
+            .queue_url(&url)
+            .message_body(body);
         if !attributes.is_empty() {
             send = send.set_message_attributes(Some(attributes));
         }

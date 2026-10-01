@@ -13,6 +13,7 @@
 )]
 
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aws_sdk_sqs::Client;
@@ -24,8 +25,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
 use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Str};
+use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
+use crate::clients::Clients;
 use crate::error::sdk_err;
 #[cfg(feature = "testing")]
 use crate::in_process::BusReceipt;
@@ -82,7 +85,8 @@ const _: () = assert!(size_of::<Receipt>() == size_of::<AwsReceipt>());
 
 /// A live delivery's settlement handle, and the task keeping it invisible meanwhile.
 struct AwsReceipt {
-    client: Client,
+    /// The broker's clients: a settlement goes out through the set of the runtime that settles.
+    clients: Arc<Clients>,
     queue_url: String,
     receipt: String,
     extender: JoinHandle<()>,
@@ -121,7 +125,8 @@ fn receives_of(message: &AwsMessage) -> Option<u32> {
 impl SqsMessage {
     pub(crate) fn new(
         message: &AwsMessage,
-        client: Client,
+        runtime: &Handle,
+        clients: Arc<Clients>,
         queue_url: String,
         receipt: String,
         visibility: Duration,
@@ -131,9 +136,11 @@ impl SqsMessage {
         // Why a per-message watchdog: SQS has no lease API - a handler outliving the
         // visibility timeout would get a concurrent redelivery, so the crate extends the
         // visibility for as long as the handle is held (the issue's one piece of real
-        // machinery). Aborted on settle or drop.
-        let extender = tokio::spawn(extend_visibility(
-            client.clone(),
+        // machinery). Aborted on settle or drop. It runs on the runtime the broker connected on,
+        // not on the thread that holds the delivery: a handler computing on a thread of its own
+        // would otherwise hold the extension back until the visibility lapsed.
+        let extender = runtime.spawn(extend_visibility(
+            clients.home().sqs.clone(),
             queue_url.clone(),
             receipt.clone(),
             visibility,
@@ -144,7 +151,7 @@ impl SqsMessage {
             receives: receives_of(message),
             redrive_max,
             receipt: Receipt::Aws(AwsReceipt {
-                client,
+                clients,
                 queue_url,
                 receipt,
                 extender,
@@ -199,8 +206,8 @@ impl SqsMessage {
                 return Ok(());
             }
         };
-        aws.client
-            .delete_message()
+        aws.clients
+            .sqs(Client::delete_message)
             .queue_url(&aws.queue_url)
             .receipt_handle(&aws.receipt)
             .send()
@@ -215,8 +222,8 @@ impl SqsMessage {
             #[cfg(feature = "testing")]
             Receipt::InProcess(receipt) => return receipt.change_visibility(seconds),
         };
-        aws.client
-            .change_message_visibility()
+        aws.clients
+            .sqs(Client::change_message_visibility)
             .queue_url(&aws.queue_url)
             .receipt_handle(&aws.receipt)
             .visibility_timeout(seconds)
@@ -277,8 +284,10 @@ impl IncomingMessage for SqsMessage {
     async fn nack_after(self, delay: Duration) -> Result<(), AckError> {
         self.stop_extending();
         // Setting the visibility to the delay is the native deferred retry (capped at the
-        // protocol's 12 hours).
-        let seconds = i32::try_from(delay.as_secs().min(43_200)).unwrap_or(43_200);
+        // protocol's 12 hours). SQS counts whole seconds, so a fraction rounds up: rounding down
+        // would redeliver before the delay the handler asked for.
+        let seconds = delay.as_secs() + u64::from(delay.subsec_nanos() > 0);
+        let seconds = i32::try_from(seconds.min(43_200)).unwrap_or(43_200);
         self.set_visibility(seconds).await
     }
 
@@ -438,6 +447,8 @@ pub(crate) fn encode_attributes(
 
 #[cfg(test)]
 mod tests {
+    use aws_config::{BehaviorVersion, Region, SdkConfig};
+
     use super::*;
 
     /// Content equality cannot tell a hand-over from a copy, so the buffer the framework wrote is
@@ -520,14 +531,14 @@ mod tests {
         assert!(!attributes.contains_key(PARTITION_KEY_HEADER));
     }
 
-    /// A client built from a bare config: no network happens until an operation is sent, and
+    /// Clients built from a bare config: no network happens until an operation is sent, and
     /// this test never sends one.
-    fn offline_client() -> Client {
-        let config = aws_config::SdkConfig::builder()
-            .behavior_version(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new("us-east-1"))
+    fn offline_clients() -> Arc<Clients> {
+        let config = SdkConfig::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
             .build();
-        Client::new(&config)
+        Clients::new(config, &Handle::current())
     }
 
     /// One delivery as the service hands it over, with `receives` as its
@@ -542,7 +553,8 @@ mod tests {
         }
         SqsMessage::new(
             &raw.build(),
-            offline_client(),
+            &Handle::current(),
+            offline_clients(),
             "http://localhost:4566/000000000000/queue".to_owned(),
             "receipt".to_owned(),
             Duration::from_secs(30),
