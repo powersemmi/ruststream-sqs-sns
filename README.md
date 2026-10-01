@@ -21,21 +21,25 @@
 
 ---
 
-`ruststream-sqs-sns` implements the RustStream broker contract over the official [`aws-sdk-sqs`](https://crates.io/crates/aws-sdk-sqs) and [`aws-sdk-sns`](https://crates.io/crates/aws-sdk-sns). Handlers, routers, codecs, and middleware come from the framework; this crate supplies the transport - and nothing broker-specific leaks back into the framework.
+`ruststream-sqs-sns` connects a RustStream service to Amazon SQS and SNS over the official
+[`aws-sdk-sqs`](https://crates.io/crates/aws-sdk-sqs) and
+[`aws-sdk-sns`](https://crates.io/crates/aws-sdk-sns). Handlers, routing, codecs and middleware
+come from the framework; this crate is the transport.
 
 ## Features
 
-- **Lazy startup contract.** `SqsBroker::new()` is synchronous and does no I/O (region and credentials resolve from the environment on connect; `from_config` takes a prebuilt `SdkConfig`; `endpoint` + `test_credentials` target a local stack); the runtime connects once at startup, so the broker composes with `#[ruststream::app]`.
-- **Native settlement.** `ack` deletes the message, `nack(requeue = true)` zeroes its visibility, and `retry_after(delay)` sets the visibility to the delay - the framework's deferred retry is the transport's own verb, not an emulation. A delivery reports SQS's own `ApproximateReceiveCount`, which is also surfaced as a header.
-- **The retry declaration is the queue's redrive policy.** `b.include(h).max_attempts(nonzero!(3)).dead_letter("invoices-dead")` is written onto the queue when the subscription opens, so SQS counts the receives and moves a spent delivery itself and the service publishes nothing. `.out_retry(..)` does not compile here, and half a declaration refuses to open the subscription rather than running with a cap the queue never received.
-- **Crate-owned visibility extension.** A handler outliving the visibility timeout is protected: the crate keeps extending the visibility of every in-flight message for as long as the handler holds it.
-- **Explicit polling settings.** `SqsQueue::new("orders").wait(20s).visibility(30s)` - the parameters that decide cost and latency are on the descriptor, with long polling as the default, and are equally reachable at the mount site through the `SqsSubscription` trait. Logical destination names map onto names the services accept by replacing forbidden characters with `-`, on queues and on topics alike (a `.fifo` suffix survives, and is what opens a FIFO queue or topic).
-- **Native batches.** `ReceiveMessage` is already a batching call, so a batch handler's `batch(n)` becomes `MaxNumberOfMessages` and one receive is one batch - nothing buffers on the client. A size above the protocol's ten is clamped to ten, with a log line, rather than refused.
-- **FIFO ordering as a per-message setting.** `SqsPublishOptions` is the message group id and the deduplication id, named per call with the `group_id` / `deduplication_id` steps on the publish builder, or fixed for a whole position with `Publish::default().group_id("orders")`. A delivery carries its group back in the `partition-key` header, and a message may name its own group there too - the spelling that travels to every other broker. Naming either setting for a standard queue is a publish error rather than a value dropped in silence.
-- **SNS as a fan-out publisher.** A distinct `SnsPublish` policy publishes to topics (names resolve through the idempotent `CreateTopic`); a handler's reply takes it with one mount step, `.out_reply(SnsPublish::default())`, and `subscribe_queue_to_topic` wires queues with raw message delivery, so payloads and headers arrive unwrapped. SNS is not a subscriber: its delivery targets are queues and HTTP endpoints.
-- **Protocol bindings in the generated document** (feature `asyncapi`). Every channel a queue descriptor opens carries an `sqs` channel binding: the queue's name, whether it is FIFO, and the polling settings the descriptor names. Values that need a connection (a queue's ARN, a timeout the descriptor left to the queue) stay out, and so does every credential.
-- **Text bodies.** SQS bodies are text, and the service's idea of text is narrower than UTF-8: a payload it accepts passes through untouched, and anything else - binary, or valid UTF-8 carrying control characters - travels base64-encoded with a marker attribute and decodes transparently on receive. The same rule picks `String` or `Binary` for each header attribute. A handler that parses the body itself takes the framework's byte lane (`#[derive(Deserialized)]` over `&[u8]`, no codec on the path) and sees the bytes the producer sent: the base64 hop is already undone by then.
-- **In-process test broker** (feature `testing`). `SqsTestBroker` reproduces this crate's core routing with no server, so a service's handlers run under the framework's `TestApp` harness, and it answers the way the real queues do, which the crate's own tests hold it to. The crate's own types mount on it: `SqsQueue` opens a subscription there, and `SqsPublish` and `SnsPublish` pair there, so the `#[subscriber(SqsQueue::new(..))]` and the `.out_reply(Publish::default())` a service ships are what the test runs - no stand-in descriptor, no stand-in policy. A deferred retry waits out its delay there as the queue makes it wait, so `retry_after` is driven with `tb.advance(..)` and no copy is republished, and a registration's redrive policy moves a spent delivery to the dead-letter queue where `tb.published::<T>(..)` reads it. The harness reads back the per-message settings a slot publish carried, with `tb.out::<Marker>().with_options(..)`.
+- **Native settlement:** `ack` deletes the message, a retry resets its visibility, and
+  `retry_after(delay)` sets the visibility to the delay.
+- **Retry caps as the queue's redrive policy,** so SQS moves a spent delivery itself.
+- **Visibility extended** for as long as a handler holds a message.
+- **Long polling by default,** with the polling settings on the queue descriptor.
+- **Native batches:** one `ReceiveMessage` is one batch.
+- **FIFO queues:** the message group and deduplication ids are per-message settings.
+- **SNS fan-out** as a publish policy, with queues subscribed to topics by raw message delivery.
+- **Binary-safe bodies:** a payload SQS cannot carry as text travels base64-encoded and decodes on
+  receive.
+- **AsyncAPI** with the specification's `sqs` binding, behind the `asyncapi` feature.
+- **Tests without AWS:** handlers run against an in-process SQS and SNS.
 
 ## Install
 
@@ -47,12 +51,9 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 ruststream-sqs-sns = { version = "0.7", features = ["testing"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## Write a service
-
-A routes file globs `ruststream_sqs_sns::prelude::*`: the framework's own prelude plus this crate's broker, queue descriptor, its mount-site settings trait and the publish policies, with `SqsPublish` under `Publish`, the uniform name every broker crate gives the policy a mount site hands over (`SnsPublish` keeps its own, because fan-out is the departure rather than the default). A handler file globs the framework's prelude alone and bounds an injected publisher with `Publisher`, so the uniform name stays free for the policy.
 
 ```rust
 use std::time::Duration;
@@ -60,105 +61,72 @@ use std::time::Duration;
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Outgoing, Serialize)]
 struct PlaceOrder {
     id: u64,
 }
 
-#[derive(Debug, Outgoing, Serialize)]
+#[derive(Debug, Deserialize, Outgoing, PartialEq, Serialize)]
 struct OrderPlaced {
     id: u64,
 }
 
-// The reply type names no destination of its own, so it takes the clause's; the mount site
-// names who takes it there.
 #[subscriber(
     SqsQueue::new("orders").wait(Duration::from_secs(20)),
     publish("orders-events")
 )]
 async fn accept(order: &PlaceOrder) -> OrderPlaced {
-    println!("accepted order {}", order.id);
     OrderPlaced { id: order.id }
 }
 
 #[app]
 fn service() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-        // Mounted without the step the reply rides `SqsPublish` onto a queue named
-        // `orders-events`; one `.out_reply(SnsPublish::default())` sends it to the topic
-        // instead.
         b.include(accept).out_reply(SnsPublish::default());
     })
 }
 ```
 
+`#[app]` generates `main`, so the binary understands `run` and `asyncapi gen`. The reply goes to
+the `orders-events` SNS topic; without the `out_reply` step it goes to a queue of that name.
+
 ## Test it
 
-App-level tests go through the framework's `TestApp`: it starts the application on the in-process transport the `testing` feature ships - no server, same routing, same ladder - injects as an external producer would, and drives the reaction to a standstill before the assertions run.
-
-The descriptor and the policies mount there as written, so the handler under test is the one the service ships: `#[subscriber(SqsQueue::new(..))]` opens a subscription on the stand-in, and `SqsPublish` and `SnsPublish` pair there.
+`TestApp` runs the handlers against an in-process SQS, with no AWS account.
 
 ```rust
 use ruststream::testing::TestApp;
-use ruststream_sqs_sns::prelude::*;
 use ruststream_sqs_sns::testing::SqsTestBroker;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize, Outgoing)]
-#[outgoing(name = "orders")]
-struct PlaceOrder {
-    id: u64,
-}
+let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
+    b.include(accept);
+});
+let tb = TestApp::start(app).await?;
 
-#[derive(Debug, Deserialize, Outgoing, Serialize, PartialEq)]
-struct OrderPlaced {
-    id: u64,
-}
+tb.broker::<SqsTestBroker>()
+    .message(&PlaceOrder { id: 1 })
+    .to("orders")
+    .publish()
+    .await?;
 
-#[subscriber(SqsQueue::new("orders"), publish("orders-events"))]
-async fn accept(order: &PlaceOrder) -> OrderPlaced {
-    OrderPlaced { id: order.id }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_accepted_order_is_announced() -> Result<(), Box<dyn std::error::Error>> {
-    let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsTestBroker::new(), |b| {
-            b.include(accept);
-        });
-    let tb = TestApp::start(app).await?;
-
-    tb.message(&PlaceOrder { id: 1 }).publish().await?;
-
-    tb.broker::<SqsTestBroker>()
-        .published::<OrderPlaced>("orders-events")
-        .assert_called_once()
-        .with(&OrderPlaced { id: 1 });
-    Ok(())
-}
+tb.broker::<SqsTestBroker>()
+    .published::<OrderPlaced>("orders-events")
+    .assert_called_once()
+    .with(&OrderPlaced { id: 1 });
 ```
 
-SQS behaviour itself (visibility, redelivery, FIFO, SNS fan-out) is covered by the env-gated live suite instead: `just test-brokers` starts LocalStack and runs the integration tests plus the framework conformance lifecycle against it.
+## Documentation
 
-## Layout
+- This crate: <https://docs.rs/ruststream-sqs-sns>
+- The framework: <https://powersemmi.github.io/ruststream/latest>
 
-```
-ruststream-sqs-sns/
-├── crates/
-│   └── ruststream-sqs-sns/     the published crate
-│       └── examples/           runnable sqs_* / sns_* examples (service, batches, FIFO, fan-out)
-├── docs/                       the documentation site sources
-├── docker-compose.test.yml     LocalStack for the live suite
-└── Cargo.toml                  workspace
-```
+## Minimum supported Rust version
+
+The MSRV is **1.94.1**, edition 2024, the floor of the AWS SDK.
 
 ## Contributing
 
-```bash
-just check          # fmt, clippy, feature checks
-just test           # handler-stub tests, no server
-just test-brokers   # live integration + conformance against LocalStack
-```
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
