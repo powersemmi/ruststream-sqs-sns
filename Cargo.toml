@@ -5,9 +5,9 @@ members = ["crates/ruststream-sqs-sns", "crates/ruststream-sqs-sns-bench"]
 [workspace.package]
 version = "0.7.0"
 edition = "2024"
-# The AWS SDK tracks a stable-2 MSRV policy (1.94.1 today); the core stays at 1.88 (a
-# dependent may exceed its dependency's floor).
-rust-version = "1.94.1"
+# The floor is the core's 1.95; the AWS SDK tracks a stable-2 MSRV policy (1.94.1 today). A
+# dependent may exceed its dependencies' floors, so this is the higher of the two.
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/powersemmi/ruststream-sqs-sns"
 authors = ["RustStream contributors"]
