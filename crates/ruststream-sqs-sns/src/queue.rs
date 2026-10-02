@@ -45,12 +45,29 @@ pub(crate) struct Redrive {
 ///
 /// ```
 /// use std::time::Duration;
-/// use ruststream_sqs_sns::SqsQueue;
 ///
-/// let source = SqsQueue::new("orders")
-///     .wait(Duration::from_secs(20))
-///     .visibility(Duration::from_secs(30));
-/// # let _ = source;
+/// use ruststream_sqs_sns::prelude::*;
+/// # #[derive(Deserialized)]
+/// # struct Order<'a>(&'a [u8]);
+///
+/// #[subscriber(
+///     SqsQueue::new("orders")
+///         .wait(Duration::from_secs(20))
+///         .visibility(Duration::from_secs(30))
+/// )]
+/// async fn handle(order: &Order<'_>) -> HandlerOutcome {
+///     if order.0.is_empty() {
+///         return HandlerOutcome::drop();
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[app]
+/// fn service() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         b.include(handle);
+///     })
+/// }
 /// ```
 ///
 /// The same options are also reachable at the mount site through [`SqsSubscription`], which is
@@ -309,13 +326,19 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
 ///
 /// #[subscriber(SqsQueue::new("orders"))]
 /// async fn reconcile(orders: &[Order<'_>]) -> HandlerOutcome {
-///     let _ = orders.len();
+///     if orders.iter().any(|order| order.0.is_empty()) {
+///         return HandlerOutcome::retry();
+///     }
 ///     HandlerOutcome::ack()
 /// }
 ///
-/// # fn wire() {
-/// let _mountable = reconcile.batch(nonzero!(6)).wait(Duration::from_secs(20));
-/// # }
+/// #[app]
+/// fn service() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         // The framework's batch size first, then this crate's settings on the same chain.
+///         b.include(reconcile.batch(nonzero!(6)).wait(Duration::from_secs(20)));
+///     })
+/// }
 /// ```
 pub trait SqsSubscription: Sized {
     /// Long-polling wait per receive call. See [`SqsQueue::wait`].
