@@ -292,12 +292,14 @@ impl SnsPublisher {
 ///     OrderPlaced { id: order.id }
 /// }
 ///
-/// // Without the step the reply would ride `SqsPublish` and land on a queue named
-/// // `orders-events`; with it the same reply fans out from the topic of that name.
-/// fn routes() -> impl RouterDef<SqsBroker> {
-///     Router::new().include(accept).out_reply(SnsPublish::default()).build()
+/// #[app]
+/// fn service() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         // Without the step the reply would ride `SqsPublish` and land on a queue named
+///         // `orders-events`; with it the same reply fans out from the topic of that name.
+///         b.include(accept).out_reply(SnsPublish::default());
+///     })
 /// }
-/// # let _ = routes;
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
@@ -329,17 +331,74 @@ impl SnsPublish {
     /// # Examples
     ///
     /// ```
-    /// use ruststream_sqs_sns::prelude::*;
+    /// # mod demo {
+    /// use std::error::Error;
     ///
-    /// // The topic fans out to `billing`, which the operator subscribed; production builds the
-    /// // policy without the step, which exists only under `testing`.
+    /// use ruststream::testing::TestApp;
+    /// use ruststream_sqs_sns::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+    /// struct PlaceOrder {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+    /// #[outgoing(name = "orders-events")]
+    /// struct OrderPlaced {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber(SqsQueue::new("orders"), publish)]
+    /// async fn accept(order: &PlaceOrder) -> OrderPlaced {
+    ///     OrderPlaced { id: order.id }
+    /// }
+    ///
+    /// /// Reads `billing`, which the operator subscribed to the topic.
+    /// #[subscriber(SqsQueue::new("billing"))]
+    /// async fn bill(placed: &OrderPlaced) -> HandlerOutcome {
+    ///     if placed.id == 0 {
+    ///         return HandlerOutcome::drop();
+    ///     }
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// // Production builds the policy without the step, which exists only under `testing`.
     /// fn announcements() -> SnsPublish {
     ///     let policy = SnsPublish::default();
     ///     #[cfg(feature = "testing")]
     ///     let policy = policy.fans_out_to(["billing"]);
     ///     policy
     /// }
-    /// # let _ = announcements;
+    ///
+    /// fn app() -> RustStream {
+    ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+    ///         b.include(accept).out_reply(announcements());
+    ///         b.include(bill);
+    ///     })
+    /// }
+    ///
+    /// pub async fn a_placed_order_reaches_billing() -> Result<(), Box<dyn Error>> {
+    ///     let tb = TestApp::start(app()).await?;
+    ///
+    ///     tb.broker::<SqsBroker>()
+    ///         .message(&PlaceOrder { id: 7 })
+    ///         .to("orders")
+    ///         .publish()
+    ///         .await?;
+    ///     tb.broker::<SqsBroker>()
+    ///         .subscriber("billing")
+    ///         .assert_called_once()
+    ///         .with(&OrderPlaced { id: 7 })
+    ///         .settled(HandlerOutcome::ack());
+    ///
+    ///     tb.shutdown().await?;
+    ///     Ok(())
+    /// }
+    /// # }
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// #     tokio::runtime::Runtime::new()?.block_on(demo::a_placed_order_reaches_billing())
+    /// # }
     /// ```
     #[cfg(feature = "testing")]
     pub fn fans_out_to(mut self, queues: impl IntoIterator<Item = impl Into<String>>) -> Self {

@@ -367,15 +367,28 @@ fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_sqs_sns::SqsBroker;
+/// `SqsBroker::new()` alone takes the region and credentials from the environment; the steps
+/// below point the same service at a local stack.
 ///
-/// let broker = SqsBroker::new(); // region and credentials from the environment
-/// let local = SqsBroker::new()
-///     .endpoint("http://localhost:4566")
-///     .test_credentials()
-///     .region("us-east-1");
-/// # let _ = (broker, local);
+/// ```
+/// use ruststream_sqs_sns::prelude::*;
+/// # #[derive(Deserialized)]
+/// # struct Order<'a>(&'a [u8]);
+/// # #[subscriber(SqsQueue::new("orders"))]
+/// # async fn handle(_order: &Order<'_>) -> HandlerOutcome {
+/// #     HandlerOutcome::ack()
+/// # }
+///
+/// #[app]
+/// fn service() -> impl App {
+///     let broker = SqsBroker::new()
+///         .endpoint("http://localhost:4566")
+///         .test_credentials()
+///         .region("us-east-1");
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
+///         b.include(handle);
+///     })
+/// }
 /// ```
 #[derive(Debug, Clone, Default)]
 #[must_use]
