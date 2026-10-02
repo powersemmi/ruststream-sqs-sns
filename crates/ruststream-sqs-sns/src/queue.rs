@@ -7,8 +7,6 @@
 //! onto `MaxNumberOfMessages`.
 
 use std::borrow::Cow;
-#[cfg(feature = "testing")]
-use std::future::{Future, ready};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -24,8 +22,6 @@ use crate::error::SqsError;
 #[cfg(feature = "asyncapi")]
 use crate::publisher::is_fifo;
 use crate::subscriber::SqsSubscriber;
-#[cfg(feature = "testing")]
-use crate::testing::{ConnectedSqsTestBroker, SqsTestSubscriber};
 
 /// The protocol cap on long polling.
 const MAX_WAIT: Duration = Duration::from_secs(20);
@@ -286,52 +282,6 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
         self.with_declaration(declaration)
     }
 
-    #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
-        self.channel_binding()
-    }
-}
-
-/// The same descriptor against the in-process stand-in, so the declaration a service ships
-/// mounts on [`SqsTestBroker`](crate::testing::SqsTestBroker) as written, with no second
-/// descriptor type and no rewrite at the mount site.
-///
-/// The stand-in routes by exact queue name, which is what this descriptor already resolves to,
-/// and it counts receives and applies the registration's redrive policy the way the queue does,
-/// so a cap and a dead-letter destination can be driven under the harness. The rest of it stops
-/// here, and deliberately: `wait` has no long poll to bound (a delivery arrives the moment it is
-/// published), `visibility` has no redelivery clock to arm (an unsettled message is not handed
-/// out again in process), and `create_if_missing` has nothing to create (the router registers
-/// the address on subscribe). So a test on this broker proves that the wiring, the codec and the
-/// handler agree; it cannot prove redelivery after a lapsed visibility, or what a long poll
-/// costs. Those hold against SQS itself, and the live suite is where they are asserted.
-#[cfg(feature = "testing")]
-impl SubscriptionSource<ConnectedSqsTestBroker> for SqsQueue {
-    type Subscriber = SqsTestSubscriber;
-    type Copies = BrokerMoves;
-
-    fn name(&self) -> &str {
-        self.queue()
-    }
-
-    fn subscribe(
-        self,
-        connected: &ConnectedSqsTestBroker,
-    ) -> impl Future<Output = Result<SqsTestSubscriber, SqsError>> + Send {
-        // Validated in process too: a descriptor SQS would refuse must not pass a test that
-        // never reaches SQS. The transport never awaits, so the answer is ready.
-        ready(
-            self.validate()
-                .and_then(|()| connected.subscribe_queue(&self)),
-        )
-    }
-
-    fn declare_retry(self, declaration: &RetryDeclaration) -> Self {
-        self.with_declaration(declaration)
-    }
-
-    // The same values the real broker reports, so a document generated in a test is the document
-    // the service publishes.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self) -> Bindings {
         self.channel_binding()

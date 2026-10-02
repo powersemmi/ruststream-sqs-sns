@@ -12,22 +12,28 @@
 //! the stream is dropped, where the cost (one closed HTTP connection) does not matter.
 
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{Stream, StreamExt};
-
 use aws_sdk_sqs::types::MessageSystemAttributeName;
-use ruststream::{BatchSubscriber, Subscriber};
+#[cfg(feature = "testing")]
+use futures::future::Either;
+use futures::{Stream, StreamExt};
+use ruststream::{BatchSubscriber, Subscriber, nonzero};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use crate::broker::Core;
+use crate::broker::Aws;
+use crate::clients::Clients;
 use crate::error::{SqsError, sdk_err};
+#[cfg(feature = "testing")]
+use crate::in_process::BusDeliveries;
 use crate::message::SqsMessage;
 use crate::queue::SqsQueue;
 
 /// The protocol cap on `MaxNumberOfMessages`: one `ReceiveMessage` returns at most ten
 /// messages, whatever a batch size asks for.
-const RECEIVE_CAP: usize = 10;
+pub(crate) const RECEIVE_CAP: NonZeroUsize = nonzero!(10_usize);
 
 /// The protocol cap on a visibility timeout, in seconds.
 const MAX_VISIBILITY_SECS: u64 = 12 * 60 * 60;
@@ -38,7 +44,7 @@ const MAX_VISIBILITY_SECS: u64 = 12 * 60 * 60;
 /// the first delivery is what the extender has to re-arm, or the extender moves a deadline
 /// somebody else set. Keeping them in one value makes that disagreement unrepresentable.
 #[derive(Debug, Clone, Copy)]
-enum Visibility {
+pub(crate) enum Visibility {
     /// The descriptor named it, so every receive asks for it and the extender re-arms it.
     Requested(Duration),
     /// The descriptor named none. The queue's own timeout governs the receive, and the extender
@@ -59,7 +65,7 @@ impl Visibility {
     }
 
     /// The duration a delivery is held under, which the extender re-arms.
-    const fn held(self) -> Duration {
+    pub(crate) const fn held(self) -> Duration {
         match self {
             Self::Requested(visibility) | Self::Queue(visibility) => visibility,
         }
@@ -77,7 +83,25 @@ impl Visibility {
 /// The receive size as the SDK spells it. The clamp is what makes the conversion exact, and
 /// the fallback is that same cap, so nothing rides on it.
 fn receive_size(requested: usize) -> i32 {
-    i32::try_from(requested.min(RECEIVE_CAP)).unwrap_or(10)
+    i32::try_from(requested.min(RECEIVE_CAP.get())).unwrap_or(10)
+}
+
+/// The largest batch a subscription on `queue` yields when its registration asks for `requested`
+/// messages: the size itself, capped at what one `ReceiveMessage` returns.
+///
+/// The cap is logged once per subscription, when its batches open, so a registration that asked
+/// for more does not lose the difference silently. Both lanes batch through this rule, so a test
+/// in process sees the batches the queue would hand over.
+pub(crate) fn receive_batch(requested: NonZeroUsize, queue: &str) -> NonZeroUsize {
+    if requested > RECEIVE_CAP {
+        tracing::warn!(
+            queue,
+            requested = requested.get(),
+            delivered = RECEIVE_CAP.get(),
+            "sqs receives at most 10 messages per call; batches are capped at that",
+        );
+    }
+    requested.min(RECEIVE_CAP)
 }
 
 /// A subscription to one SQS queue; yields [`SqsMessage`]s.
@@ -85,7 +109,34 @@ fn receive_size(requested: usize) -> i32 {
 /// Dropping the stream stops the pump task; unsettled messages redeliver when their visibility
 /// lapses.
 pub struct SqsSubscriber {
-    client: aws_sdk_sqs::Client,
+    lane: Lane,
+}
+
+/// Where a subscription receives from: the queue through the SDK client, or, under the `testing`
+/// feature, the in-process account the test harness connected instead.
+///
+/// Without the feature there is one variant, so the subscriber is the receive loop's parameters
+/// and every `match` on the lane resolves at compile time.
+// The live lane is the larger variant on purpose: it is the one a production build has, and
+// boxing it would put an allocation on the service's own path to shrink a test build.
+#[cfg_attr(feature = "testing", allow(clippy::large_enum_variant))]
+enum Lane {
+    Aws(Receiver),
+    #[cfg(feature = "testing")]
+    InProcess(BusDeliveries),
+}
+
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<Lane>() == size_of::<Receiver>());
+
+/// The receive loop's parameters against the live queue.
+struct Receiver {
+    /// The broker's clients: the pump and the extenders send through the set of the broker's
+    /// runtime, and each delivery settles through the set of the runtime that settles it.
+    clients: Arc<Clients>,
+    /// The runtime the broker connected on: the pump and the extenders run there, whichever
+    /// thread opens the stream.
+    runtime: Handle,
     queue_url: String,
     wait: Duration,
     visibility: Visibility,
@@ -96,12 +147,20 @@ pub struct SqsSubscriber {
 
 impl std::fmt::Debug for SqsSubscriber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SqsSubscriber")
-            .field("queue_url", &self.queue_url)
-            .field("wait", &self.wait)
-            .field("visibility", &self.visibility)
-            .field("redrive_max", &self.redrive_max)
-            .finish_non_exhaustive()
+        match &self.lane {
+            Lane::Aws(receiver) => f
+                .debug_struct("SqsSubscriber")
+                .field("queue_url", &receiver.queue_url)
+                .field("wait", &receiver.wait)
+                .field("visibility", &receiver.visibility)
+                .field("redrive_max", &receiver.redrive_max)
+                .finish_non_exhaustive(),
+            #[cfg(feature = "testing")]
+            Lane::InProcess(deliveries) => f
+                .debug_struct("SqsSubscriber")
+                .field("queue_url", &deliveries.queue_url())
+                .finish_non_exhaustive(),
+        }
     }
 }
 
@@ -109,7 +168,11 @@ impl SqsSubscriber {
     /// The resolved URL of the queue this subscription polls.
     #[must_use]
     pub fn queue_url(&self) -> &str {
-        &self.queue_url
+        match &self.lane {
+            Lane::Aws(receiver) => &receiver.queue_url,
+            #[cfg(feature = "testing")]
+            Lane::InProcess(deliveries) => deliveries.queue_url(),
+        }
     }
 
     /// Opens a subscription on an already resolved queue URL.
@@ -118,26 +181,39 @@ impl SqsSubscriber {
     /// the extender re-arms what the operator configured. `queue` is the name as the service
     /// wrote it, for the error.
     pub(crate) async fn open(
-        core: &Core,
+        aws: &Aws,
         queue: &str,
         queue_url: String,
         descriptor: &SqsQueue,
     ) -> Result<Self, SqsError> {
         let visibility = match descriptor.visibility_value() {
             Some(requested) => Visibility::Requested(requested),
-            None => Visibility::Queue(core.queue_visibility(queue, &queue_url).await?),
+            None => Visibility::Queue(aws.queue_visibility(queue, &queue_url).await?),
         };
         Ok(Self {
-            client: core.sqs.clone(),
-            queue_url,
-            wait: descriptor.wait_value(),
-            visibility,
-            redrive_max: descriptor
-                .redrive()?
-                .map(|redrive| redrive.max_receive_count),
+            lane: Lane::Aws(Receiver {
+                clients: Arc::clone(&aws.clients),
+                runtime: aws.runtime.clone(),
+                queue_url,
+                wait: descriptor.wait_value(),
+                visibility,
+                redrive_max: descriptor
+                    .redrive()?
+                    .map(|redrive| redrive.max_receive_count),
+            }),
         })
     }
 
+    /// A subscription on the in-process account.
+    #[cfg(feature = "testing")]
+    pub(crate) const fn in_process(deliveries: BusDeliveries) -> Self {
+        Self {
+            lane: Lane::InProcess(deliveries),
+        }
+    }
+}
+
+impl Receiver {
     /// Starts a pump asking for `size` messages per receive (clamped to the protocol cap) and
     /// returns the batch channel.
     ///
@@ -147,8 +223,9 @@ impl SqsSubscriber {
     fn pump(&self, size: usize) -> mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>> {
         // One batch in flight, so the pump stays exactly one receive ahead of the consumer.
         let (tx, rx) = mpsc::channel(1);
-        tokio::spawn(pump(
-            self.client.clone(),
+        self.runtime.spawn(pump(
+            Arc::clone(&self.clients),
+            self.runtime.clone(),
             self.queue_url.clone(),
             Receive {
                 size: receive_size(size),
@@ -178,6 +255,16 @@ fn batch_stream(
     futures::stream::poll_fn(move |cx| rx.poll_recv(cx))
 }
 
+/// Hands a batch's messages over one at a time, an error as itself.
+pub(crate) fn one_at_a_time(
+    batch: Result<Vec<SqsMessage>, SqsError>,
+) -> futures::stream::Iter<std::vec::IntoIter<Result<SqsMessage, SqsError>>> {
+    futures::stream::iter(match batch {
+        Ok(messages) => messages.into_iter().map(Ok).collect(),
+        Err(err) => vec![Err(err)],
+    })
+}
+
 impl Subscriber for SqsSubscriber {
     type Message = SqsMessage;
     type Error = SqsError;
@@ -186,12 +273,18 @@ impl Subscriber for SqsSubscriber {
         // A single-message subscription still receives a whole call's worth: SQS charges per
         // request, so asking for the protocol maximum and handing the messages over one at a
         // time costs a tenth of what one receive per message would.
-        batch_stream(self.pump(RECEIVE_CAP)).flat_map(|batch| {
-            futures::stream::iter(match batch {
-                Ok(messages) => messages.into_iter().map(Ok).collect(),
-                Err(err) => vec![Err(err)],
-            })
-        })
+        match &mut self.lane {
+            #[cfg(not(feature = "testing"))]
+            Lane::Aws(receiver) => {
+                batch_stream(receiver.pump(RECEIVE_CAP.get())).flat_map(one_at_a_time)
+            }
+            #[cfg(feature = "testing")]
+            Lane::Aws(receiver) => {
+                Either::Left(batch_stream(receiver.pump(RECEIVE_CAP.get())).flat_map(one_at_a_time))
+            }
+            #[cfg(feature = "testing")]
+            Lane::InProcess(deliveries) => Either::Right(deliveries.stream()),
+        }
     }
 }
 
@@ -210,26 +303,28 @@ impl BatchSubscriber for SqsSubscriber {
         &mut self,
         size: NonZeroUsize,
     ) -> impl Stream<Item = Result<Self::Batch, SqsError>> + Send + '_ {
-        let requested = size.get();
-        if requested > RECEIVE_CAP {
-            tracing::warn!(
-                queue_url = %self.queue_url,
-                requested,
-                delivered = RECEIVE_CAP,
-                "sqs receives at most 10 messages per call; batches are capped at that",
-            );
+        let size = receive_batch(size, self.queue_url());
+        match &mut self.lane {
+            #[cfg(not(feature = "testing"))]
+            Lane::Aws(receiver) => batch_stream(receiver.pump(size.get())),
+            #[cfg(feature = "testing")]
+            Lane::Aws(receiver) => Either::Left(batch_stream(receiver.pump(size.get()))),
+            #[cfg(feature = "testing")]
+            Lane::InProcess(deliveries) => Either::Right(deliveries.batches(size)),
         }
-        batch_stream(self.pump(requested))
     }
 }
 
 async fn pump(
-    client: aws_sdk_sqs::Client,
+    clients: Arc<Clients>,
+    runtime: Handle,
     queue_url: String,
     call: Receive,
     out: mpsc::Sender<Result<Vec<SqsMessage>, SqsError>>,
 ) {
     let visibility = call.visibility.held();
+    // The pump runs on the broker's runtime, so it receives through that runtime's client.
+    let client = &clients.home().sqs;
     loop {
         let mut receive = client
             .receive_message()
@@ -259,7 +354,8 @@ async fn pump(
                         let receipt = message.receipt_handle()?;
                         Some(SqsMessage::new(
                             message,
-                            client.clone(),
+                            &runtime,
+                            Arc::clone(&clients),
                             queue_url.clone(),
                             receipt.to_owned(),
                             visibility,

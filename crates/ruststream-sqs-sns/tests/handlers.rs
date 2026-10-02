@@ -1,4 +1,4 @@
-//! Handler-surface checks against the in-process transport.
+//! Handler-surface checks on the production broker in process.
 //!
 //! The forms this crate's documentation promises on a queue whose bodies are text: a batch
 //! bounded by the size its mount site named, the byte lane a service reads that body through,
@@ -6,12 +6,9 @@
 
 #![cfg(feature = "testing")]
 
-use std::sync::Mutex;
-
 use ruststream::testing::TestApp;
 use ruststream::{Outgoing, Serialized};
 use ruststream_sqs_sns::prelude::*;
-use ruststream_sqs_sns::testing::SqsTestBroker;
 use serde::{Deserialize, Serialize};
 
 /// The payload as the queue hands it over: bytes, so the type names itself deserialized and no
@@ -23,23 +20,17 @@ struct Frame<'a>(&'a [u8]);
 #[derive(Outgoing, Serialized)]
 struct Wire(Vec<u8>);
 
-static BATCHES: Mutex<Vec<Vec<Vec<u8>>>> = Mutex::new(Vec::new());
-
-/// A batch handler. The size is the mount site's, and the subscription is opened to it: on the
-/// real broker it becomes `MaxNumberOfMessages`, and in process the framework's buffer honours
-/// the same bound.
+/// A batch handler. The size is the mount site's, and the subscription is opened to it: it
+/// becomes `MaxNumberOfMessages`, on the real queue and in process alike.
 #[subscriber]
 async fn drain(frames: &[Frame<'_>]) -> HandlerOutcome {
-    BATCHES
-        .lock()
-        .expect("batch log")
-        .push(frames.iter().map(|frame| frame.0.to_vec()).collect());
+    let _ = frames.iter().map(|frame| frame.0.len()).sum::<usize>();
     HandlerOutcome::ack()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_batch_handler_opens_its_subscription_at_the_size_it_named() {
-    let broker = SqsTestBroker::new();
+    let broker = SqsBroker::new();
     // A producer handle taken before the app is built: the harness's own injection drives each
     // publish to a standstill, which would close a batch per message and say nothing about the
     // size bound this test is here for.
@@ -59,14 +50,16 @@ async fn a_batch_handler_opens_its_subscription_at_the_size_it_named() {
     }
     tb.settle().await.expect("the batch settles");
 
-    tb.broker::<SqsTestBroker>()
+    let drained = tb
+        .broker::<SqsBroker>()
         .subscriber("orders")
         .assert_called_once()
         .assert_batch_sizes(&[2])
-        .settled(HandlerOutcome::ack());
+        .settled(HandlerOutcome::ack())
+        .batches_raw();
     assert_eq!(
-        BATCHES.lock().expect("batch log").as_slice(),
-        &[vec![b"first".to_vec(), b"second".to_vec()]],
+        drained,
+        [vec![&b"first"[..], &b"second"[..]]],
         "one batch closed at the size the mount named, and the bytes crossed untouched",
     );
 }
@@ -106,14 +99,14 @@ async fn issue(request: &Request) -> Receipt {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_that_declares_a_destination_lands_on_it() {
     let app = RustStream::new(AppInfo::new("declared-reply", "0.1.0")).with_broker(
-        SqsTestBroker::new(),
+        SqsBroker::new(),
         |b| {
             b.include(announce);
         },
     );
 
     let tb = TestApp::start(app).await.expect("the app starts");
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .message(&Request { id: 1 })
         .to("orders")
         .publish()
@@ -121,10 +114,10 @@ async fn a_reply_that_declares_a_destination_lands_on_it() {
         .expect("the request reaches the queue");
     tb.settle().await.expect("the reply settles");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("orders")
         .assert_called_once();
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<OrderPlaced>("orders-events")
         .assert_called_once()
         .with(&OrderPlaced { id: 1 });
@@ -133,14 +126,14 @@ async fn a_reply_that_declares_a_destination_lands_on_it() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_without_a_destination_lands_on_the_mount_site_name() {
     let app = RustStream::new(AppInfo::new("mounted-reply", "0.1.0")).with_broker(
-        SqsTestBroker::new(),
+        SqsBroker::new(),
         |b| {
             b.include(issue);
         },
     );
 
     let tb = TestApp::start(app).await.expect("the app starts");
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .message(&Request { id: 2 })
         .to("receipt-requests")
         .publish()
@@ -148,10 +141,10 @@ async fn a_reply_without_a_destination_lands_on_the_mount_site_name() {
         .expect("the request reaches the queue");
     tb.settle().await.expect("the reply settles");
 
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .subscriber("receipt-requests")
         .assert_called_once();
-    tb.broker::<SqsTestBroker>()
+    tb.broker::<SqsBroker>()
         .published::<Receipt>("receipts")
         .assert_called_once()
         .with(&Receipt { id: 2 });
