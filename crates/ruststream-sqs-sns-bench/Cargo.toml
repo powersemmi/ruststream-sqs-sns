@@ -27,7 +27,7 @@ testing = ["ruststream-sqs-sns/testing"]
 ruststream-sqs-sns.workspace = true
 # The code-cost scenarios (`consume`, `reply`, `batch`): callgrind and DHAT through the runner the
 # core pins.
-gungraun = "=0.19.4"
+gungraun = "=0.20.0"
 # The framework loop is the service a user writes, so it needs the handler macros and a codec;
 # the adapter and raw loops decode in their own frame and use neither.
 ruststream = { workspace = true, features = ["macros", "json"] }
