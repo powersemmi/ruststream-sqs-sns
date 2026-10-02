@@ -493,7 +493,7 @@ async fn a_delivery_reports_the_queues_receive_count() {
 
 /// The timeout an operator leaves on the queue in the test below: long enough that a redelivery
 /// under it would not arrive within a test's patience.
-const SLOW_QUEUE_VISIBILITY: Duration = Duration::from_secs(60);
+const SLOW_QUEUE_VISIBILITY: Duration = Duration::from_mins(1);
 
 /// What the descriptor asks for instead.
 const DESCRIBED_VISIBILITY: Duration = Duration::from_secs(2);

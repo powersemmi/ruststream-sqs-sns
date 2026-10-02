@@ -413,9 +413,9 @@ mod tests {
     fn a_queues_own_visibility_is_re_armed_without_being_asked_for() {
         // The receive call names nothing, so the queue's setting governs it and stays the
         // operator's to change; the extender still re-arms that same duration.
-        let visibility = Visibility::Queue(Duration::from_secs(300));
+        let visibility = Visibility::Queue(Duration::from_mins(5));
         assert_eq!(visibility.requested(), None);
-        assert_eq!(visibility.held(), Duration::from_secs(300));
+        assert_eq!(visibility.held(), Duration::from_mins(5));
     }
 
     #[test]
