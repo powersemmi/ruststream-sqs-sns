@@ -77,7 +77,7 @@ struct OrderPlaced {
 
 #[subscriber(
     SqsQueue::new("orders").wait(Duration::from_secs(20)),
-    publish("orders-events")
+    reply("orders-events")
 )]
 async fn accept(order: &PlaceOrder) -> OrderPlaced {
     OrderPlaced { id: order.id }

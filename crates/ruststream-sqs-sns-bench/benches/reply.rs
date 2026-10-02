@@ -30,7 +30,7 @@ struct Confirmation {
     id: u64,
 }
 
-#[subscriber(SqsQueue::new(common::input()), publish)]
+#[subscriber(SqsQueue::new(common::input()), reply)]
 async fn confirm(order: &Order, ctx: &mut Context<'_, (), Latch>) -> Confirmation {
     ctx.state().arrived();
     Confirmation {

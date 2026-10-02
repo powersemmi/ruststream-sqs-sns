@@ -270,14 +270,14 @@ struct PlaceOrder {
     id: u64,
 }
 
-/// The type fixes its destination, so the clause is the bare `publish`.
+/// The type fixes its destination, so the clause is the bare `reply`.
 #[derive(Serialize, Outgoing)]
 #[outgoing(name = "orders-events")]
 struct OrderPlaced {
     id: u64,
 }
 
-#[subscriber(SqsQueue::new("orders"), publish)]
+#[subscriber(SqsQueue::new("orders"), reply)]
 async fn accept(order: &PlaceOrder) -> OrderPlaced {
     OrderPlaced { id: order.id }
 }

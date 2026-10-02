@@ -287,7 +287,7 @@ impl SnsPublisher {
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("orders", publish("orders-events"))]
+/// #[subscriber("orders", reply("orders-events"))]
 /// async fn accept(order: &Order) -> OrderPlaced {
 ///     OrderPlaced { id: order.id }
 /// }
@@ -349,7 +349,7 @@ impl SnsPublish {
     ///     id: u64,
     /// }
     ///
-    /// #[subscriber(SqsQueue::new("orders"), publish)]
+    /// #[subscriber(SqsQueue::new("orders"), reply)]
     /// async fn accept(order: &PlaceOrder) -> OrderPlaced {
     ///     OrderPlaced { id: order.id }
     /// }

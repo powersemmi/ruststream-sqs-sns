@@ -86,12 +86,12 @@ struct Receipt {
     id: u64,
 }
 
-#[subscriber("orders", publish)]
+#[subscriber("orders", reply)]
 async fn announce(request: &Request) -> OrderPlaced {
     OrderPlaced { id: request.id }
 }
 
-#[subscriber("receipt-requests", publish("receipts"))]
+#[subscriber("receipt-requests", reply("receipts"))]
 async fn issue(request: &Request) -> Receipt {
     Receipt { id: request.id }
 }
