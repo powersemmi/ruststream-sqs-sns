@@ -886,7 +886,7 @@ mod tests {
 
     #[test]
     fn a_queues_visibility_timeout_is_read_in_seconds() {
-        assert_eq!(parse_visibility(Some("300")), Ok(Duration::from_secs(300)));
+        assert_eq!(parse_visibility(Some("300")), Ok(Duration::from_mins(5)));
     }
 
     #[test]

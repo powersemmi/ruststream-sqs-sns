@@ -51,7 +51,7 @@ struct OrderPlaced {
     id: u64,
 }
 
-#[subscriber(SqsQueue, publish)]
+#[subscriber(SqsQueue, reply)]
 async fn accept(order: &PlaceOrder) -> OrderPlaced {
     OrderPlaced { id: order.id }
 }
@@ -153,7 +153,7 @@ struct ParcelAnnounced {
     parcel: u64,
 }
 
-#[subscriber(SqsQueue, publish)]
+#[subscriber(SqsQueue, reply)]
 async fn receive(parcel: &Parcel) -> ParcelAnnounced {
     ParcelAnnounced { parcel: parcel.id }
 }

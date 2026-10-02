@@ -63,7 +63,7 @@ async fn post_ledger(entries: &[Order]) -> HandlerOutcome {
 /// A reply-shaped handler: it says where the reply goes, and the mount site says who takes it
 /// there. Every mount below reuses this one definition, which is the point - the policy is the
 /// only thing that differs.
-#[subscriber(SqsQueue::new("accepted"), publish("order-events"))]
+#[subscriber(SqsQueue::new("accepted"), reply("order-events"))]
 async fn accept(order: &Order) -> OrderPlaced {
     OrderPlaced { id: order.id }
 }

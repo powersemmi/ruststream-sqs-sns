@@ -46,21 +46,21 @@ struct OrderPlaced {
 }
 
 /// The reply goes to a queue, so the document describes a queue.
-#[subscriber(SqsQueue::new("accepted"), publish("order-events"))]
+#[subscriber(SqsQueue::new("accepted"), reply("order-events"))]
 async fn accept(order: &Order) -> OrderPlaced {
     OrderPlaced { id: order.id }
 }
 
 /// The same reply, fanned out from a FIFO topic.
 #[cfg(feature = "sns")]
-#[subscriber(SqsQueue::new("announced"), publish("order-events.fifo"))]
+#[subscriber(SqsQueue::new("announced"), reply("order-events.fifo"))]
 async fn announce(order: &Order) -> OrderPlaced {
     OrderPlaced { id: order.id }
 }
 
 /// The same reply again, fanned out from a standard topic.
 #[cfg(feature = "sns")]
-#[subscriber(SqsQueue::new("notified"), publish("shipment-events"))]
+#[subscriber(SqsQueue::new("notified"), reply("shipment-events"))]
 async fn notify(order: &Order) -> OrderPlaced {
     OrderPlaced { id: order.id }
 }

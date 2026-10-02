@@ -19,7 +19,7 @@ struct PlaceOrder {
 
 // --8<-- [start:reply]
 /// The notification the topic fans out. It names the topic, so the handler answers with a bare
-/// `publish` clause and every send of this type lands in the same place.
+/// `reply` clause and every send of this type lands in the same place.
 #[derive(Debug, Deserialize, Serialize, Outgoing)]
 #[outgoing(name = "orders-events")]
 struct OrderPlaced {
@@ -29,7 +29,7 @@ struct OrderPlaced {
 /// The reply type names where the reply goes; the mount site names who takes it there. Without an
 /// `.out_reply(..)` the reply would ride the broker's default policy and land on a queue of that
 /// name, so fan-out is one step on the mount chain rather than a different handler.
-#[subscriber(SqsQueue::new("orders").create_if_missing(), publish)]
+#[subscriber(SqsQueue::new("orders").create_if_missing(), reply)]
 async fn accept(order: &PlaceOrder) -> OrderPlaced {
     println!("accepted order {}", order.id);
     OrderPlaced { id: order.id }

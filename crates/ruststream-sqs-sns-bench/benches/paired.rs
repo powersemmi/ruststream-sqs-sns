@@ -161,7 +161,7 @@ const WORKERS: usize = 4;
 const IN_FLIGHT: usize = 4_096;
 /// How long a run may go without a delivery before it is called stuck. Above [`WAIT`], so a long
 /// poll that runs its full course is not mistaken for a stall.
-const STALL: Duration = Duration::from_secs(60);
+const STALL: Duration = Duration::from_mins(1);
 /// Requests the round-trip probe makes on one client before the pairs start.
 ///
 /// Every request here is an HTTP round trip rather than a protocol ping, so thousands settle the
