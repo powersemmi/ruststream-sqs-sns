@@ -44,8 +44,9 @@
 //! one run to the next: over four runs the longest run's instructions moved by up to 0.4 percent
 //! and its allocations by up to three blocks in 1.7 million. Each allocation floor is therefore
 //! the highest total observed plus a tenth of a percent, which one more allocation per message
-//! still exceeds; each scenario states its range next to its floor. The instruction limit stays at
-//! two percent, five times the movement seen.
+//! still exceeds; each scenario states its range next to its floor. The instruction limit sits at
+//! two percent, five times the movement seen, and it holds a run to a named baseline rather than to
+//! the run before it.
 
 // Each benchmark target compiles this module on its own and uses the part it needs; what another
 // target uses looks unused here.
@@ -64,7 +65,7 @@ use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_sdk_sqs::Client;
 use aws_sdk_sqs::types::SendMessageBatchRequestEntry;
 use futures::{StreamExt, stream};
-use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, EventKind, LibraryBenchmarkConfig};
+use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, LibraryBenchmarkConfig};
 use ruststream::runtime::{AppInfo, BrokerScope, Identity, RunningApp, RustStream};
 use ruststream_sqs_sns::SqsBroker;
 use serde::Deserialize;
@@ -108,10 +109,44 @@ pub struct Order {
     pub quantity: u32,
 }
 
-/// Deliveries per measured run: large enough that entering and leaving the region is lost in the
-/// per-message number, small enough that a scenario stays under a minute of valgrind time.
-/// `scripts/bench_results.py` divides by the same count.
-pub const MESSAGES: usize = 1_000;
+/// Deliveries per measured run.
+///
+/// The default is large enough that entering and leaving the region is lost in the per-message
+/// number, and small enough that a scenario stays under a minute of valgrind time.
+/// `RUSTSTREAM_BENCH_MESSAGES` at build time overrides it (`just bench-code 5000`) for a steadier
+/// number at the price of a longer run, and `scripts/bench_results.py` divides by the same count.
+/// The published document is measured at the default. The allocation floors scale with the count
+/// through [`config`]; their margin is sized for the default, so a smaller count may let one more
+/// allocation per message through.
+pub const MESSAGES: usize = messages(option_env!("RUSTSTREAM_BENCH_MESSAGES"));
+
+/// The count a run measures when nothing names one.
+const DEFAULT_MESSAGES: usize = 1_000;
+
+/// The configured count, or the default; a value that is not a positive number is a build error
+/// naming the variable, so a typo cannot silently measure the default.
+const fn messages(configured: Option<&str>) -> usize {
+    let Some(text) = configured else {
+        return DEFAULT_MESSAGES;
+    };
+    let bytes = text.as_bytes();
+    let mut count = 0usize;
+    let mut index = 0;
+    while index < bytes.len() {
+        let digit = bytes[index];
+        assert!(
+            digit.is_ascii_digit(),
+            "RUSTSTREAM_BENCH_MESSAGES must be a positive number of deliveries"
+        );
+        count = count * 10 + (digit - b'0') as usize;
+        index += 1;
+    }
+    assert!(
+        count > 0,
+        "RUSTSTREAM_BENCH_MESSAGES must be a positive number of deliveries"
+    );
+    count
+}
 
 /// The measurement configuration every gated scenario shares.
 ///
@@ -119,8 +154,9 @@ pub const MESSAGES: usize = 1_000;
 /// longest run of the scenario (twice [`MESSAGES`] deliveries) allocates once; together they are
 /// the hard limit that run is held to, so the run fails when the path allocates more than it does
 /// today. Both are floors the code is held to, so a number that goes down is lowered here in the
-/// same change. The instruction limit is relative: `just bench-code --save-baseline=main` records
-/// a baseline and `just bench-code --baseline=main` compares against it.
+/// same change. The instruction limit is relative, and `just bench-code` sets it only for a run
+/// against a named baseline: `just bench-code --save-baseline=main` records one, and
+/// `just bench-code --baseline=main` fails on two percent more instructions than it.
 pub fn config(steady: u64, cold: u64) -> LibraryBenchmarkConfig {
     config_every(steady, 1, cold)
 }
@@ -130,7 +166,7 @@ pub fn config(steady: u64, cold: u64) -> LibraryBenchmarkConfig {
 pub fn config_every(steady: u64, per: u64, cold: u64) -> LibraryBenchmarkConfig {
     let mut config = LibraryBenchmarkConfig::default();
     config
-        .tool(callgrind().soft_limits([(EventKind::Ir, 2f64)]))
+        .tool(callgrind())
         .tool(dhat().hard_limits([(DhatMetric::TotalBlocks, blocks(steady, per, cold))]));
     // The runner clears the environment of the measured process, so the stand's address is
     // handed over by name.
