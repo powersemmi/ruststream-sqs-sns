@@ -56,8 +56,14 @@ bench *ARGS: brokers-up
 # callgrind and allocations through DHAT, each scenario a service on the production broker against
 # the stand the tests use, started, filled from another thread and drained. The page it feeds is
 # the code table of docs/benchmarks.md. RUSTFLAGS is cleared because valgrind aborts on the
-# instructions a recent CPU advertises. Needs valgrind and the runner the benches pin:
-# cargo install --locked gungraun-runner --version =0.19.4
+# instructions a recent CPU advertises. Needs valgrind.
+#
+# The benchmarks hand the measurement to gungraun's runner, which has to be the release of the
+# library the lock file pins. The recipe installs that release into `target/gungraun-runner` on
+# the first run and after the library moves, and puts it first on PATH, where the benchmarks look
+# the runner up. A `GUNGRAUN_RUNNER` in the environment would win over PATH when the benchmarks
+# build, so the recipe clears it.
+#
 # Extra arguments reach the runner: `just bench-code --save-baseline=main` records a baseline,
 # `just bench-code --baseline=main` compares against it.
 bench-code *ARGS: brokers-up
@@ -65,6 +71,15 @@ bench-code *ARGS: brokers-up
     set -euo pipefail
     trap 'just brokers-down' EXIT
     mkdir -p target
+    version="$(cargo pkgid gungraun)"
+    version="${version##*@}"
+    runner="$PWD/target/gungraun-runner"
+    installed="$("$runner/bin/gungraun-runner" --version 2> /dev/null || true)"
+    if [ "$installed" != "gungraun-runner $version" ]; then
+        cargo install --locked --root "$runner" gungraun-runner --version "=$version"
+    fi
+    unset GUNGRAUN_RUNNER
+    export PATH="$runner/bin:$PATH"
     RUSTFLAGS="" SQS_TEST_ENDPOINT=http://127.0.0.1:4566 \
         cargo bench -p ruststream-sqs-sns-bench \
         --bench consume --bench reply --bench batch \
