@@ -22,13 +22,14 @@ use futures::{Stream, StreamExt};
 use ruststream::{BatchSubscriber, Subscriber, nonzero};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use crate::broker::Aws;
 use crate::clients::Clients;
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process::BusDeliveries;
-use crate::message::SqsMessage;
+use crate::message::{Hold, SqsMessage};
 use crate::queue::SqsQueue;
 
 /// The protocol cap on `MaxNumberOfMessages`: one `ReceiveMessage` returns at most ten
@@ -337,6 +338,10 @@ async fn pump(
             receive = receive.visibility_timeout(call.visibility.seconds());
         }
 
+        // The queue's twelve hours of invisibility for what this receive hands over run from when
+        // the queue answers it; counting from before the call keeps every later change inside
+        // them.
+        let asked = Instant::now();
         // Dropping this future when the stream is dropped is safe (hyper aborts the request); it
         // only costs the connection, and it happens once.
         let received = tokio::select! {
@@ -358,7 +363,10 @@ async fn pump(
                             Arc::clone(&clients),
                             queue_url.clone(),
                             receipt.to_owned(),
-                            visibility,
+                            Hold {
+                                visibility,
+                                received: asked,
+                            },
                             call.redrive_max,
                         ))
                     })

@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use super::bus::Bus;
 use crate::error::SqsError;
-use crate::message::{SqsMessage, extension_period};
+use crate::message::{SqsMessage, VISIBILITY_WINDOW, WINDOW_MARGIN, extension_period};
 use crate::subscriber::{RECEIVE_CAP, one_at_a_time};
 
 /// How long a batch receive waits for company once the queue holds fewer messages than the batch
@@ -121,7 +121,7 @@ impl BusDeliveries {
                                 queue: self.queue.clone(),
                                 receipt: received.receipt,
                                 visibility: self.visibility,
-                                received: Instant::now(),
+                                received: received.at,
                                 settled: AtomicBool::new(false),
                             },
                             self.redrive_max,
@@ -164,6 +164,16 @@ pub(crate) struct BusReceipt {
 }
 
 impl BusReceipt {
+    /// The queue the delivery came from, keyed the way the account keys it.
+    pub(crate) fn queue(&self) -> &str {
+        &self.queue
+    }
+
+    /// When the queue handed the delivery out.
+    pub(crate) const fn received(&self) -> Instant {
+        self.received
+    }
+
     pub(crate) fn delete(&self) {
         self.bus.delete(&self.queue, self.receipt);
         self.settled.store(true, Ordering::Release);
@@ -198,7 +208,8 @@ impl Drop for BusReceipt {
 
 /// How long a delivery dropped `held` after it was received stays invisible, as a live delivery
 /// does: the visibility runs from the receive, and the handle extends it to a full timeout every
-/// half timeout while it is held.
+/// half timeout while it is held, never past the end of the twelve hours
+/// from the receive the queue allows, where the live extension stops.
 fn remaining_visibility(visibility: Duration, held: Duration) -> Duration {
     if visibility.is_zero() {
         return Duration::ZERO;
@@ -206,7 +217,9 @@ fn remaining_visibility(visibility: Duration, held: Duration) -> Duration {
     let period = extension_period(visibility);
     let periods = held.as_nanos() / period.as_nanos();
     let last_extension = period.saturating_mul(u32::try_from(periods).unwrap_or(u32::MAX));
-    (last_extension + visibility).saturating_sub(held)
+    (last_extension + visibility)
+        .min(VISIBILITY_WINDOW.saturating_sub(WINDOW_MARGIN))
+        .saturating_sub(held)
 }
 
 impl fmt::Debug for BusReceipt {

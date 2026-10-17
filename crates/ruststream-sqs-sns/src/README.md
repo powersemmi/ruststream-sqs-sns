@@ -112,7 +112,8 @@ Every settlement is a native call, and deferred retry among them:
 [`ack`](ruststream::runtime::HandlerOutcome::ack) deletes the message,
 [`retry`](ruststream::runtime::HandlerOutcome::retry) zeroes its visibility,
 [`retry_after`](ruststream::runtime::HandlerOutcome::retry_after) sets that visibility to the
-delay, capped at the protocol's 12 hours, and
+delay, shortened with a warning to what remains of the 12 hours SQS keeps a received message
+invisible, and
 [`drop`](ruststream::runtime::HandlerOutcome::drop) deletes as well, SQS having no verb for
 rejecting a message without deleting it. A deferred delivery therefore waits in place and comes
 back on the same queue with its receive count intact: nothing is republished and no copy is made,
@@ -120,12 +121,19 @@ so the framework's broker-agnostic fallback never runs here and `.out_retry(..)`
 on an [`SqsQueue`].
 
 A handler may outlive the visibility timeout, and SQS has no lease renewal call, so the crate
-re-arms the visibility halfway through each timeout for as long as the delivery is alive. It re-arms the
-value the delivery is held under: what the descriptor named, or the queue's own timeout when the
-descriptor named none. That timeout is read once when the subscription opens, which is why a
-subscription naming no visibility of its own refuses to start without `sqs:GetQueueAttributes`.
+re-arms the visibility halfway through each timeout for as long as the delivery is alive. It
+re-arms the value the delivery is held under: what the descriptor named, or the queue's own
+timeout when the descriptor named none. That timeout is read once when the subscription opens,
+which is why a subscription naming no visibility of its own refuses to start without
+`sqs:GetQueueAttributes`.
 Dropping a delivery unsettled makes no call at all, and the message returns when its current
 visibility lapses.
+
+SQS keeps a received message invisible for at most 12 hours from the receive, and extending the
+visibility does not restart them. A handler that holds a delivery that long gets one last
+extension to the end of the window and a warning; after it the queue hands the message to another
+consumer. A deferred retry longer than what remains of the window is shortened to its end, with a
+warning naming the queue.
 
 ## Capping the attempts
 
@@ -534,6 +542,7 @@ them, and credentials. The repository's own tests run one body both ways.
   `sqs:GetQueueAttributes` on the dead-letter queue, `create_if_missing` adds `sqs:CreateQueue`,
   and publishing to a topic adds `sns:CreateTopic` and `sns:Publish`.
 * The service's own limits are the crate's: ten messages per receive, twenty seconds of long
-  polling, twelve hours of invisibility - which is also the ceiling on a deferred retry.
+  polling, twelve hours of invisibility from the receive - which is also the ceiling on a
+  deferred retry together with the time the handler held the delivery.
 * Known gaps: no transactions, no request/reply and no seeking, none of which SQS offers; SNS has
   no subscriber here; and a publish contributes nothing to the generated document.

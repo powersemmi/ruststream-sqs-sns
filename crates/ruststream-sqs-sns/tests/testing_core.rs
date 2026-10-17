@@ -502,6 +502,59 @@ async fn a_deferred_retry_waits_out_the_delay_in_process() {
     tb.shutdown().await.expect("the app shuts down");
 }
 
+/// How long `compile_report` works on a delivery before it asks for it back.
+const REPORT_HANDLING: Duration = Duration::from_hours(1);
+
+/// A handler that works on a delivery for an hour, then asks for it back in twelve: the most a
+/// deferred retry asks SQS for.
+#[subscriber(SqsQueue::new("reports"))]
+async fn compile_report(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    // The work itself: the delivery has been received for an hour when the handler settles it.
+    tokio::time::sleep(REPORT_HANDLING).await;
+    HandlerOutcome::retry_after(Duration::from_hours(12))
+}
+
+/// SQS keeps a received message invisible for at most twelve hours from its receive, so a
+/// deferred retry cannot reach past them: the delivery comes back when they run out, not twelve
+/// hours after the handler asked.
+#[tokio::test(start_paused = true)]
+async fn a_deferred_retry_comes_back_when_the_twelve_hours_from_the_receive_run_out() {
+    let app = RustStream::new(AppInfo::new("reports", "0.1.0")).with_broker(broker(), |b| {
+        b.include(compile_report);
+    });
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker::<SqsBroker>()
+        .message(&Order { id: 3 })
+        .to("reports")
+        .publish()
+        .await
+        .expect("the publish drives the handler to a standstill");
+    tb.broker::<SqsBroker>()
+        .subscriber("reports")
+        .assert_called_once()
+        .settled(HandlerOutcome::retry_after(Duration::from_hours(12)));
+
+    // The delay is shortened to the end of the window, not dropped: the delivery stays away
+    // until the window is nearly out: eleven hours, the twelve less the hour of handling.
+    tb.advance(Duration::from_mins(11 * 60 - 1))
+        .await
+        .expect("most of the twelve hours elapses");
+    tb.broker::<SqsBroker>()
+        .subscriber("reports")
+        .assert_called_once();
+
+    tb.advance(Duration::from_mins(1))
+        .await
+        .expect("the rest of the twelve hours elapses");
+    tb.broker::<SqsBroker>()
+        .subscriber("reports")
+        .assert_called(2);
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
 /// A handler on a capped queue that never settles a delivery: every one asks to come back after
 /// the delay, so the queue's redrive policy is what ends the message.
 #[subscriber(SqsQueue::new("claims"))]

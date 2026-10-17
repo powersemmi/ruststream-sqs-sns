@@ -286,6 +286,35 @@ async fn a_one_second_visibility_is_re_armed_before_it_lapses() -> Result<(), Bo
     Ok(())
 }
 
+/// A handler that holds a delivery past the twelve hours SQS keeps it invisible cannot extend it
+/// any further: dropped unsettled after them, the message is visible again at once.
+#[tokio::test(start_paused = true)]
+async fn a_message_held_past_twelve_hours_comes_back_at_once() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let mut subscriber = connected
+        .subscribe_queue(SqsQueue::new("claims").visibility(Duration::from_secs(30)))
+        .await?;
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new("claims", b"claim".as_slice()), None)
+        .await?;
+
+    let mut stream = pin!(subscriber.stream());
+    let first = stream.next().await.ok_or("the stream ended")??;
+    tokio::time::advance(Duration::from_hours(12) + Duration::from_secs(10)).await;
+    drop(first);
+
+    let again = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await?
+        .ok_or("the stream ended")??;
+    assert_eq!(
+        again.headers().get(RECEIVE_COUNT_HEADER),
+        Some(b"2".as_slice())
+    );
+    again.ack().await?;
+    Ok(())
+}
+
 /// A FIFO group with a message in flight hands out nothing more until that message is deleted;
 /// another group is not held up, and one receive hands out a free group's messages in order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
