@@ -201,6 +201,57 @@ async fn an_unsettled_message_comes_back_once_its_visibility_lapses() -> Result<
     Ok(())
 }
 
+/// SQS counts a visibility timeout in whole seconds, so a sub-second one would reach the queue as
+/// zero and hand the message to another consumer while the handler still runs. The subscription
+/// refuses it before it starts instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sub_second_visibility_refuses_to_start() {
+    let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
+        b.include(take.name("claims").visibility(Duration::from_millis(500)));
+    });
+
+    let refused = TestApp::start(app)
+        .await
+        .expect_err("SQS has no visibility timeout under one second");
+    let reason = refused.to_string();
+    assert!(
+        reason.contains("visibility"),
+        "the refusal names the setting, got {reason}"
+    );
+}
+
+/// A visibility timeout with a fraction of a second is held for the next whole second, which is
+/// what the receive asks SQS for: rounding down would hand the message out again before the
+/// timeout the subscription named.
+#[tokio::test(start_paused = true)]
+async fn a_fractional_visibility_is_held_for_the_next_whole_second() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let mut subscriber = connected
+        .subscribe_queue(SqsQueue::new("claims").visibility(Duration::from_millis(1_500)))
+        .await?;
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new("claims", b"claim".as_slice()), None)
+        .await?;
+
+    let mut stream = pin!(subscriber.stream());
+    let first = stream.next().await.ok_or("the stream ended")??;
+    drop(first);
+
+    let early = tokio::time::timeout(Duration::from_millis(1_900), stream.next()).await;
+    assert!(
+        early.is_err(),
+        "the message stays invisible for the whole second it was rounded up to"
+    );
+
+    let again = tokio::time::timeout(Duration::from_millis(200), stream.next())
+        .await?
+        .ok_or("the stream ended")??;
+    assert_eq!(again.payload(), b"claim");
+    again.ack().await?;
+    Ok(())
+}
+
 /// A FIFO group with a message in flight hands out nothing more until that message is deleted;
 /// another group is not held up, and one receive hands out a free group's messages in order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

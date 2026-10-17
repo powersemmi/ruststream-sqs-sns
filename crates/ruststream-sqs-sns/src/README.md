@@ -85,7 +85,7 @@ surface:
 | Step | Meaning | Default |
 | --- | --- | --- |
 | [`wait`](SqsQueue::wait) | long-polling wait per receive call | 20 seconds, the protocol cap |
-| [`visibility`](SqsQueue::visibility) | the visibility timeout asked for per receive, within `1s..=12h` | the queue's own timeout |
+| [`visibility`](SqsQueue::visibility) | the visibility timeout asked for per receive, within `1s..=12h`; a fraction of a second rounds up to the next whole second | the queue's own timeout |
 | [`create_if_missing`](SqsQueue::create_if_missing) | creates the queue on subscribe | off |
 
 An empty name, a wait above the cap or a visibility outside the range is

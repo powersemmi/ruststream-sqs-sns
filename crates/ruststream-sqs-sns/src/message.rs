@@ -32,6 +32,7 @@ use crate::clients::Clients;
 use crate::error::sdk_err;
 #[cfg(feature = "testing")]
 use crate::in_process::BusReceipt;
+use crate::queue::whole_seconds;
 
 /// Header carrying the partition key, mapped onto the FIFO message group id.
 ///
@@ -286,7 +287,7 @@ impl IncomingMessage for SqsMessage {
         // Setting the visibility to the delay is the native deferred retry (capped at the
         // protocol's 12 hours). SQS counts whole seconds, so a fraction rounds up: rounding down
         // would redeliver before the delay the handler asked for.
-        let seconds = delay.as_secs() + u64::from(delay.subsec_nanos() > 0);
+        let seconds = whole_seconds(delay);
         let seconds = i32::try_from(seconds.min(43_200)).unwrap_or(43_200);
         self.set_visibility(seconds).await
     }
