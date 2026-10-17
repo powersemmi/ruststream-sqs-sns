@@ -1,3 +1,8 @@
+---
+title: Benchmarks
+description: "What ruststream-sqs-sns costs on every message: throughput against the raw aws-sdk-sqs client, and instructions and allocations of its code."
+---
+
 # Benchmarks
 
 This crate's consumer and publisher sit between the SQS client and your code, and the runtime sits

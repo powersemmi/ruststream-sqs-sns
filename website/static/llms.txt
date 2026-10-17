@@ -4,12 +4,14 @@
 
 A subscription is the descriptor `SqsQueue`, by queue URL or by name, with its long-polling wait, visibility timeout and batch settings. A routes file imports `ruststream_sqs_sns::prelude::*`, which offers `SqsPublish` (send to a queue) as `Publish` and, with the `sns` feature, `SnsPublish` (publish to a topic) under its own name. The message group of a publish to a FIFO queue is its per-message setting, set with a step from `SqsPublishSteps`.
 
-This site holds the entry pages. The crate's guide is its overview on docs.rs, and the framework itself is documented on the RustStream site.
+This site holds the guides, one page per component and the architecture of the crate; the API reference is on docs.rs, and the framework itself is documented on the RustStream site.
 
 ## Site
 
-- [Home](https://powersemmi.github.io/ruststream-sqs-sns/latest/): what the crate does, the dependency lines and a first service
-- [Benchmarks](https://powersemmi.github.io/ruststream-sqs-sns/latest/benchmarks/): what this crate and the framework's runtime cost over the raw `aws-sdk-sqs` client on LocalStack, and how to re-measure it with `just bench`
+- [Guides](https://powersemmi.github.io/ruststream-sqs-sns/latest/): building an SQS service with the crate, from installation to production
+- [Components](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/): the parts of the crate an SQS service uses, one page each
+- [Architecture](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/): how SQS and SNS work, where the crate sits between them and the RustStream runtime, and what that costs
+- [Benchmarks](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/benchmarks/): what this crate and the framework's runtime cost over the raw `aws-sdk-sqs` client on LocalStack, and how to re-measure it with `just bench`
 
 ## Guide
 

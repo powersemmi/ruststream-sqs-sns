@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://powersemmi.github.io/ruststream-sqs-sns/">Documentation</a></b>
+  <b><a href="https://powersemmi.github.io/ruststream-sqs-sns/latest/">Documentation</a></b>
 </p>
 
 ---

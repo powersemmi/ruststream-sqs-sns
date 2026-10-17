@@ -1,4 +1,9 @@
-# 基准测试 {#benchmarks}
+---
+title: 基准测试
+description: "ruststream-sqs-sns 在每条消息上的开销：与原生 aws-sdk-sqs 客户端对比的吞吐量，以及其代码的指令数和内存分配次数。"
+---
+
+# 基准测试 {/* #benchmarks */}
 
 这个 crate 的订阅者与发布者处在 SQS 客户端和你的代码之间，运行时则在它们之上。两者每条消息都要付出
 时间：接收泵、它交出的投递、它的 `ack` 背后的删除、进入你的处理器的分派。本页给出各自的开销有多大，
@@ -23,7 +28,7 @@
 测试台是实时测试所用的 LocalStack 模拟器，而不是托管服务。下面每个数字说的都是一次投递在这个 crate
 内部的代价，别的什么也没说。
 
-## 数字 {#the-numbers}
+## 数字 {/* #the-numbers */}
 
 三个交错轮次中的最佳值，括号里是中位的一轮。越大越好。
 
@@ -44,7 +49,7 @@
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-sqs-sns/latest/benchmarks/results.json)，
 框架站点用它构建跨 Broker 的汇总表。
 
-## crate 自身的代码 {#the-crates-own-code}
+## crate 自身的代码 {/* #the-crates-own-code */}
 
 <div id="benchmark-code"></div>
 
@@ -70,14 +75,14 @@
 最大计数再加千分之一；加上 `--baseline=main` 时，指令数多出百分之二以上也算失败。改变开销
 的合并请求要附上自己的数字。
 
-## 机器 {#the-machine}
+## 机器 {/* #the-machine */}
 
 <div id="benchmark-environment"></div>
 
 构建标志与数字一起发布，因为它们会改变这些数字：用 `-C target-cpu=native` 构建出的二进制，别的机器
 无法复现它的结果，所以配方在构建前会清空这个变量。
 
-## 这些数字不代表什么 {#what-they-do-not-mean}
+## 这些数字不代表什么 {/* #what-they-do-not-mean */}
 
 测试台是模拟器。它在本地回环上用普通 HTTP 讲 SQS 和 SNS 的 API，因此 TLS 握手、凭证刷新和区域延迟
 都不在其中。配对依然成立：两边面对的是同一个模拟器，发布的是两者之差。饱和状况则不成立：区域中的
@@ -99,7 +104,7 @@ FIFO 的数字取自把消息体分散到 64 个消息组的队列。FIFO 队列
 这些数字是一台机器在某一天的快照。
 它们由人手工重测，测量期间机器只跑这一项：这一页要讲的差值，比与其他任务共用的机器上的噪声还小。
 
-## 自己跑一遍 {#running-it-yourself}
+## 自己跑一遍 {/* #running-it-yourself */}
 
 ```bash
 just bench
