@@ -56,3 +56,115 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "ti
 [[example]]
 name = "sns_fanout"
 required-features = ["sns"]
+
+# --- examples: components-a ---
+
+[[example]]
+name = "sqs_subscriptions_name"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_name"
+path = "examples/manual/sqs_subscriptions_name.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_queue"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_queue"
+path = "examples/manual/sqs_subscriptions_queue.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_wait"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_wait"
+path = "examples/manual/sqs_subscriptions_wait.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_visibility"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_visibility"
+path = "examples/manual/sqs_subscriptions_visibility.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_create"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_create"
+path = "examples/manual/sqs_subscriptions_create.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_fifo"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_fifo"
+path = "examples/manual/sqs_subscriptions_fifo.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_batches"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_batches"
+path = "examples/manual/sqs_batches.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_settlement_outcomes"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_settlement_outcomes"
+path = "examples/manual/sqs_settlement_outcomes.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_settlement_retry_after"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_settlement_retry_after"
+path = "examples/manual/sqs_settlement_retry_after.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_dead_letter"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_dead_letter"
+path = "examples/manual/sqs_dead_letter.rs"
+required-features = ["testing"]
+test = true
