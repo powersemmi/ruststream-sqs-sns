@@ -81,14 +81,12 @@ without a call to AWS.
 decorator, and the queue is named either by URL or by name (resolved through `GetQueueUrl` and
 cached):
 
-```rust
---8<-- "crates/ruststream-sqs-sns/examples/sqs_service.rs:handler"
+```rust reference="examples/sqs_service.rs#handler"
 ```
 
 Wire it onto the broker; the `with_broker` / `include` part is identical to the in-memory broker.
 
-```rust
---8<-- "crates/ruststream-sqs-sns/examples/sqs_service.rs:app"
+```rust reference="examples/sqs_service.rs#app"
 ```
 
 The plain string form `#[subscriber("orders")]` also works and takes the descriptor defaults.
@@ -182,8 +180,7 @@ Queues are attached to the topic with `subscribe_queue_to_topic`, which subscrib
 message delivery enabled, so payloads and headers arrive unwrapped as plain SQS messages instead
 of inside an SNS envelope:
 
-```rust
---8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:wiring"
+```rust reference="examples/sns_fanout.rs#wiring"
 ```
 
 Topology administration runs on the broker's own lifecycle ladder rather than through the
@@ -192,8 +189,7 @@ infrastructure. The example wires them from an `after_startup` hook, where the q
 exist because the subscriptions opened them, and publishes one notification through the
 `SnsPublish` policy:
 
-```rust
---8<-- "crates/ruststream-sqs-sns/examples/sns_fanout.rs:app"
+```rust reference="examples/sns_fanout.rs#app"
 ```
 
 ## Payloads and headers

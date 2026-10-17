@@ -19,19 +19,14 @@ ruststream-sqs-sns = "0.6"
 serde = { version = "1", features = ["derive"] }
 ```
 
-```rust
---8<-- "crates/ruststream-sqs-sns/examples/sqs_service.rs:app"
+```rust reference="examples/sqs_service.rs#app"
 ```
 
 ## Where to go next
 
-<div class="grid cards" markdown>
-
-- :material-aws: **[SQS guide](sqs.md)** - queue descriptors, settlement, FIFO groups, SNS fan-out, and testing.
-- :material-book-open-variant: **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
-- :material-language-rust: **[API reference](https://docs.rs/ruststream-sqs-sns)** - the crate's rustdoc on docs.rs.
-
-</div>
+- **[SQS guide](sqs.md)** - queue descriptors, settlement, FIFO groups, SNS fan-out, and testing.
+- **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
+- **[API reference](https://docs.rs/ruststream-sqs-sns)** - the crate's rustdoc on docs.rs.
 
 ## How this site relates to the RustStream docs
 
