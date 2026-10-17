@@ -56,3 +56,38 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "ti
 [[example]]
 name = "sns_fanout"
 required-features = ["sns"]
+
+# --- examples: components-c ---
+
+[[example]]
+name = "sqs_publishing_publish"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_publishing_publish"
+path = "examples/manual/sqs_publishing_publish.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_fifo_group"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_fifo_group"
+path = "examples/manual/sqs_fifo_group.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_publishing_deduplication"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_publishing_deduplication"
+path = "examples/manual/sqs_publishing_deduplication.rs"
+required-features = ["testing"]
+test = true
