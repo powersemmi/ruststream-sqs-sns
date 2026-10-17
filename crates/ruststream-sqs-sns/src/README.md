@@ -120,7 +120,7 @@ so the framework's broker-agnostic fallback never runs here and `.out_retry(..)`
 on an [`SqsQueue`].
 
 A handler may outlive the visibility timeout, and SQS has no lease renewal call, so the crate
-re-arms the visibility every half period for as long as the delivery is alive. It re-arms the
+re-arms the visibility halfway through each timeout for as long as the delivery is alive. It re-arms the
 value the delivery is held under: what the descriptor named, or the queue's own timeout when the
 descriptor named none. That timeout is read once when the subscription opens, which is why a
 subscription naming no visibility of its own refuses to start without `sqs:GetQueueAttributes`.

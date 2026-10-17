@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use super::bus::Bus;
 use crate::error::SqsError;
-use crate::message::SqsMessage;
+use crate::message::{SqsMessage, extension_period};
 use crate::subscriber::{RECEIVE_CAP, one_at_a_time};
 
 /// How long a batch receive waits for company once the queue holds fewer messages than the batch
@@ -198,12 +198,12 @@ impl Drop for BusReceipt {
 
 /// How long a delivery dropped `held` after it was received stays invisible, as a live delivery
 /// does: the visibility runs from the receive, and the handle extends it to a full timeout every
-/// half timeout (at least every second) while it is held.
+/// half timeout while it is held.
 fn remaining_visibility(visibility: Duration, held: Duration) -> Duration {
     if visibility.is_zero() {
         return Duration::ZERO;
     }
-    let period = (visibility / 2).max(Duration::from_secs(1));
+    let period = extension_period(visibility);
     let periods = held.as_nanos() / period.as_nanos();
     let last_extension = period.saturating_mul(u32::try_from(periods).unwrap_or(u32::MAX));
     (last_extension + visibility).saturating_sub(held)
@@ -232,5 +232,14 @@ mod tests {
         assert_eq!(at(10), Duration::from_secs(20), "no extension yet");
         assert_eq!(at(20), Duration::from_secs(25), "extended at 15s");
         assert_eq!(at(31), Duration::from_secs(29), "extended at 30s");
+    }
+
+    /// The shortest timeout is re-armed every half second, so a re-arm never lands at the moment
+    /// the timeout lapses.
+    #[test]
+    fn a_one_second_visibility_is_re_armed_every_half_second() {
+        let at = |held| remaining_visibility(Duration::from_secs(1), Duration::from_millis(held));
+        assert_eq!(at(400), Duration::from_millis(600), "no extension yet");
+        assert_eq!(at(900), Duration::from_millis(600), "extended at 500ms");
     }
 }

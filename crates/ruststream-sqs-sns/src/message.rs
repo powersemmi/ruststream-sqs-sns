@@ -297,8 +297,18 @@ impl IncomingMessage for SqsMessage {
     }
 }
 
+/// How often a held delivery's `visibility` is re-armed: halfway through it, which leaves the
+/// other half for the call to reach the queue.
+///
+/// There is no floor. A descriptor takes whole seconds from one up, so the shortest period is half
+/// a second; a floor of a second would land the re-arm of a one-second timeout at the moment it
+/// lapses, where it races the queue handing the message to another consumer.
+pub(crate) fn extension_period(visibility: Duration) -> Duration {
+    visibility / 2
+}
+
 /// Keeps a message invisible while its handle is alive: re-arms the visibility to `visibility`
-/// every half period. Aborted on settle/drop; a failed extension is logged and retried on the
+/// every [`extension_period`]. Aborted on settle/drop; a failed extension is logged and retried on the
 /// next tick (the message may redeliver, which at-least-once permits).
 ///
 /// A queue configured with no invisibility at all has nothing to extend, so the task ends
@@ -312,7 +322,7 @@ async fn extend_visibility(
     if visibility.is_zero() {
         return;
     }
-    let period = (visibility / 2).max(Duration::from_secs(1));
+    let period = extension_period(visibility);
     let seconds = i32::try_from(visibility.as_secs().min(43_200)).unwrap_or(43_200);
     loop {
         tokio::time::sleep(period).await;

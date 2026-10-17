@@ -252,6 +252,40 @@ async fn a_fractional_visibility_is_held_for_the_next_whole_second() -> Result<(
     Ok(())
 }
 
+/// The shortest timeout SQS takes is re-armed halfway through, not at the moment it lapses: a
+/// re-arm that lands at the expiry races the queue handing the message to another consumer while
+/// the handler still holds it.
+#[tokio::test(start_paused = true)]
+async fn a_one_second_visibility_is_re_armed_before_it_lapses() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let mut subscriber = connected
+        .subscribe_queue(SqsQueue::new("claims").visibility(Duration::from_secs(1)))
+        .await?;
+    connected
+        .publisher()
+        .publish(OutgoingMessage::new("claims", b"claim".as_slice()), None)
+        .await?;
+
+    let mut stream = pin!(subscriber.stream());
+    let first = stream.next().await.ok_or("the stream ended")??;
+    // Held past the first re-arm at half a second, so the visibility now runs a full second
+    // from there.
+    tokio::time::advance(Duration::from_millis(900)).await;
+    drop(first);
+
+    let early = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
+    assert!(
+        early.is_err(),
+        "the re-arm at half a second holds the message until one and a half"
+    );
+
+    let again = tokio::time::timeout(Duration::from_millis(200), stream.next())
+        .await?
+        .ok_or("the stream ended")??;
+    again.ack().await?;
+    Ok(())
+}
+
 /// A FIFO group with a message in flight hands out nothing more until that message is deleted;
 /// another group is not held up, and one receive hands out a free group's messages in order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
