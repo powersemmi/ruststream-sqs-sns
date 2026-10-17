@@ -1,4 +1,19 @@
 {
+  "$schema": "https://context7.com/schema/context7.json",
+  "folders": [
+    "docs",
+    "crates/ruststream-sqs-sns/src",
+    "crates/ruststream-sqs-sns/examples",
+    "website/static"
+  ],
+  "excludeFolders": [
+    "docs/benchmarks",
+    "website/i18n",
+    "website/build",
+    "website/.docusaurus",
+    "website/node_modules",
+    "target"
+  ],
   "rules": [
     "Glob `ruststream_sqs_sns::prelude::*` in a routes file; a handler file globs the framework's prelude instead, and this one only when its body names a per-message setting.",
     "Describe a subscription with `SqsQueue` and its `wait`, `visibility` and `create_if_missing` steps, or with a bare queue name, which is the same descriptor with its defaults.",
