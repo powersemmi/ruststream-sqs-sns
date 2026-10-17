@@ -108,3 +108,14 @@ name = "manual_sns_fanout"
 path = "examples/manual/sns_fanout.rs"
 required-features = ["testing", "sns"]
 test = true
+
+[[example]]
+name = "sqs_asyncapi"
+required-features = ["asyncapi", "sns"]
+test = true
+
+[[example]]
+name = "manual_sqs_asyncapi"
+path = "examples/manual/sqs_asyncapi.rs"
+required-features = ["asyncapi", "sns"]
+test = true
