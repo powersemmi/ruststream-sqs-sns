@@ -56,3 +56,20 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "ti
 [[example]]
 name = "sns_fanout"
 required-features = ["sns"]
+
+# --- examples: guides ---
+
+# Each guide is one service: `guide_<slug>` the form with the macros, `manual_guide_<slug>` the
+# same service written by hand. Each pair carries the tests that prove what its page says.
+
+[[example]]
+name = "guide_getting_started"
+path = "examples/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_getting_started"
+path = "examples/manual/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
