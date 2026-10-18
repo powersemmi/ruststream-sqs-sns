@@ -11,6 +11,8 @@ pub mod prelude;
 mod publisher;
 mod queue;
 #[cfg(feature = "sns")]
+mod queue_policy;
+#[cfg(feature = "sns")]
 mod sns;
 mod subscriber;
 

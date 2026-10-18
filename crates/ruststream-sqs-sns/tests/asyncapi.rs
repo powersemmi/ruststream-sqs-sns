@@ -145,6 +145,24 @@ fn the_document_names_the_sqs_service() {
     );
 }
 
+/// A broker that knows its region is described by the regional host its clients connect to.
+#[test]
+fn a_broker_with_a_region_names_the_regional_service() {
+    let broker = SqsBroker::new().region("eu-west-1");
+    let app = RustStream::new(AppInfo::new("orders", "1.0.0"))
+        .server("aws", broker.describe_server())
+        .with_broker(broker, |b| {
+            b.include(reconcile);
+        });
+    let json = build_spec(&app).to_json().expect("the document serializes");
+    let value: Value = serde_json::from_str(&json).expect("the document is JSON");
+
+    assert_eq!(
+        value["servers"]["aws"]["host"],
+        "sqs.eu-west-1.amazonaws.com"
+    );
+}
+
 /// A reply on SQS goes to the queue the declaration names, not through a reply-to header, so
 /// neither policy answers a reply address and the document reports the name it was given.
 #[test]

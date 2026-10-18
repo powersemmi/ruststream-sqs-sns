@@ -19,7 +19,8 @@
 //!
 //! What it models: a queue hands each message to one receiver among its subscriptions; a receive
 //! returns up to ten messages; a received message stays invisible until it is deleted, its
-//! visibility is changed, or its handle is dropped and the visibility timeout lapses; the receive
+//! visibility is changed, or its handle is dropped and the visibility timeout lapses, never for
+//! longer than twelve hours from the receive (a change past them is refused); the receive
 //! count, and the redrive policy that moves a message whose receives ran out to the dead-letter
 //! queue on the receive after; FIFO queues, where a group with a message in flight hands out
 //! nothing and a deduplication id is remembered for five minutes; with the `sns` feature, SNS

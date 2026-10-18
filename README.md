@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://powersemmi.github.io/ruststream-sqs-sns/">Documentation</a></b>
+  <b><a href="https://powersemmi.github.io/ruststream-sqs-sns/latest/">Documentation</a></b>
 </p>
 
 ---
@@ -121,8 +121,16 @@ tb.broker::<SqsBroker>()
 
 ## Documentation
 
-- This crate: <https://docs.rs/ruststream-sqs-sns>
-- The framework: <https://powersemmi.github.io/ruststream/latest>
+- [Getting started](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/getting-started/) - installation and a first service against a
+  local SQS.
+- [Guides](https://powersemmi.github.io/ruststream-sqs-sns/latest/) - consuming queues, acknowledgement, retries and dead-letter queues, FIFO queues,
+  fan-out with SNS, testing and running in production.
+- [Components](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/) - one page per part of the crate: the broker, subscriptions,
+  settlement, deliveries, publishing, SNS, the AsyncAPI bindings and testing.
+- [Architecture](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/) - how the crate sits between the AWS SDK and the runtime.
+- [Benchmarks](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/benchmarks/) - what the crate costs over the raw client.
+- [API reference](https://docs.rs/ruststream-sqs-sns) - every item on docs.rs.
+- The framework: <https://powersemmi.github.io/ruststream/latest/>
 
 ## Minimum supported Rust version
 

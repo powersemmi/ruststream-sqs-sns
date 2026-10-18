@@ -2,7 +2,9 @@
 //!
 //! `use ruststream_sqs_sns::prelude::*;` carries the framework's own prelude plus this crate's
 //! broker, queue descriptor and its mount-site settings trait, publish policies and live
-//! publishers.
+//! publishers. The
+//! [Prelude](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/prelude/)
+//! page shows it in a service.
 //!
 //! Everything re-exported here is the framework's own item, so a service on two brokers may glob
 //! both preludes and what they share resolves to one item.

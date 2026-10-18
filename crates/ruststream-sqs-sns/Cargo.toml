@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
 readme = "../../README.md"
 keywords = ["aws", "sqs", "sns", "broker", "ruststream"]
@@ -31,7 +32,8 @@ testing = ["ruststream/testing"]
 asyncapi = ["ruststream/asyncapi", "dep:serde"]
 # Publishing to SNS topics: `SnsPublish` / `SnsPublisher` and subscribing a queue to a topic.
 # Off by default, so a service that only reads and writes queues builds without the SNS client.
-sns = ["dep:aws-sdk-sns"]
+# Subscribing merges the topic's grant into the queue's JSON access policy, hence `serde_json`.
+sns = ["dep:aws-sdk-sns", "dep:serde_json"]
 
 [dependencies]
 ruststream = { workspace = true, default-features = false }
@@ -42,6 +44,7 @@ base64.workspace = true
 bytes.workspace = true
 futures.workspace = true
 serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -50,8 +53,444 @@ tracing.workspace = true
 ruststream = { workspace = true, features = ["asyncapi", "conformance", "testing", "macros", "json"] }
 serde.workspace = true
 serde_json = "1"
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+
+# The examples are the sources of the documentation site's code blocks: each one compiles, and
+# the ones a page shows carry the tests that prove what the page says. They are grouped by the
+# section of the site that shows them.
+
+# --- examples: broker ---
+
+[[example]]
+name = "sqs_service"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_service"
+path = "examples/manual/sqs_service.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_credentials"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_credentials"
+path = "examples/manual/sqs_broker_credentials.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_endpoint"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_endpoint"
+path = "examples/manual/sqs_broker_endpoint.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_startup"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_startup"
+path = "examples/manual/sqs_broker_startup.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_shutdown"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_shutdown"
+path = "examples/manual/sqs_broker_shutdown.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_prelude"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_prelude"
+path = "examples/manual/sqs_broker_prelude.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_errors"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_errors"
+path = "examples/manual/sqs_broker_errors.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: subscriptions ---
+
+[[example]]
+name = "sqs_subscriptions_name"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_name"
+path = "examples/manual/sqs_subscriptions_name.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_queue"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_queue"
+path = "examples/manual/sqs_subscriptions_queue.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_wait"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_wait"
+path = "examples/manual/sqs_subscriptions_wait.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_visibility"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_visibility"
+path = "examples/manual/sqs_subscriptions_visibility.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_create"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_create"
+path = "examples/manual/sqs_subscriptions_create.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_batches"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_batches"
+path = "examples/manual/sqs_batches.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_fifo"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_fifo"
+path = "examples/manual/sqs_subscriptions_fifo.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: settlement ---
+
+[[example]]
+name = "sqs_settlement_outcomes"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_settlement_outcomes"
+path = "examples/manual/sqs_settlement_outcomes.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_settlement_retry_after"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_settlement_retry_after"
+path = "examples/manual/sqs_settlement_retry_after.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_dead_letter"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_dead_letter"
+path = "examples/manual/sqs_dead_letter.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: delivery ---
+
+[[example]]
+name = "sqs_delivery_headers"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_headers"
+path = "examples/manual/sqs_delivery_headers.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_delivery_receive_count"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_receive_count"
+path = "examples/manual/sqs_delivery_receive_count.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_delivery_partition_key"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_partition_key"
+path = "examples/manual/sqs_delivery_partition_key.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_delivery_body"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_body"
+path = "examples/manual/sqs_delivery_body.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: publishing ---
+
+[[example]]
+name = "sqs_publishing_publish"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_publishing_publish"
+path = "examples/manual/sqs_publishing_publish.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_fifo_group"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_fifo_group"
+path = "examples/manual/sqs_fifo_group.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_publishing_deduplication"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_publishing_deduplication"
+path = "examples/manual/sqs_publishing_deduplication.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: sns ---
 
 [[example]]
 name = "sns_fanout"
-required-features = ["sns"]
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "manual_sns_fanout"
+path = "examples/manual/sns_fanout.rs"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "sqs_sns_fans_out_to"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "manual_sqs_sns_fans_out_to"
+path = "examples/manual/sqs_sns_fans_out_to.rs"
+required-features = ["testing", "sns"]
+test = true
+
+# --- examples: asyncapi ---
+
+[[example]]
+name = "sqs_asyncapi"
+required-features = ["asyncapi", "sns"]
+test = true
+
+[[example]]
+name = "manual_sqs_asyncapi"
+path = "examples/manual/sqs_asyncapi.rs"
+required-features = ["asyncapi", "sns"]
+test = true
+
+# --- examples: testing ---
+
+[[example]]
+name = "sqs_testing"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_testing"
+path = "examples/manual/sqs_testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_testing_live"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_testing_live"
+path = "examples/manual/sqs_testing_live.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: guides ---
+
+# Each guide is one service: `guide_<slug>` the form with the macros, `manual_guide_<slug>` the
+# same service written by hand. Each pair carries the tests that prove what its page says.
+
+[[example]]
+name = "guide_getting_started"
+path = "examples/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_getting_started"
+path = "examples/manual/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_consuming"
+path = "examples/guide/consuming.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_consuming"
+path = "examples/manual/guide/consuming.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_acknowledgement"
+path = "examples/guide/acknowledgement.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_acknowledgement"
+path = "examples/manual/guide/acknowledgement.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_retries"
+path = "examples/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_retries"
+path = "examples/manual/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_fifo"
+path = "examples/guide/fifo.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_fifo"
+path = "examples/manual/guide/fifo.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_fan_out"
+path = "examples/guide/fan_out.rs"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "manual_guide_fan_out"
+path = "examples/manual/guide/fan_out.rs"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "guide_testing"
+path = "examples/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_testing"
+path = "examples/manual/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_production"
+path = "examples/guide/production.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_production"
+path = "examples/manual/guide/production.rs"
+required-features = ["testing"]
+test = true
