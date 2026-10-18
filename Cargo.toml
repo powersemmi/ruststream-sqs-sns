@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/ruststream-sqs-sns", "crates/ruststream-sqs-sns-bench"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 # The floor is the core's 1.95; the AWS SDK tracks a stable-2 MSRV policy (1.94.1 today). A
 # dependent may exceed its dependencies' floors, so this is the higher of the two.
