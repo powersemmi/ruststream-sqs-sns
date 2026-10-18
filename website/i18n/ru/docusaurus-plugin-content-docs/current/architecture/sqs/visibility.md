@@ -15,7 +15,7 @@ export const words = {
   "lapsed": ["Тайм-аут", "истёк"],
   "zero": ["ChangeMessage", "Visibility(0)"],
   "again": ["Снова видно", "следующее получение его засчитает"],
-  "deadLetter": ["После maxReceiveCount получений:", "в очередь недоставленных сообщений"],
+  "deadLetter": ["После maxReceiveCount получений:", "перенесено в DLQ"],
   "extend": ["ChangeMessageVisibility(n) скрывает его ещё на n секунд,", "но не дольше 12 часов после получения"],
   "receive": "ReceiveMessage",
   "pastCap": "при следующем получении"
@@ -33,16 +33,16 @@ export const words = {
 умолчанию и до 12 часов, если получение не называет свой. Потребитель удаляет сообщение по
 идентификатору этого получения.
 
-Сообщение, которое не удалили вовремя, снова становится видимым и доставляется ещё раз.
+Сообщение, которое не удалили вовремя, снова становится видимым и доставляется повторно.
 `ChangeMessageVisibility` задаёт новый тайм-аут, который отсчитывается от вызова. Нулевой
 тайм-аут сразу делает сообщение видимым. Тайм-аут, который закончился бы позже 12 часов после
 получения, SQS отвергает.
 
 Каждое получение увеличивает `ApproximateReceiveCount` сообщения на единицу. Очередь с политикой
-перенаправления называет очередь недоставленных сообщений и `maxReceiveCount` от 1 до 1000.
+перенаправления называет DLQ и `maxReceiveCount` от 1 до 1000.
 Сообщение, которое получили столько раз и не удалили, при следующем получении переносится в
-очередь недоставленных сообщений, а не доставляется. Очередь недоставленных сообщений того же вида,
-что и исходная: очереди FIFO нужна очередь недоставленных сообщений FIFO.
+DLQ, а не доставляется. DLQ того же вида, что и исходная очередь: очереди FIFO нужна DLQ
+типа FIFO.
 
 Аренды, которую нужно продлевать, в SQS нет. Пока обработчик держит доставку, этот крейт вызывает
 `ChangeMessageVisibility` каждые полтайм-аута, но не чаще раза в секунду, чтобы второе получение
@@ -52,4 +52,4 @@ export const words = {
 Это поведение самого Amazon SQS
 ([тайм-аут видимости](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html),
 [`ChangeMessageVisibility`](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ChangeMessageVisibility.html),
-[очереди недоставленных сообщений](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)).
+[DLQ](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)).
