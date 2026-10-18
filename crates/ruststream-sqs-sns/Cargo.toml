@@ -121,3 +121,15 @@ name = "manual_guide_fifo"
 path = "examples/manual/guide/fifo.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_fan_out"
+path = "examples/guide/fan_out.rs"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "manual_guide_fan_out"
+path = "examples/manual/guide/fan_out.rs"
+required-features = ["testing", "sns"]
+test = true
