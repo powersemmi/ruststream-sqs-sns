@@ -109,3 +109,15 @@ name = "manual_guide_retries"
 path = "examples/manual/guide/retries.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_fifo"
+path = "examples/guide/fifo.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_fifo"
+path = "examples/manual/guide/fifo.rs"
+required-features = ["testing"]
+test = true
