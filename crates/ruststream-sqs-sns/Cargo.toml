@@ -55,7 +55,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "ti
 
 [[example]]
 name = "sns_fanout"
-required-features = ["sns"]
+required-features = ["testing", "sns"]
+test = true
 
 # --- examples: components-c ---
 
