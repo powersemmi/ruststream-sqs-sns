@@ -32,7 +32,7 @@ export const words = {
 
 `new`、`endpoint`、`region`、`test_credentials` 和 `from_config` 都不做 I/O，所以服务的构建函数保持同步。Broker 的克隆与它共用连接，启动钩子正是通过克隆拿到运行时打开的连接。运行时在应用启动时连接 Broker。
 
-connect 通过 SDK 的默认链加载 AWS 配置，并使用 Broker 指定的端点和区域，或者直接采用传给 `from_config` 的 `SdkConfig`。它把每次尝试的超时设为 25 秒，比 20 秒的长轮询更长，然后构建 SDK 客户端。SDK 延迟获取凭证，直到第一次请求。在服务中，这次请求就是第一个订阅的 `GetQueueUrl`，所以凭证有误时，启动在订阅这一步失败。
+connect 通过 SDK 的默认链加载 AWS 配置，并使用 Broker 指定的端点和区域，把每次尝试的超时设为 25 秒，比 20 秒的长轮询更长。用 `from_config` 构建的 Broker 按原样采用它的 `SdkConfig`，超时也一样。然后 connect 构建 SDK 客户端。SDK 延迟获取凭证，直到第一次请求。在服务中，这次请求就是第一个订阅的 `GetQueueUrl`，所以凭证有误时，启动在订阅这一步失败。
 
 每个订阅的 [`SqsQueue`](api:ruststream_sqs_sns::SqsQueue) 首先被检查：名称为空、等待时间超过 20 秒，或者可见性不在一秒到 12 小时之间，都会在调用 AWS 之前返回 [`SqsError::InvalidQueue`](api:ruststream_sqs_sns::SqsError::InvalidQueue)。然后订阅解析队列 URL，在 `create_if_missing` 下则创建队列。注册声明了 `max_attempts` 和 `dead_letter` 时，它写入重新驱动策略。描述符没有指定可见性超时时，它读取队列自己的超时。最后它启动拉取任务。
 
