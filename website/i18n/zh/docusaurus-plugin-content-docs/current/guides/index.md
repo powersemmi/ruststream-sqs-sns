@@ -9,3 +9,4 @@ description: "使用 RustStream 的 SQS Broker ruststream-sqs-sns 构建 Amazon 
 `ruststream-sqs-sns` 是 [RustStream](https://powersemmi.github.io/ruststream/latest/zh/) 的 Amazon SQS Broker，
 基于官方客户端 [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) 构建。服务读写 SQS 队列，启用 `sns` feature 后还能发布到 SNS 主题。
 这些指南带你把一个 SQS 服务从安装一路推进到生产环境。
+从[快速开始](getting-started.md)读起。
