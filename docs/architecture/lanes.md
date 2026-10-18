@@ -34,8 +34,8 @@ for each message in turn, and nothing runs side by side. `workers(n)` runs up to
 once, in no particular order.
 
 `workers(n, by_key)` runs `n` lanes, and a message goes to the lane its key hashes to. The key is
-the message's [`PARTITION_KEY_HEADER`](api:ruststream_sqs_sns::PARTITION_KEY_HEADER), which holds
-its FIFO message group. So a group never spreads over two lanes, and the order [Groups](sqs/fifo.md)
+the message's [`PARTITION_KEY_HEADER`](../components/delivery/partition-key.md), which holds
+its [FIFO message group](../components/subscriptions/fifo.md). So a group never spreads over two lanes, and the order [Groups](sqs/fifo.md)
 keeps on the queue is kept in the service. Lanes fewer than groups serve several groups each. A
 standard queue has no group, so its messages have no key and rotate over the lanes.
 

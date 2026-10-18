@@ -13,7 +13,7 @@ This guide runs an SQS service on AWS: where its credentials and region come fro
 ## Credentials and region from the environment
 
 `SqsBroker::new()` takes nothing from the code.
-The AWS SDK's default chain finds the region and the credentials when the service starts: environment variables, the shared `~/.aws` files, SSO, and the role of the container or the instance.
+The AWS SDK's [default chain](../components/broker/credentials.md) finds the region and the credentials when the service starts: environment variables, the shared `~/.aws` files, SSO, and the role of the container or the instance.
 A service that runs under an IAM role on ECS, EKS, Lambda or EC2 needs no configuration at all.
 
 The SDK reads credentials when it signs its first request.
@@ -71,7 +71,7 @@ The `orders` queue belongs to the infrastructure: Terraform, CloudFormation or t
 The descriptor leaves out `create_if_missing`, so a missing queue stops the service at startup instead of creating an empty one.
 It names its visibility, so the subscription does not read the queue's own timeout.
 
-On a broker built with `SqsBroker::new()`, [`endpoint`](api:ruststream_sqs_sns::SqsBroker::endpoint) and [`region`](api:ruststream_sqs_sns::SqsBroker::region) point it at another endpoint, a VPC endpoint or a local stack.
+On a broker built with `SqsBroker::new()`, [`endpoint`](../components/broker/endpoint.md) and [`region`](api:ruststream_sqs_sns::SqsBroker::region) point it at another endpoint, a VPC endpoint or a local stack.
 A configuration of your own names them with `endpoint_url` and `region` on the `SdkConfig` builder.
 The queue URLs SQS returns are rebased onto the endpoint.
 
@@ -117,7 +117,7 @@ Each feature adds its own:
 
 ## What the AsyncAPI document shows
 
-With the `asyncapi` feature, the service's AsyncAPI document names one server: the host of the broker's `endpoint`, or `sqs.amazonaws.com`.
+With the `asyncapi` feature, the service's AsyncAPI document names one [server](../components/asyncapi/server.md): the host of the broker's `endpoint`, or `sqs.amazonaws.com`.
 The document never holds a credential or a queue's ARN, so it can be published.
 
 The tests in the example file start the same app in process; the in-process SQS takes the region from the configuration and signs nothing.

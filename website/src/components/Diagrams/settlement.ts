@@ -11,6 +11,16 @@ const COLUMNS = [
   {part: 'Effect', x: 260, w: 100, kind: 'step', code: false},
 ] as const;
 
+// The component page a cell of the table opens, by the cell's id.
+const PAGES: Record<string, string> = {
+  ackOutcome: '/components/settlement/',
+  retryOutcome: '/components/settlement/',
+  retryAfterOutcome: '/components/settlement/retry-after/',
+  dropOutcome: '/components/settlement/',
+  dropEffect: '/components/settlement/dead-letters/',
+  unsettledEffect: '/components/subscriptions/visibility/',
+};
+
 // The rows that need a third line: the drop, whose call depends on the receive count.
 const TALL = new Set<string>(['drop']);
 
@@ -25,15 +35,17 @@ export function settlement(words: Words): {boxes: Box[]; links: Link[]; lanes: L
   for (const outcome of OUTCOMES) {
     const h = TALL.has(outcome) ? 58 : 44;
     for (const column of COLUMNS) {
+      const id = `${outcome}${column.part}`;
       boxes.push({
-        id: `${outcome}${column.part}`,
+        id,
         x: column.x,
         y,
         w: column.w,
         h,
         kind: column.kind,
         code: column.code,
-        lines: lines(words, `${outcome}${column.part}`),
+        lines: lines(words, id),
+        href: PAGES[id],
       });
     }
     links.push(

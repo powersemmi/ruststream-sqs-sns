@@ -26,14 +26,14 @@ tokio = { version = "1", features = ["macros", "rt"] }
 
 `ruststream` is the framework: `macros` gives the attributes, `json` the default codec, and `logging` prints the service's log to the terminal.
 `ruststream-sqs-sns` is the SQS broker, built on the official `aws-sdk-sqs` client.
-Its `testing` feature adds the in-process SQS that tests run on.
+Its `testing` feature adds the [in-process SQS](../components/testing/index.md) that tests run on.
 
 The broker crate has these features, all off by default:
 
 | Feature | What it gives |
 |---|---|
-| `sns` | publishing to SNS topics with [`SnsPublish`](api:ruststream_sqs_sns::SnsPublish), over `aws-sdk-sns` ([Fan-out with SNS](fan-out.md)) |
-| `asyncapi` | the `sqs` and `sns` bindings in the generated AsyncAPI document |
+| `sns` | publishing to SNS topics with [`SnsPublish`](../components/sns/index.md), over `aws-sdk-sns` ([Fan-out with SNS](fan-out.md)) |
+| `asyncapi` | the `sqs` and `sns` [bindings](../components/asyncapi/index.md) in the generated AsyncAPI document |
 | `testing` | the in-process SQS behind `TestApp` |
 
 ## A local SQS
@@ -76,10 +76,10 @@ The stack answers on `http://localhost:4566` and starts with no queues.
 
 `take_order` reads JSON orders from the `orders` queue.
 It acknowledges an order with an amount and drops one without.
-[`SqsQueue`](api:ruststream_sqs_sns::SqsQueue) names the queue, and [`create_if_missing`](api:ruststream_sqs_sns::SqsQueue::create_if_missing) creates it when the subscription opens.
+[`SqsQueue`](../components/subscriptions/sqs-queue.md) names the queue, and [`create_if_missing`](../components/subscriptions/create-if-missing.md) creates it when the subscription opens.
 A production service leaves that step out and takes its queues from its infrastructure.
-[`SqsBroker::new`](api:ruststream_sqs_sns::SqsBroker::new) only records the configuration.
-[`endpoint`](api:ruststream_sqs_sns::SqsBroker::endpoint), [`region`](api:ruststream_sqs_sns::SqsBroker::region) and [`test_credentials`](api:ruststream_sqs_sns::SqsBroker::test_credentials) point it at the local stack.
+[`SqsBroker::new`](../components/broker/index.md) only records the configuration.
+[`endpoint`](../components/broker/endpoint.md), [`region`](api:ruststream_sqs_sns::SqsBroker::region) and [`test_credentials`](api:ruststream_sqs_sns::SqsBroker::test_credentials) point it at the local stack.
 The SDK clients are built when the service starts.
 `#[ruststream::app]` turns `app` into `main`; in the manual form, [`run_main`](api:ruststream::runtime::cli::run_main) does the same.
 
@@ -121,12 +121,12 @@ Here is where each part goes in RustStream:
 
 | aws-sdk-sqs | RustStream |
 |---|---|
-| `aws_config::load_from_env` and `Client::new` | [`SqsBroker::new`](api:ruststream_sqs_sns::SqsBroker::new), or [`SqsBroker::from_config`](api:ruststream_sqs_sns::SqsBroker::from_config) with an `SdkConfig` of your own ([Running in production](production.md)) |
+| `aws_config::load_from_env` and `Client::new` | [`SqsBroker::new`](api:ruststream_sqs_sns::SqsBroker::new), or [`SqsBroker::from_config`](../components/broker/credentials.md) with an `SdkConfig` of your own ([Running in production](production.md)) |
 | `get_queue_url` | the queue name in [`SqsQueue::new`](api:ruststream_sqs_sns::SqsQueue::new), resolved once at startup |
 | a `receive_message().wait_time_seconds(20)` loop | a `#[subscriber]` handler ([Consuming queues](consuming.md)) |
 | deserializing `message.body()` | the handler's parameter type, decoded by the codec |
 | `delete_message` after the work | the handler's outcome, [`HandlerOutcome::ack`](api:ruststream::runtime::HandlerOutcome::ack) ([Acknowledgement and delivery guarantees](acknowledgement.md)) |
-| `change_message_visibility` | [`HandlerOutcome::retry_after`](api:ruststream::runtime::HandlerOutcome::retry_after) ([Retries and dead-letter queues](retries.md)) |
-| a `RedrivePolicy` set in the console | `max_attempts` and `dead_letter` at the mount site |
-| `send_message` | a reply or an `Out` parameter, sent through [`SqsPublish`](api:ruststream_sqs_sns::SqsPublish) |
-| `message_group_id` and `message_deduplication_id` | the publish steps of [`SqsPublishSteps`](api:ruststream_sqs_sns::SqsPublishSteps) ([FIFO queues](fifo.md)) |
+| `change_message_visibility` | [`HandlerOutcome::retry_after`](../components/settlement/retry-after.md) ([Retries and dead-letter queues](retries.md)) |
+| a `RedrivePolicy` set in the console | [`max_attempts` and `dead_letter`](../components/settlement/dead-letters.md) at the mount site |
+| `send_message` | a reply or an `Out` parameter, sent through [`SqsPublish`](../components/publishing/index.md) |
+| `message_group_id` and `message_deduplication_id` | the publish steps [`group_id`](../components/publishing/group-id.md) and [`deduplication_id`](../components/publishing/deduplication-id.md) ([FIFO queues](fifo.md)) |

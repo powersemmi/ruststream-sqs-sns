@@ -40,8 +40,8 @@ subscription, one set of SDK clients per runtime.
 The crate implements the core's broker traits over the
 [AWS SDK for Rust](https://docs.rs/aws-sdk-sqs/latest/aws_sdk_sqs/). The runtime above it is the
 same for every broker. Everything SQS-specific is in this crate: the
-[`SqsQueue`](api:ruststream_sqs_sns::SqsQueue) descriptor, what an outcome does to a message, and
-how a reply reaches a queue or a topic. The crate subscribes, takes batches and partition keys, and
+[`SqsQueue`](../components/subscriptions/sqs-queue.md) descriptor, [what an outcome does to a
+message](../components/settlement/index.md), and how a reply reaches a queue or a topic. The crate subscribes, takes batches and partition keys, and
 describes its server in the generated document. Publishing to SNS needs the `sns` feature.
 
 Each subscription is one queue, read by a pump task of its own. The pump long-polls the queue and
@@ -56,15 +56,15 @@ runtime sends through clients of its own. The broker's runtime uses the set that
 handler thread with a runtime of its own builds a set on its first request, from the same
 configuration and credentials, and a busy thread never stalls the broker's connections.
 
-[`SqsPublish`](api:ruststream_sqs_sns::SqsPublish) sends to a queue with `SendMessage`, and
-[`SnsPublish`](api:ruststream_sqs_sns::SnsPublish) publishes to a topic with `Publish`. The
+[`SqsPublish`](../components/publishing/index.md) sends to a queue with `SendMessage`, and
+[`SnsPublish`](../components/sns/index.md) publishes to a topic with `Publish`. The
 publishers take the buffer the reply was encoded into, and a body SQS accepts as text becomes the
 request body without a copy. Any other payload travels base64-encoded with a marker attribute and
 is decoded on receive.
 
 ## In-process transport
 
-Under the `testing` feature, a test connects the broker in process instead. The connected broker,
+Under the `testing` feature, a [test](../components/testing/index.md) connects the broker in process instead. The connected broker,
 its subscriptions, its publishers and its deliveries then talk to an account that lives in the
 test. A build without the feature carries no trace of it: the compiler checks that the transport
 and the delivery are exactly the size of their live forms.

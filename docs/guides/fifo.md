@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 This guide sends to an SQS FIFO queue in message groups, drops duplicate sends with a deduplication id, and handles several groups at once, each in order.
 
-A FIFO queue keeps the order of the messages within a message group and hands out a group's next message only after the one before it is deleted.
+A [FIFO queue](../components/subscriptions/fifo.md) keeps the order of the messages within a message group and hands out a group's next message only after the one before it is deleted.
 Each send also carries a deduplication id, and the queue drops a second send with the same id for five minutes ([AWS: deduplication](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/using-messagededuplicationid-property.html)).
 A queue whose name ends in `.fifo` is a FIFO queue.
 
@@ -35,14 +35,14 @@ It turns each order into a shipment, and the shipments of one customer go out in
 </Tabs>
 
 `dispatch` publishes a shipment to `shipments.fifo` through the `Shipments` slot.
-The slot is bounded on [`SqsPublishOptions`](api:ruststream_sqs_sns::SqsPublishOptions), so the publish takes the steps of [`SqsPublishSteps`](api:ruststream_sqs_sns::SqsPublishSteps).
+The slot is bounded on [`SqsPublishOptions`](../components/publishing/options.md), so the publish takes the steps of [`SqsPublishSteps`](api:ruststream_sqs_sns::SqsPublishSteps).
 A handler that names these steps imports this crate's prelude.
 
-[`group_id`](api:ruststream_sqs_sns::SqsPublishSteps::group_id) puts the shipment in the customer's group.
-When a publish names no group, the group comes from the message's [`PARTITION_KEY_HEADER`](api:ruststream_sqs_sns::PARTITION_KEY_HEADER), then from the group the policy fixed with `Publish::default().group_id(..)`, and last it is `"default"`.
+[`group_id`](../components/publishing/group-id.md) puts the shipment in the customer's group.
+When a publish names no group, the group comes from the message's [`PARTITION_KEY_HEADER`](../components/delivery/partition-key.md), then from the group the policy fixed with `Publish::default().group_id(..)`, and last it is `"default"`.
 The header is the spelling every RustStream broker reads, so a producer that sets it needs no SQS step.
 
-[`deduplication_id`](api:ruststream_sqs_sns::SqsPublishSteps::deduplication_id) is the order's id.
+[`deduplication_id`](../components/publishing/deduplication-id.md) is the order's id.
 When `orders` delivers an order twice, the second shipment is a send the queue drops.
 A publish that names no deduplication id gets an id unique to the process, so two equal payloads sent on purpose both arrive.
 A policy carries no deduplication id: one fixed id would drop every send after the first.

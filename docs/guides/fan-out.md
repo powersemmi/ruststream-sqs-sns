@@ -79,7 +79,7 @@ Each queue gets its own copy of every announcement, so billing and shipping work
 </TabItem>
 </Tabs>
 
-[`subscribe_queue_to_topic`](api:ruststream_sqs_sns::ConnectedSqsBroker::subscribe_queue_to_topic) subscribes a queue to a topic with raw message delivery.
+[`subscribe_queue_to_topic`](../components/sns/subscribe-queue-to-topic.md) subscribes a queue to a topic with raw message delivery.
 So a copy arrives as a plain SQS message: the payload is the body, and each header is a message attribute.
 Without raw delivery SNS would wrap the message in a JSON envelope of its own.
 The call creates the topic when it does not exist, and subscribing the same queue again changes nothing.
@@ -104,7 +104,7 @@ Here a startup hook does it on a clone of the app's broker, which uses the conne
 </TabItem>
 </Tabs>
 
-`.out_reply(SnsPublish::default())` binds the reply to [`SnsPublish`](api:ruststream_sqs_sns::SnsPublish), and the reply becomes an SNS `Publish` to the topic.
+`.out_reply(SnsPublish::default())` binds the reply to [`SnsPublish`](../components/sns/index.md), and the reply becomes an SNS `Publish` to the topic.
 Without that step the same reply rides the broker's default policy, [`SqsPublish`](api:ruststream_sqs_sns::SqsPublish), and lands on a queue named `shop-order-events`.
 `SnsPublish` opens a topic by name with `CreateTopic`, which returns the existing topic when there is one, or takes the topic's ARN as the name.
 The same policy works in an `Out` slot and in a startup hook, and [`ConnectedSqsBroker::sns_publisher`](api:ruststream_sqs_sns::ConnectedSqsBroker::sns_publisher) gives a publisher outside the app.
@@ -119,7 +119,7 @@ The service needs `sns:CreateTopic` and `sns:Publish` to publish, and `sns:Subsc
 
 The example file runs one test body twice.
 In process, the in-process account delivers a topic's messages to the queues subscribed with `subscribe_queue_to_topic`, so the hook wires the test as it wires production.
-A queue an operator subscribed outside the service is named on the policy with [`fans_out_to`](api:ruststream_sqs_sns::SnsPublish::fans_out_to), a step of the `testing` feature.
+A queue an operator subscribed outside the service is named on the policy with [`fans_out_to`](../components/sns/fans-out-to.md), a step of the `testing` feature.
 With `SQS_TEST_ENDPOINT` set, the same body runs against LocalStack through `TestApp::start_live`:
 
 ```bash

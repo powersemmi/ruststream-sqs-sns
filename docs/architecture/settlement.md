@@ -49,7 +49,7 @@ export const retries = {
 
 # Settlement
 
-What `ack`, `retry`, `retry_after` and `drop` become on SQS: each outcome is one call against the
+What `ack`, `retry`, `retry_after` and `drop` become on SQS: each [outcome](../components/settlement/index.md) is one call against the
 queue, and a retry waits in the queue itself.
 
 <Diagram name="settlement" words={settlement} />
@@ -72,15 +72,15 @@ a lapsed timeout included, not only the retries the service asked for.
 
 <Diagram name="retries" words={retries} />
 
-A retry never leaves the queue. `retry_after(d)` makes the message invisible for `d`, and it comes
+A retry never leaves the queue. [`retry_after(d)`](../components/settlement/retry-after.md) makes the message invisible for `d`, and it comes
 back as the same message, with the same id and its receive count one higher. Nothing is
 republished, so the runtime's republish fallback never runs here, and `.out_retry(..)` does not
-compile on an [`SqsQueue`](api:ruststream_sqs_sns::SqsQueue). SQS refuses a visibility that ends
+compile on an [`SqsQueue`](../components/subscriptions/sqs-queue.md). SQS refuses a visibility that ends
 more than 12 hours after the receive.
 
 [`max_attempts(n)`](api:ruststream::runtime::Mounting::max_attempts) and
-[`dead_letter(q)`](api:ruststream::runtime::Mounting::dead_letter) together are the queue's redrive
-policy: `maxReceiveCount` is `n` and the dead-letter queue is `q`. The subscription writes the
+[`dead_letter(q)`](api:ruststream::runtime::Mounting::dead_letter) together are the queue's
+[redrive policy](../components/settlement/dead-letters.md): `maxReceiveCount` is `n` and the dead-letter queue is `q`. The subscription writes the
 policy onto the queue when it opens, and SQS counts the receives and moves a spent message itself.
 One half without the other is
 [`SqsError::IncompleteRedrive`](api:ruststream_sqs_sns::SqsError::IncompleteRedrive) at startup.

@@ -7,7 +7,7 @@ import {lines, word, type Words} from './words';
  * decides on the next receive whether it is delivered again or moved to the dead-letter queue.
  */
 export function retries(words: Words): {boxes: Box[]; links: Link[]} {
-  const wide = (id: string, y: number, kind: Box['kind']): Box => ({
+  const wide = (id: string, y: number, kind: Box['kind'], href?: string): Box => ({
     id,
     x: 12,
     y,
@@ -15,12 +15,13 @@ export function retries(words: Words): {boxes: Box[]; links: Link[]} {
     h: 44,
     kind,
     lines: lines(words, id),
+    href,
   });
   const boxes: Box[] = [
     wide('delivery', 0, 'broker'),
     wide('outcome', 72, 'service'),
-    {...wide('wait', 144, 'broker'), code: true},
-    wide('cap', 216, 'core'),
+    {...wide('wait', 144, 'broker', '/components/settlement/retry-after/'), code: true},
+    wide('cap', 216, 'core', '/components/settlement/dead-letters/'),
     {id: 'again', x: 0, y: 296, w: 170, h: 58, kind: 'step', lines: lines(words, 'again')},
     {
       id: 'deadLetter',
@@ -30,6 +31,7 @@ export function retries(words: Words): {boxes: Box[]; links: Link[]} {
       h: 58,
       kind: 'bad',
       lines: lines(words, 'deadLetter'),
+      href: '/components/settlement/dead-letters/',
     },
     {id: 'drop', x: 0, y: 376, w: 360, h: 44, kind: 'note', lines: lines(words, 'drop')},
     {id: 'crash', x: 0, y: 428, w: 360, h: 44, kind: 'note', lines: lines(words, 'crash')},
