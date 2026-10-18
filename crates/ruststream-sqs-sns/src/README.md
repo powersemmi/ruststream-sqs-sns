@@ -114,7 +114,7 @@ item's own documentation keeps the detail.
 - [fans_out_to][c-fans-out-to]: `SnsPublish::fans_out_to`, the queues an operator subscribed,
   named for a test (features `sns` and `testing`).
 
-## AsyncAPI and testing
+## The generated document and tests
 
 - [SQS bindings][c-asyncapi]: the `sqs` and `sns` bindings of the generated document (feature
   `asyncapi`): the [server][c-server], the [channels][c-channels] and the [topics][c-topics].
