@@ -296,7 +296,8 @@ Attaching the queues to the topic is provisioning work, not application wiring, 
 the broker's own ladder:
 [`subscribe_queue_to_topic`](ConnectedSqsBroker::subscribe_queue_to_topic) turns on raw message
 delivery, so payloads and headers arrive unwrapped as plain SQS messages instead of inside an SNS
-envelope. In production the topic and its subscriptions are infrastructure; the `sns_fanout`
+envelope. It also adds the statement that lets the topic send to the queue to the queue's access
+policy, next to the statements already there; without it SNS drops every notification. In production the topic and its subscriptions are infrastructure; the `sns_fanout`
 example wires them from an `after_startup` hook, which is also where a service publishes outside
 a handler: `b.after_startup(Publish::default(), hook)`.
 
@@ -532,7 +533,9 @@ them, and credentials. The repository's own tests run one body both ways.
   `sqs:ChangeMessageVisibility`; one that names no visibility also needs
   `sqs:GetQueueAttributes`. A declared cap adds `sqs:SetQueueAttributes` on the queue and
   `sqs:GetQueueAttributes` on the dead-letter queue, `create_if_missing` adds `sqs:CreateQueue`,
-  and publishing to a topic adds `sns:CreateTopic` and `sns:Publish`.
+  publishing to a topic adds `sns:CreateTopic` and `sns:Publish`, and subscribing a queue to a
+  topic adds `sns:CreateTopic` and `sns:Subscribe` on the topic and `sqs:GetQueueAttributes` and
+  `sqs:SetQueueAttributes` on the queue.
 * The service's own limits are the crate's: ten messages per receive, twenty seconds of long
   polling, twelve hours of invisibility - which is also the ceiling on a deferred retry.
 * Known gaps: no transactions, no request/reply and no seeking, none of which SQS offers; SNS has

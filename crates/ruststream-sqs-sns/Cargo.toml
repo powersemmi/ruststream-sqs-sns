@@ -31,7 +31,8 @@ testing = ["ruststream/testing"]
 asyncapi = ["ruststream/asyncapi", "dep:serde"]
 # Publishing to SNS topics: `SnsPublish` / `SnsPublisher` and subscribing a queue to a topic.
 # Off by default, so a service that only reads and writes queues builds without the SNS client.
-sns = ["dep:aws-sdk-sns"]
+# Subscribing merges the topic's grant into the queue's JSON access policy, hence `serde_json`.
+sns = ["dep:aws-sdk-sns", "dep:serde_json"]
 
 [dependencies]
 ruststream = { workspace = true, default-features = false }
@@ -42,6 +43,7 @@ base64.workspace = true
 bytes.workspace = true
 futures.workspace = true
 serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
