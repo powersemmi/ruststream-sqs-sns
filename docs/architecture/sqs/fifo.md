@@ -39,8 +39,8 @@ accepted and not delivered. A queue with content-based deduplication derives the
 hash of the body, and an id the send names takes precedence.
 
 This crate picks the group of a publish from the most specific place that names one: the call's
-[`SqsPublishOptions`](api:ruststream_sqs_sns::SqsPublishOptions), then the message's
-[`PARTITION_KEY_HEADER`](api:ruststream_sqs_sns::PARTITION_KEY_HEADER), then the group the policy
+[`SqsPublishOptions`](../../components/publishing/options.md), then the message's
+[`PARTITION_KEY_HEADER`](../../components/delivery/partition-key.md), then the group the policy
 fixed, then `default`. It always sends a deduplication id: the one the call names, or one unique to
 the process. So two sends of the same body are two messages unless the service names the same id
 for both. A group or deduplication id set for a standard queue is refused with

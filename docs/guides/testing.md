@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 
 # Testing an SQS service
 
-A test runs the service's own app with [`TestApp`](api:ruststream::testing::TestApp), against an in-process SQS or against a running stack.
+A test runs the service's own app with [`TestApp`](api:ruststream::testing::TestApp), against an [in-process SQS](../components/testing/index.md) or against a running stack.
 
 The service under test is a checkout.
 An order arrives on `checkout-orders`, and `confirm` answers it with a confirmation on `checkout-confirmations`, which `notify` reads.
@@ -118,7 +118,7 @@ The visibility an operator set on a queue, the queues and topics the service exp
 </TabItem>
 </Tabs>
 
-[`TestApp::start_live`](api:ruststream::testing::TestApp::start_live) connects the same app to a running SQS.
+[`TestApp::start_live`](../components/testing/live.md) connects the same app to a running SQS.
 The test reads the endpoint from `SQS_TEST_ENDPOINT` with `live::endpoint`, a helper of the example's own, and skips when it is unset.
 It deletes the service's queues first, so nothing an earlier run left on them is counted; the service creates them again on start.
 The assertions are the in-process ones, unchanged.

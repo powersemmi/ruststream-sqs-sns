@@ -18,7 +18,7 @@ The `protocol` is `sqs`.
 `protocolVersion` stays out: SQS has one wire protocol, and a client matches no version of it.
 SNS publishes go through the same broker, so they share its server.
 
-Credentials resolve at connect, through the SDK's chain or a prebuilt configuration, and the document is built before that.
+Credentials come from the SDK's chain or a [prebuilt configuration](../broker/credentials.md) once the service runs, and the document is built before that.
 No credential reaches it.
 
 ## Example

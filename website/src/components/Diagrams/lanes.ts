@@ -23,7 +23,7 @@ export function lanes(words: Words): {boxes: Box[]; links: Link[]} {
     href,
   });
   const boxes: Box[] = [
-    wide('queue', 0, 'broker', '/architecture/sqs/fifo/'),
+    wide('queue', 0, 'broker', '/components/subscriptions/fifo/'),
     wide('pump', 72, 'broker'),
     wide('stream', 144, 'broker'),
     {...wide('keyed', 216, 'core'), code: true},

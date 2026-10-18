@@ -361,9 +361,10 @@ fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
 /// An Amazon SQS broker (with SNS fan-out publishing on the `sns` feature) for the `RustStream`
 /// messaging framework.
 ///
-/// `new` is synchronous and records only configuration; the runtime resolves credentials and
-/// builds the clients once at startup via the consuming [`Broker::connect`]. That is what lets
-/// a service compose with the synchronous `#[ruststream::app]` builder.
+/// `new` is synchronous and records only configuration; the runtime loads the AWS configuration
+/// and builds the clients once at startup via the consuming [`Broker::connect`]. That is what
+/// lets a service compose with the synchronous `#[ruststream::app]` builder. The SDK fetches the
+/// credentials on the first request, which is a subscription's `GetQueueUrl` at startup.
 ///
 /// # Examples
 ///
@@ -390,6 +391,64 @@ fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
 ///     })
 /// }
 /// ```
+///
+/// A test runs the app `main` runs. With the `testing` feature, `TestApp::start` connects this
+/// broker to an in-process account with no server, and the test addresses it by this type.
+///
+/// ```
+/// # #[cfg(feature = "testing")]
+/// # mod demo {
+/// use std::error::Error;
+///
+/// use ruststream::testing::TestApp;
+/// use ruststream_sqs_sns::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[subscriber(SqsQueue::new("orders"))]
+/// async fn handle(order: &Order) -> HandlerOutcome {
+///     if order.id == 0 {
+///         return HandlerOutcome::retry();
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// /// The app `main` runs.
+/// fn app() -> RustStream {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         b.include(handle);
+///     })
+/// }
+///
+/// pub async fn a_valid_order_is_acked() -> Result<(), Box<dyn Error>> {
+///     let tb = TestApp::start(app()).await?;
+///
+///     tb.broker::<SqsBroker>()
+///         .message(&Order { id: 1 })
+///         .to("orders")
+///         .publish()
+///         .await?;
+///     tb.broker::<SqsBroker>()
+///         .subscriber("orders")
+///         .assert_called_once()
+///         .with(&Order { id: 1 })
+///         .settled(HandlerOutcome::ack());
+///
+///     tb.shutdown().await?;
+///     Ok(())
+/// }
+/// # }
+/// # #[cfg(feature = "testing")]
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// #     tokio::runtime::Runtime::new()?.block_on(demo::a_valid_order_is_acked())
+/// # }
+/// # #[cfg(not(feature = "testing"))]
+/// # fn main() {}
+/// ```
 #[derive(Debug, Clone, Default)]
 #[must_use]
 pub struct SqsBroker {
@@ -401,13 +460,18 @@ pub struct SqsBroker {
 }
 
 impl SqsBroker {
-    /// Records configuration only; region and credentials resolve from the environment on
-    /// `connect`. No I/O.
+    /// Records configuration only. No I/O.
+    ///
+    /// `connect` loads the AWS configuration from the environment and gives every request a
+    /// per-attempt timeout of 25 seconds, above the 20 seconds a long poll waits.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Uses an already built AWS config instead of resolving one from the environment.
+    ///
+    /// The broker uses the config as it is, its timeouts included, so an attempt timeout under
+    /// 20 seconds ends every long poll early.
     ///
     /// A dedicated handler thread sends through clients of its own built from this config. An
     /// HTTP client the config names is shared by all of them, and so is its connection pool;
@@ -611,10 +675,64 @@ impl ConnectedSqsBroker {
     /// payloads and headers arrive unwrapped as plain SQS messages. Available with the `sns`
     /// feature.
     ///
+    /// In production the topic and its subscriptions are often infrastructure. A service that
+    /// wires them itself does so from a startup hook, on a clone of the app's broker: a clone
+    /// connects through the connection the app's broker already holds.
+    ///
     /// # Errors
     ///
     /// Returns [`SqsError`] when the topic or queue cannot be resolved or the subscription
     /// call fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io;
+    ///
+    /// use ruststream_sqs_sns::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct PlaceOrder {
+    ///     id: u64,
+    /// }
+    ///
+    /// /// The type fixes its destination, so the clause is the bare `reply`.
+    /// #[derive(Deserialize, Serialize, Outgoing)]
+    /// #[outgoing(name = "orders-events")]
+    /// struct OrderPlaced {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber(SqsQueue::new("orders"), reply)]
+    /// async fn accept(order: &PlaceOrder) -> OrderPlaced {
+    ///     OrderPlaced { id: order.id }
+    /// }
+    ///
+    /// #[subscriber(SqsQueue::new("billing"))]
+    /// async fn bill(placed: &OrderPlaced) -> HandlerOutcome {
+    ///     tracing::info!(placed.id, "order billed");
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[app]
+    /// fn service() -> impl App {
+    ///     let broker = SqsBroker::new();
+    ///     let topology = broker.clone();
+    ///     RustStream::new(AppInfo::new("orders", "0.1.0"))
+    ///         .after_startup(async move |_state| {
+    ///             let connected = topology.connect().await.map_err(io::Error::other)?;
+    ///             connected
+    ///                 .subscribe_queue_to_topic("orders-events", "billing")
+    ///                 .await
+    ///                 .map_err(io::Error::other)
+    ///         })
+    ///         .with_broker(broker, |b| {
+    ///             b.include(accept).out_reply(SnsPublish::default());
+    ///             b.include(bill);
+    ///         })
+    /// }
+    /// ```
     #[cfg(feature = "sns")]
     pub async fn subscribe_queue_to_topic(&self, topic: &str, queue: &str) -> Result<(), SqsError> {
         self.core.ensure_open()?;

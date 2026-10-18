@@ -18,7 +18,7 @@ The example is a payments service that books payments into a ledger and pays ref
 
 ## What each outcome does
 
-Every outcome is one SQS call on the message the handler received:
+Every [outcome](../components/settlement/index.md) is one SQS call on the message the handler received:
 
 | Outcome | SQS call | What happens to the message |
 |---|---|---|
@@ -53,7 +53,7 @@ A payment SQS delivers a second time is found among the booked ids and acknowled
 The set in the app state stands in for the store a service keeps its booked ids in; the id is the payment's own, not the SQS message id, because a producer that sends twice sends two messages.
 When the entry cannot be published, nothing is booked, and `retry` hands the payment back for another try.
 
-The handler reads [`RECEIVE_COUNT_HEADER`](api:ruststream_sqs_sns::RECEIVE_COUNT_HEADER), the queue's own `ApproximateReceiveCount`.
+The handler reads [`RECEIVE_COUNT_HEADER`](../components/delivery/receive-count.md), the queue's own `ApproximateReceiveCount`.
 It counts this receive too, so the first delivery reads 1.
 A payment on an account under review waits a minute with `retry_after`, and on its third receive the handler gives up and drops it.
 [Retries and dead-letter queues](retries.md) shows how the queue itself caps the receives and keeps what failed.

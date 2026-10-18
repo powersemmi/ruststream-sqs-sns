@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 
 # Retries and dead-letter queues
 
-This guide retries an SQS message now or later, caps its deliveries and lets SQS move what keeps failing to a dead-letter queue.
+This guide retries an SQS message now or later, caps its deliveries and lets SQS move what keeps failing to a [dead-letter queue](../components/settlement/dead-letters.md).
 
 SQS does both jobs itself.
 A retry is the same message made visible again, with its receive count intact.
@@ -34,7 +34,7 @@ The example is an invoices service that charges invoices to customers.
 </Tabs>
 
 An invoice over the credit limit waits for a credit check.
-[`retry_after`](api:ruststream::runtime::HandlerOutcome::retry_after) sets the message's visibility timeout to 30 seconds, and SQS hands it out again when they end.
+[`retry_after`](../components/settlement/retry-after.md) sets the message's visibility timeout to 30 seconds, and SQS hands it out again when they end.
 SQS counts whole seconds, so a fraction of a second rounds up.
 A delay is at most twelve hours, the longest visibility SQS allows; a longer one is cut to twelve hours.
 The message stays on its queue the whole time, so a deferred retry survives a restart of the service.
@@ -66,7 +66,7 @@ From then on SQS counts the receives and moves a message that ran out of them; t
 Here an invoice is delivered four times, and on the fifth receive SQS moves it to `invoices-dead`.
 
 The two steps go together.
-A cap without a dead-letter queue, or a dead-letter queue without a cap, stops the service at startup with [`SqsError::IncompleteRedrive`](api:ruststream_sqs_sns::SqsError::IncompleteRedrive), which names the missing half.
+A cap without a dead-letter queue, or a dead-letter queue without a cap, stops the service at startup with [`SqsError::IncompleteRedrive`](../components/broker/errors.md), which names the missing half.
 SQS takes a `maxReceiveCount` of at most 1000.
 
 The dead-letter queue must exist when the subscription opens, unless a descriptor of the app creates it with `create_if_missing`.

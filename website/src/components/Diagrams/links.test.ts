@@ -41,3 +41,48 @@ describe('a box that links to a page', () => {
     }
   });
 });
+
+describe('a box that names a component', () => {
+  it('links to that component page in the design of the crate', () => {
+    expect(hrefs('design')).toEqual({
+      subscriber: '/architecture/path/',
+      publishers: '/architecture/path/',
+      message: '/architecture/sqs/visibility/',
+      policies: '/components/publishing/',
+      broker: '/components/broker/',
+      descriptor: '/components/subscriptions/sqs-queue/',
+    });
+  });
+
+  it('links to the broker pages on the lifecycle', () => {
+    expect(hrefs('lifecycle')).toEqual({
+      unconnected: '/components/broker/',
+      load: '/components/broker/credentials/',
+      subscriptions: '/components/broker/startup/',
+      flag: '/components/broker/shutdown/',
+    });
+  });
+
+  it('links to the settlement pages from each outcome', () => {
+    expect(hrefs('settlement')).toEqual({
+      ackOutcome: '/components/settlement/',
+      retryOutcome: '/components/settlement/',
+      retryAfterOutcome: '/components/settlement/retry-after/',
+      dropOutcome: '/components/settlement/',
+      dropEffect: '/components/settlement/dead-letters/',
+      unsettledEffect: '/components/subscriptions/visibility/',
+    });
+  });
+
+  it('links to the retry and dead-letter pages on a retry', () => {
+    expect(hrefs('retries')).toEqual({
+      wait: '/components/settlement/retry-after/',
+      cap: '/components/settlement/dead-letters/',
+      deadLetter: '/components/settlement/dead-letters/',
+    });
+  });
+
+  it('links the FIFO queue of the lanes to its page', () => {
+    expect(hrefs('lanes')).toEqual({queue: '/components/subscriptions/fifo/'});
+  });
+});

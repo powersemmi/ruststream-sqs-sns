@@ -53,187 +53,11 @@ serde.workspace = true
 serde_json = "1"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 
-[[example]]
-name = "sns_fanout"
-required-features = ["testing", "sns"]
-test = true
+# The examples are the sources of the documentation site's code blocks: each one compiles, and
+# the ones a page shows carry the tests that prove what the page says. They are grouped by the
+# section of the site that shows them.
 
-# --- examples: components-c ---
-
-[[example]]
-name = "sqs_publishing_publish"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_publishing_publish"
-path = "examples/manual/sqs_publishing_publish.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_fifo_group"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_fifo_group"
-path = "examples/manual/sqs_fifo_group.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_publishing_deduplication"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_publishing_deduplication"
-path = "examples/manual/sqs_publishing_deduplication.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_sns_fans_out_to"
-required-features = ["testing", "sns"]
-test = true
-
-[[example]]
-name = "manual_sqs_sns_fans_out_to"
-path = "examples/manual/sqs_sns_fans_out_to.rs"
-required-features = ["testing", "sns"]
-test = true
-
-[[example]]
-name = "manual_sns_fanout"
-path = "examples/manual/sns_fanout.rs"
-required-features = ["testing", "sns"]
-test = true
-
-[[example]]
-name = "sqs_asyncapi"
-required-features = ["asyncapi", "sns"]
-test = true
-
-[[example]]
-name = "manual_sqs_asyncapi"
-path = "examples/manual/sqs_asyncapi.rs"
-required-features = ["asyncapi", "sns"]
-test = true
-
-# --- examples: components-a ---
-
-[[example]]
-name = "sqs_subscriptions_name"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_subscriptions_name"
-path = "examples/manual/sqs_subscriptions_name.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_subscriptions_queue"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_subscriptions_queue"
-path = "examples/manual/sqs_subscriptions_queue.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_subscriptions_wait"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_subscriptions_wait"
-path = "examples/manual/sqs_subscriptions_wait.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_subscriptions_visibility"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_subscriptions_visibility"
-path = "examples/manual/sqs_subscriptions_visibility.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_subscriptions_create"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_subscriptions_create"
-path = "examples/manual/sqs_subscriptions_create.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_subscriptions_fifo"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_subscriptions_fifo"
-path = "examples/manual/sqs_subscriptions_fifo.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_batches"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_batches"
-path = "examples/manual/sqs_batches.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_settlement_outcomes"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_settlement_outcomes"
-path = "examples/manual/sqs_settlement_outcomes.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_settlement_retry_after"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_settlement_retry_after"
-path = "examples/manual/sqs_settlement_retry_after.rs"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "sqs_dead_letter"
-required-features = ["testing"]
-test = true
-
-[[example]]
-name = "manual_sqs_dead_letter"
-path = "examples/manual/sqs_dead_letter.rs"
-required-features = ["testing"]
-test = true
-
-# --- examples: components-b ---
+# --- examples: broker ---
 
 [[example]]
 name = "sqs_service"
@@ -312,6 +136,122 @@ path = "examples/manual/sqs_broker_errors.rs"
 required-features = ["testing"]
 test = true
 
+# --- examples: subscriptions ---
+
+[[example]]
+name = "sqs_subscriptions_name"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_name"
+path = "examples/manual/sqs_subscriptions_name.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_queue"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_queue"
+path = "examples/manual/sqs_subscriptions_queue.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_wait"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_wait"
+path = "examples/manual/sqs_subscriptions_wait.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_visibility"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_visibility"
+path = "examples/manual/sqs_subscriptions_visibility.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_create"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_create"
+path = "examples/manual/sqs_subscriptions_create.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_batches"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_batches"
+path = "examples/manual/sqs_batches.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_subscriptions_fifo"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_subscriptions_fifo"
+path = "examples/manual/sqs_subscriptions_fifo.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: settlement ---
+
+[[example]]
+name = "sqs_settlement_outcomes"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_settlement_outcomes"
+path = "examples/manual/sqs_settlement_outcomes.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_settlement_retry_after"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_settlement_retry_after"
+path = "examples/manual/sqs_settlement_retry_after.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_dead_letter"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_dead_letter"
+path = "examples/manual/sqs_dead_letter.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: delivery ---
+
 [[example]]
 name = "sqs_delivery_headers"
 required-features = ["testing"]
@@ -355,6 +295,80 @@ name = "manual_sqs_delivery_body"
 path = "examples/manual/sqs_delivery_body.rs"
 required-features = ["testing"]
 test = true
+
+# --- examples: publishing ---
+
+[[example]]
+name = "sqs_publishing_publish"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_publishing_publish"
+path = "examples/manual/sqs_publishing_publish.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_fifo_group"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_fifo_group"
+path = "examples/manual/sqs_fifo_group.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_publishing_deduplication"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_publishing_deduplication"
+path = "examples/manual/sqs_publishing_deduplication.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: sns ---
+
+[[example]]
+name = "sns_fanout"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "manual_sns_fanout"
+path = "examples/manual/sns_fanout.rs"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "sqs_sns_fans_out_to"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "manual_sqs_sns_fans_out_to"
+path = "examples/manual/sqs_sns_fans_out_to.rs"
+required-features = ["testing", "sns"]
+test = true
+
+# --- examples: asyncapi ---
+
+[[example]]
+name = "sqs_asyncapi"
+required-features = ["asyncapi", "sns"]
+test = true
+
+[[example]]
+name = "manual_sqs_asyncapi"
+path = "examples/manual/sqs_asyncapi.rs"
+required-features = ["asyncapi", "sns"]
+test = true
+
+# --- examples: testing ---
 
 [[example]]
 name = "sqs_testing"

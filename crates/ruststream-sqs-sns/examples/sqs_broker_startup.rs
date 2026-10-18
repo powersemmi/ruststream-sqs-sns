@@ -108,10 +108,9 @@ mod tests {
             },
         );
 
-        let failed = TestApp::start(app)
-            .await
-            .err()
-            .expect("a long poll waits 20 seconds at most");
+        let Err(failed) = TestApp::start(app).await else {
+            panic!("a long poll waits 20 seconds at most");
+        };
         let reason = sqs_error(&failed).expect("the cause is an SqsError");
         assert!(matches!(reason, SqsError::InvalidQueue(_)), "{reason}");
     }
@@ -152,10 +151,9 @@ mod tests {
         };
         let queue = live::unique("startup-missing");
 
-        let failed = TestApp::start_live(service(broker(&endpoint), queue))
-            .await
-            .err()
-            .expect("a queue the service does not create has to exist");
+        let Err(failed) = TestApp::start_live(service(broker(&endpoint), queue)).await else {
+            panic!("a queue the service does not create has to exist");
+        };
         let reason = sqs_error(&failed).expect("the cause is an SqsError");
         assert!(matches!(reason, SqsError::Queue { .. }), "{reason}");
     }

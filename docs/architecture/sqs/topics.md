@@ -35,7 +35,7 @@ the consumers compete as on [Queues](index.md).
 With raw message delivery, the queue receives the body as it was published, and the message
 attributes become SQS message attributes. Without it, the queue receives a JSON envelope that holds
 the body and the attributes. A subscription made by
-[`subscribe_queue_to_topic`](api:ruststream_sqs_sns::ConnectedSqsBroker::subscribe_queue_to_topic)
+[`subscribe_queue_to_topic`](../../components/sns/subscribe-queue-to-topic.md)
 turns raw delivery on, so a handler on the queue reads the same body and headers the publisher
 sent.
 

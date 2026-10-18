@@ -16,7 +16,7 @@ Without the step, a missing queue stops the service at startup.
 A name that ends in `.fifo` creates a [FIFO queue](./fifo.md) with content-based deduplication.
 A [dead-letter queue](../settlement/dead-letters.md) the registration declares is created the same way.
 Every other attribute of a new queue keeps the SQS default, a 30 second visibility timeout among them.
-The step needs the `sqs:CreateQueue` permission.
+The step needs the `sqs:CreateQueue` [permission](../broker/credentials.md).
 It suits a local stack and a test; production queues are usually managed as infrastructure.
 In process every queue a service names exists already, so the step shows its effect in a [live test](../testing/live.md).
 The step is on [`SqsQueue`](./sqs-queue.md), and on the mount chain through [`SqsSubscription::create_if_missing`](api:ruststream_sqs_sns::SqsSubscription::create_if_missing), as in the example.

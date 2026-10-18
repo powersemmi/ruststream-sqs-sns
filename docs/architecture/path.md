@@ -47,8 +47,8 @@ over in order. A batch subscription asks for its own size, capped at ten, and it
 the whole batch in one call. Every message of a batch is still deleted with a call of its own.
 
 A reply is encoded into a buffer the dispatch loop reuses. The
-[`SqsPublisher`](api:ruststream_sqs_sns::SqsPublisher) takes that buffer as the body of one
-`SendMessage`, or the [`SnsPublisher`](api:ruststream_sqs_sns::SnsPublisher) as the body of one
+[`SqsPublisher`](../components/publishing/index.md) takes that buffer as the body of one
+`SendMessage`, or the [`SnsPublisher`](../components/sns/index.md) as the body of one
 `Publish`. The queue URL or topic ARN is resolved once and cached.
 
 The delivery settles after the reply. Each settlement goes through the SDK clients of the runtime

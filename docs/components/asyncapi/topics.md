@@ -1,13 +1,13 @@
 ---
 sidebar_position: 3
-title: Topics
+title: SNS topics
 description: "A fan-out position reports its topic through an sns binding, with a FIFO ordering object on a .fifo topic."
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Topics
+# SNS topics
 
 A fan-out position reports its topic through an `sns` binding, with a FIFO ordering object on a `.fifo` topic.
 

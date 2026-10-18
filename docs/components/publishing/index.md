@@ -17,12 +17,12 @@ A registration that names no policy for its reply publishes through this one, so
 
 The destination is a queue name or a queue URL.
 A name resolves to its URL through `GetQueueUrl`, and the broker caches the answer.
-A publish never creates a queue: a name the account lacks fails the publish.
+A publish never creates a queue: a name the account lacks fails the publish with an [error](../broker/errors.md).
 A publish returns once SQS has accepted the message, or with the error SQS reported.
 
 The payload is the message body, and the headers travel as [message attributes](../delivery/index.md).
 SQS takes a message of up to 1 MiB, body and attributes together.
-On a `.fifo` queue every send carries a message [group](./group-id.md) and a [deduplication id](./deduplication-id.md).
+On a [`.fifo` queue](../subscriptions/fifo.md) every send carries a message [group](./group-id.md) and a [deduplication id](./deduplication-id.md).
 A handler sets either for one message through [`SqsPublishOptions`](./options.md).
 [`SnsPublish`](../sns/index.md) sends the same messages to an SNS topic instead.
 

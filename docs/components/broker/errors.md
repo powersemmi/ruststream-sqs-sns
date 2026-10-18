@@ -16,15 +16,15 @@ The SDK's failure behind it is its `source`, formatted with its whole cause chai
 
 | Variant | When |
 |---|---|
-| `Config` | the in-process mode was asked of a broker whose handles already connected to AWS |
-| `Queue` | a queue could not be resolved, created, read or given its redrive policy |
+| `Config` | the [in-process mode](../testing/index.md) was asked of a broker whose handles already connected to AWS |
+| `Queue` | a queue could not be resolved, [created](../subscriptions/create-if-missing.md), read or given its redrive policy |
 | `Receive` | a receive from an open subscription failed |
 | `Publish` | SQS refused a message, or SNS refused a notification |
-| `Admin` | a topic could not be created or a queue subscribed to it (`sns` feature) |
-| `NotConnected` | a publisher was used before the broker connected, or after it shut down |
-| `InvalidQueue` | a descriptor is out of range: an empty name, a wait or a visibility SQS does not allow |
-| `IncompleteRedrive` | a registration declared `max_attempts` without `dead_letter`, or the other way round |
-| `NotFifo` | a publish named a group id or a deduplication id for a standard queue or topic |
+| `Admin` | a topic could not be created or a queue [subscribed](../sns/subscribe-queue-to-topic.md) to it (`sns` feature) |
+| `NotConnected` | a publisher was used before the broker connected, or after it [shut down](./shutdown.md) |
+| `InvalidQueue` | a descriptor is out of range: an empty name, a [wait](../subscriptions/wait.md) or a [visibility](../subscriptions/visibility.md) SQS does not allow |
+| `IncompleteRedrive` | a registration declared `max_attempts` without `dead_letter`, or the other way round ([dead letters](../settlement/dead-letters.md)) |
+| `NotFifo` | a publish named a [group id](../publishing/group-id.md) or a [deduplication id](../publishing/deduplication-id.md) for a standard queue or topic |
 
 A service meets the error in two places.
 A failed startup carries it in the cause chain of the runtime's error, and the service exits before it reads anything.

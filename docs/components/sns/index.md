@@ -20,7 +20,7 @@ The destination is a topic name or a topic ARN.
 A name resolves to its ARN through `CreateTopic`, which returns an existing topic as it is and creates a missing one.
 A name ending in `.fifo` is a FIFO topic, and it takes the same [group](../publishing/group-id.md) and [deduplication](../publishing/deduplication-id.md) steps as a FIFO queue.
 A topic and a queue may share a name: each publish goes where its policy sends it.
-The payload is the notification's message, and the headers travel as message attributes.
+The payload is the notification's message, and the headers travel as [message attributes](../delivery/index.md).
 SNS takes a message of up to 256 KiB.
 
 SNS is a publish target only: the service reads the queues subscribed to the topic.

@@ -21,7 +21,7 @@ The account keeps SQS's semantics.
 A queue hands each message to one of its subscriptions, and one receive returns at most ten messages.
 A received message stays invisible until it is deleted or its visibility timeout lapses; a descriptor that names no [visibility](../subscriptions/visibility.md) gets the 30 seconds of a new queue.
 The [receive count](../delivery/receive-count.md) rises with every receive, and a [redrive policy](../settlement/dead-letters.md) moves a message whose receives ran out to the dead-letter queue.
-A [FIFO](../subscriptions/fifo.md) group waits while one of its messages is in flight, and a deduplication id is remembered for five minutes.
+A [FIFO](../subscriptions/fifo.md) group waits while one of its messages is in flight, and a [deduplication id](../publishing/deduplication-id.md) is remembered for five minutes.
 With `sns`, a topic delivers a copy to every queue [subscribed](../sns/subscribe-queue-to-topic.md) to it.
 
 The account refuses what SQS and SNS refuse: more than ten headers, a header name the service does not take, an empty body or header value, a message over the size limit, a queue name over 80 characters, a dead-letter queue of the other kind, a `maxReceiveCount` over 1000, and a FIFO queue on a standard topic.

@@ -32,7 +32,7 @@ It packs orders, books payments and records changes to orders.
 
 A subscription long-polls its queue with `ReceiveMessage`.
 Each call waits up to 20 seconds for a message, the most SQS allows.
-[`wait`](api:ruststream_sqs_sns::SqsQueue::wait) sets a shorter wait.
+[`wait`](../components/subscriptions/wait.md) sets a shorter wait.
 A queue is named by its name or by its URL, and a name is resolved with `GetQueueUrl` once, at startup.
 
 A single-message subscription still asks for up to ten messages per call, because SQS bills per request.
@@ -43,7 +43,7 @@ A background task receives the next batch while the handler works, and it never 
 
 A received message stays invisible to other consumers for the queue's visibility timeout.
 If it is not deleted by then, SQS hands it out again.
-[`visibility`](api:ruststream_sqs_sns::SqsQueue::visibility) asks for a timeout of its own on each receive, between one second and twelve hours.
+[`visibility`](../components/subscriptions/visibility.md) asks for a timeout of its own on each receive, between one second and twelve hours.
 `pack` asks for a minute.
 Without the step, the subscription reads the queue's own timeout once, when it opens.
 
@@ -74,7 +74,7 @@ A standard queue has no order to keep, so nothing else is needed.
 </TabItem>
 </Tabs>
 
-A handler that takes a slice is a batch handler.
+A handler that takes a slice is a [batch handler](../components/subscriptions/batches.md).
 The size its mount site names becomes `MaxNumberOfMessages`, so one receive is one batch.
 A batch holds what the queue had at the time, and a long poll that returns nothing yields no batch.
 `ReceiveMessage` returns at most ten messages, so a larger size is lowered to ten and the service logs it once.
@@ -117,20 +117,20 @@ The mount site names it with `.name(..)`, once per queue.
 </TabItem>
 </Tabs>
 
-The queue steps also sit at the mount site, after the framework's own steps, through [`SqsSubscription`](api:ruststream_sqs_sns::SqsSubscription).
-An empty queue name, a wait over 20 seconds or a visibility outside its range stops the service at startup with [`SqsError::InvalidQueue`](api:ruststream_sqs_sns::SqsError::InvalidQueue), before any call to AWS.
+The queue steps also sit at the mount site, after the framework's own steps, through [`SqsSubscription`](../components/subscriptions/sqs-subscription.md).
+An empty queue name, a wait over 20 seconds or a visibility outside its range stops the service at startup with [`SqsError::InvalidQueue`](../components/broker/errors.md), before any call to AWS.
 A name may hold characters SQS does not take: each character outside `A-Z`, `a-z`, `0-9`, `_` and `-` becomes `-`, and a `.fifo` suffix is kept.
 
-[`create_if_missing`](api:ruststream_sqs_sns::SqsQueue::create_if_missing) creates a queue that does not exist.
+[`create_if_missing`](../components/subscriptions/create-if-missing.md) creates a queue that does not exist.
 A production service usually takes its queues from its infrastructure and leaves the step out; a missing queue then stops it at startup.
 
 ## What a delivery carries
 
-Each message attribute arrives as a header, and each header of a publish leaves as an attribute.
+Each message attribute arrives as a [header](../components/delivery/index.md), and each header of a publish leaves as an attribute.
 Two headers are the crate's own.
-[`RECEIVE_COUNT_HEADER`](api:ruststream_sqs_sns::RECEIVE_COUNT_HEADER) carries the queue's receive count of the message.
-[`PARTITION_KEY_HEADER`](api:ruststream_sqs_sns::PARTITION_KEY_HEADER) carries the message group of a FIFO queue.
-An SQS body is text, so a binary payload travels base64-encoded with a marker attribute and arrives decoded.
+[`RECEIVE_COUNT_HEADER`](../components/delivery/receive-count.md) carries the queue's receive count of the message.
+[`PARTITION_KEY_HEADER`](../components/delivery/partition-key.md) carries the message group of a FIFO queue.
+An SQS body is text, so a binary payload travels [base64-encoded](../components/delivery/body.md) with a marker attribute and arrives decoded.
 Base64 makes such a payload a third larger, and SQS refuses a message over its size limit.
 
 The tests in the example file publish orders, payments and changes to the app in process.
