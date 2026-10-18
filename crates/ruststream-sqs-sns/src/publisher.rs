@@ -155,7 +155,7 @@ impl SqsPublishOptions {
 ///     order: &Order,
 ///     Out(shipments): Out<impl Publisher<Options = SqsPublishOptions>, Shipments>,
 /// ) -> HandlerOutcome {
-///     // This one order ships in its customer's group, whatever the mount site's default is.
+///     // This one order ships in its customer's group, over the mount site's default group.
 ///     if shipments
 ///         .message(order)
 ///         .to("shipments.fifo")
@@ -172,7 +172,9 @@ impl SqsPublishOptions {
 /// #[app]
 /// fn service() -> impl App {
 ///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-///         b.include(ship).out(Shipments, Publish::default()).build();
+///         b.include(ship)
+///             .out(Shipments, Publish::default().group_id("orders"))
+///             .build();
 ///     })
 /// }
 /// ```

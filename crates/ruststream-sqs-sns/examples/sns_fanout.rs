@@ -1,17 +1,17 @@
 //! SNS fan-out: one order accepted on a queue, announced once to a topic, delivered to every
-//! subscribed queue.
+//! queue subscribed to it.
 //!
-//! Run a local stack first (`just brokers-up`), then:
-//! `cargo run --example sns_fanout --features sns`
+//! ```text
+//! cargo test --example sns_fanout --features testing,sns
+//! cargo run --example sns_fanout --features testing,sns -- run
+//! ```
 
 use std::io;
 
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// The order as it arrives on the service's own queue. It declares that queue, so the publish
-/// call site names no destination and the generated document carries the channel.
-#[derive(Debug, Deserialize, Serialize, Outgoing)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
 #[outgoing(name = "orders")]
 struct PlaceOrder {
     id: u64,
@@ -19,50 +19,35 @@ struct PlaceOrder {
 
 // --8<-- [start:reply]
 /// The notification the topic fans out. It names the topic, so the handler answers with a bare
-/// `reply` clause and every send of this type lands in the same place.
-#[derive(Debug, Deserialize, Serialize, Outgoing)]
+/// `reply` clause.
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
 #[outgoing(name = "orders-events")]
 struct OrderPlaced {
     id: u64,
 }
 
-/// The reply type names where the reply goes; the mount site names who takes it there. Without an
-/// `.out_reply(..)` the reply would ride the broker's default policy and land on a queue of that
-/// name, so fan-out is one step on the mount chain rather than a different handler.
 #[subscriber(SqsQueue::new("orders").create_if_missing(), reply)]
 async fn accept(order: &PlaceOrder) -> OrderPlaced {
-    println!("accepted order {}", order.id);
+    tracing::info!(order.id, "order accepted");
     OrderPlaced { id: order.id }
 }
 // --8<-- [end:reply]
 
 #[subscriber(SqsQueue::new("billing").create_if_missing())]
 async fn bill(order: &OrderPlaced) -> HandlerOutcome {
-    println!("billing got order {}", order.id);
+    tracing::info!(order.id, "order billed");
     HandlerOutcome::ack()
 }
 
 #[subscriber(SqsQueue::new("shipping").create_if_missing())]
 async fn ship(order: &OrderPlaced) -> HandlerOutcome {
-    println!("shipping got order {}", order.id);
+    tracing::info!(order.id, "order shipped");
     HandlerOutcome::ack()
 }
 
-fn broker() -> SqsBroker {
-    SqsBroker::new()
-        .endpoint("http://localhost:4566")
-        .test_credentials()
-        .region("us-east-1")
-}
-
-/// Wires both queues to the topic with raw delivery, so payloads and headers arrive unwrapped.
-///
-/// Topology administration is provisioning work (terraform or the console in production), and
-/// the app builder has no vocabulary for it, so it runs in a startup hook on a clone of the app's
-/// broker. A clone connects to the connection the app's broker already holds, which is also what
-/// a test running this app in process wires. The queues themselves already exist by now - the
-/// subscriptions opened them.
 // --8<-- [start:wiring]
+/// Subscribes both queues to the topic. The subscriptions have opened the queues by the time a
+/// startup hook runs.
 async fn wire_topology(broker: SqsBroker) -> io::Result<()> {
     let connected = broker.connect().await.map_err(io::Error::other)?;
     for queue in ["billing", "shipping"] {
@@ -76,25 +61,63 @@ async fn wire_topology(broker: SqsBroker) -> io::Result<()> {
 // --8<-- [end:wiring]
 
 // --8<-- [start:app]
-#[app]
-fn app() -> impl App {
-    let broker = broker();
+fn service(broker: SqsBroker) -> impl App {
+    // A clone connects through the connection the app's broker holds.
     let topology = broker.clone();
-    RustStream::new(AppInfo::new("sns-fanout", "0.1.0"))
-        // Registration order is run order across both hook levels, so the wiring lands before
-        // the first order is placed.
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
         .after_startup(async move |_state| wire_topology(topology).await)
         .with_broker(broker, |b| {
-            // One step binds the reply position, and `SnsPublish` on it names the fan-out.
+            // One step moves the reply from the queue of that name to the topic.
             b.include(accept).out_reply(SnsPublish::default());
             b.include(bill);
             b.include(ship);
-            b.after_startup(Publish::default(), async move |sqs| -> io::Result<()> {
-                sqs.message(&PlaceOrder { id: 1 })
-                    .publish()
-                    .await
-                    .map_err(io::Error::other)
-            });
         })
 }
 // --8<-- [end:app]
+
+/// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve
+/// the region and credentials.
+fn broker(endpoint: &str) -> SqsBroker {
+    SqsBroker::new()
+        .endpoint(endpoint)
+        .test_credentials()
+        .region("us-east-1")
+}
+
+#[ruststream::app]
+fn app() -> impl App {
+    service(broker("http://localhost:4566"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use ruststream::testing::TestApp;
+    use ruststream_sqs_sns::prelude::*;
+
+    use super::{OrderPlaced, PlaceOrder, broker, service};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_order_reaches_every_subscribed_queue() -> Result<(), Box<dyn Error>> {
+        let tb = TestApp::start(service(broker("http://localhost:4566"))).await?;
+        tb.broker::<SqsBroker>()
+            .message(&PlaceOrder { id: 7 })
+            .publish()
+            .await?;
+
+        for queue in ["billing", "shipping"] {
+            tb.broker::<SqsBroker>()
+                .subscriber(queue)
+                .assert_called_once()
+                .with(&OrderPlaced { id: 7 })
+                .settled(HandlerOutcome::ack());
+        }
+        tb.broker::<SqsBroker>()
+            .published::<OrderPlaced>("orders-events")
+            .assert_called_once()
+            .with(&OrderPlaced { id: 7 });
+        tb.shutdown().await?;
+        Ok(())
+    }
+}
