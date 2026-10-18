@@ -25,7 +25,7 @@ A test reads back what a publish asked for: `tb.out::<Marker>().with_options(&Sq
 
 ## Example
 
-Each customer's orders reach fulfilment in the order they were placed: the group of each message is the customer.
+Each customer's orders reach fulfillment in the order they were placed: the group of each message is the customer.
 
 <Tabs groupId="api">
 <TabItem value="macros" label="Macros">

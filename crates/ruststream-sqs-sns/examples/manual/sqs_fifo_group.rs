@@ -24,7 +24,7 @@ struct Order {
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing, JsonSchema)]
-#[outgoing(name = "fulfilment.fifo")]
+#[outgoing(name = "fulfillment.fifo")]
 struct OrderPlaced {
     id: u64,
     customer: String,
@@ -35,7 +35,7 @@ struct OrderPlaced {
 struct Placements;
 
 // --8<-- [start:publish]
-/// One customer's orders reach fulfilment in the order they were placed; different customers'
+/// One customer's orders reach fulfillment in the order they were placed; different customers'
 /// orders do not wait for each other. The group is the customer.
 struct Place;
 
@@ -96,7 +96,7 @@ fn service(broker: SqsBroker) -> impl App {
         b.include(subscriber("orders", Place).build())
             .out(Placements, Publish::default())
             .build();
-        b.include(subscriber("fulfilment.fifo", Fulfil).build());
+        b.include(subscriber("fulfillment.fifo", Fulfil).build());
         // The replay keeps its own order: every message the hook sends is in the group `replay`.
         b.after_startup(
             Publish::default().group_id("replay"),
@@ -149,11 +149,11 @@ mod tests {
 
         // A FIFO delivery carries its message group in the partition-key header.
         tb.broker::<SqsBroker>()
-            .published::<OrderPlaced>("fulfilment.fifo")
+            .published::<OrderPlaced>("fulfillment.fifo")
             .assert_called_once()
             .with_header(PARTITION_KEY_HEADER, "replay");
         tb.broker::<SqsBroker>()
-            .subscriber("fulfilment.fifo")
+            .subscriber("fulfillment.fifo")
             .assert_called_once()
             .settled(HandlerOutcome::ack());
         tb.shutdown().await?;
@@ -176,7 +176,7 @@ mod tests {
             .assert_called_once()
             .with_options(&SqsPublishOptions::default().group_id("globex"));
         tb.broker::<SqsBroker>()
-            .published::<OrderPlaced>("fulfilment.fifo")
+            .published::<OrderPlaced>("fulfillment.fifo")
             .assert_called(2)
             .with(&OrderPlaced {
                 id: 2,

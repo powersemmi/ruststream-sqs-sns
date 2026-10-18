@@ -28,7 +28,7 @@ A partition key alone is a portable hint, so a standard queue ignores it.
 
 ## Example
 
-At startup the service replays the orders a previous run did not hand on, all in the group `replay`, so fulfilment receives them in the order they were taken.
+At startup the service replays the orders a previous run did not hand on, all in the group `replay`, so fulfillment receives them in the order they were taken.
 The `place` handler names each customer's group for its own messages, which wins over its slot's policy.
 
 <Tabs groupId="api">

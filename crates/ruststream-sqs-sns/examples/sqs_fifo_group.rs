@@ -19,7 +19,7 @@ struct Order {
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
-#[outgoing(name = "fulfilment.fifo")]
+#[outgoing(name = "fulfillment.fifo")]
 struct OrderPlaced {
     id: u64,
     customer: String,
@@ -30,7 +30,7 @@ struct OrderPlaced {
 struct Placements;
 
 // --8<-- [start:publish]
-/// One customer's orders reach fulfilment in the order they were placed; different customers'
+/// One customer's orders reach fulfillment in the order they were placed; different customers'
 /// orders do not wait for each other. The group is the customer.
 #[subscriber(SqsQueue::new("orders"))]
 async fn place(
@@ -54,7 +54,7 @@ async fn place(
 }
 // --8<-- [end:publish]
 
-#[subscriber(SqsQueue::new("fulfilment.fifo"))]
+#[subscriber(SqsQueue::new("fulfillment.fifo"))]
 async fn fulfil(order: &OrderPlaced) -> HandlerOutcome {
     tracing::info!(order.id, order.customer, "order fulfilled");
     HandlerOutcome::ack()
@@ -121,11 +121,11 @@ mod tests {
 
         // A FIFO delivery carries its message group in the partition-key header.
         tb.broker::<SqsBroker>()
-            .published::<OrderPlaced>("fulfilment.fifo")
+            .published::<OrderPlaced>("fulfillment.fifo")
             .assert_called_once()
             .with_header(PARTITION_KEY_HEADER, "replay");
         tb.broker::<SqsBroker>()
-            .subscriber("fulfilment.fifo")
+            .subscriber("fulfillment.fifo")
             .assert_called_once()
             .settled(HandlerOutcome::ack());
         tb.shutdown().await?;
@@ -148,7 +148,7 @@ mod tests {
             .assert_called_once()
             .with_options(&SqsPublishOptions::default().group_id("globex"));
         tb.broker::<SqsBroker>()
-            .published::<OrderPlaced>("fulfilment.fifo")
+            .published::<OrderPlaced>("fulfillment.fifo")
             .assert_called(2)
             .with(&OrderPlaced {
                 id: 2,
