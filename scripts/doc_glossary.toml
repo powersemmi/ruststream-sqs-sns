@@ -233,11 +233,11 @@ ru = "длинный опрос"
 ru_match = "длинн\\w*\\s+опрос"
 zh = "长轮询"
 
+# Russian keeps the acronym: the documentation names the dead-letter destination DLQ alone.
 [[term]]
 en = "dead-letter queue"
 en_match = "dead[-\\s]letter\\w*"
-ru = "очередь недоставленных сообщений"
-ru_match = "очеред\\w*\\s+недоставленных\\s+сообщений"
+ru = "DLQ"
 zh = "死信队列"
 
 [[term]]
