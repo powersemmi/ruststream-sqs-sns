@@ -115,6 +115,7 @@ SDK 按自己的重试策略重试失败的请求。
 | `create_if_missing` | `sqs:CreateQueue` |
 | 向队列发布 | 队列上的 `sqs:GetQueueUrl` 和 `sqs:SendMessage` |
 | 向主题发布 | 主题上的 `sns:CreateTopic` 和 `sns:Publish` |
+| `subscribe_queue_to_topic` | 主题上的 `sns:CreateTopic` 和 `sns:Subscribe`，队列上的 `sqs:GetQueueUrl`、`sqs:GetQueueAttributes` 和 `sqs:SetQueueAttributes` |
 
 ## AsyncAPI 文档展示什么 {/* #what-the-asyncapi-document-shows */}
 

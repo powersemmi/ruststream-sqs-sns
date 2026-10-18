@@ -20,7 +20,7 @@ export const settlement = {
   "retryEffect": ["立即可见"],
   "retryAfterOutcome": "retry_after(d)",
   "retryAfterCall": ["ChangeMessage", "Visibility(d)"],
-  "retryAfterEffect": ["d 之后回来，", "最长 12 小时"],
+  "retryAfterEffect": ["d 之后回来，", "不晚于接收后", "12 小时"],
   "dropOutcome": "drop",
   "dropCall": ["DeleteMessage；", "达到上限时：", "Visibility(0)"],
   "dropEffect": ["消失，", "或移入", "死信队列"],
@@ -53,7 +53,7 @@ export const retries = {
 
 <Diagram name="settlement" words={settlement} />
 
-`retry_after(d)` 以整秒计算延迟并向上取整，因此消息绝不会早于 `d` 回来。延迟上限是 12 小时，即 SQS 允许的最长可见性。未结算就被丢弃的投递不发出任何调用：它的延长停止，消息在当前超时到期时回来。
+`retry_after(d)` 以整秒计算延迟并向上取整，因此消息绝不会早于 `d` 回来。超出接收后 12 小时的延迟会缩短到这 12 小时结束为止，本 crate 同时记录一条注明队列名称的警告日志。未结算就被丢弃的投递不发出任何调用：它的延长停止，消息在当前超时到期时回来。
 
 SQS 没有只拒绝而不删除消息的操作，所以 `drop` 会删除消息。注册声明了重新驱动策略的队列是例外。在这种队列上，已被接收 `maxReceiveCount` 次的投递会被交还而不是删除，因为正是下一次接收把它移入死信队列，删除则会让它丢失。
 

@@ -83,6 +83,8 @@ ruststream-sqs-sns = { version = "0.7", features = ["sns"] }
 [`subscribe_queue_to_topic`](../components/sns/subscribe-queue-to-topic.md) 让一个队列以原始消息传输方式订阅一个主题。
 因此副本作为普通的 SQS 消息到达：载荷就是正文，每个消息头就是一个消息属性。
 不启用原始消息传输时，SNS 会把消息包装在它自己的 JSON 信封里。
+只有队列的访问策略允许主题向它发送时，SNS 才会投递到这个队列。
+这个调用在建立订阅之前把这样一条语句加入策略，并保留策略中已有的语句。
 主题不存在时，这个调用会创建它；再次为同一个队列建立订阅不会改变任何东西。
 
 拓扑通常属于基础设施，用 Terraform 或控制台创建。
@@ -114,7 +116,8 @@ ruststream-sqs-sns = { version = "0.7", features = ["sns"] }
 它把一次发布的消息组带给订阅它的 FIFO 队列，使用的是 FIFO 队列所用的那些[组步骤](fifo.md)。
 FIFO 队列只能订阅 FIFO 主题。
 
-服务发布需要 `sns:CreateTopic` 和 `sns:Publish` 权限，自己为队列建立订阅时还需要 `sns:Subscribe`。
+服务发布需要 `sns:CreateTopic` 和 `sns:Publish` 权限。
+自己为队列建立订阅时，还需要主题上的 `sns:Subscribe`，以及每个队列上的 `sqs:GetQueueAttributes` 和 `sqs:SetQueueAttributes`。
 
 ## 测试扇出 {/* #testing-the-fan-out */}
 

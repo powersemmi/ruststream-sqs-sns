@@ -37,7 +37,8 @@ import TabItem from '@theme/TabItem';
 超出信用额度的发票要等待信用检查。
 [`retry_after`](../components/settlement/retry-after.md) 把消息的可见性超时设为 30 秒，这段时间结束时，SQS 再次交出它。
 SQS 按整秒计数，所以不足一秒的部分向上取整。
-延迟最长十二小时，即 SQS 允许的最长可见性；更长的延迟会被截为十二小时。
+SQS 从接收起最多隐藏消息十二小时，所以延迟在这十二小时内结束。
+更长的延迟会缩短到这十二小时结束为止，本 crate 同时记录一条注明队列名称的警告日志。
 消息始终留在它的队列中，所以延迟的重试在服务重启后依然有效。
 
 [`retry`](api:ruststream::runtime::HandlerOutcome::retry) 把可见性设为零，消息立即再次交出。

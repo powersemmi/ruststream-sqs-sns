@@ -31,6 +31,8 @@ SNS 主题把每条消息的一份副本投递给订阅它的每个队列，然�
 
 启用原始消息传输时，队列收到的正文与发布时相同，消息属性变成 SQS 消息属性。不启用时，队列收到一个 JSON 信封，正文和属性都在其中。由 [`subscribe_queue_to_topic`](api:ruststream_sqs_sns::ConnectedSqsBroker::subscribe_queue_to_topic) 建立的订阅会开启原始消息传输，因此队列上的处理器读到的正文和消息头与发布者发送的相同。
 
+只有队列的访问策略允许 SNS 服务代表主题执行 `sqs:SendMessage` 时，SNS 才会向队列发送消息。`subscribe_queue_to_topic` 添加一条通过 `aws:SourceArn` 限定到该主题的语句，并保留策略中已有的语句。由运维人员订阅的队列也需要同样的语句。
+
 本 crate 向 SNS 发布，但不从 SNS 消费：主题通过它的队列读取。按名称指定的主题通过 `CreateTopic` 解析：主题已存在时它返回该主题的 ARN，不存在时它创建主题。第一次发布后，ARN 被缓存。以 `.fifo` 结尾的名称会创建 FIFO 主题，它只投递到 FIFO 队列。SNS 消息默认最大 256 KiB。
 
 这一行为就是 Amazon SNS 自己的行为（[SQS 作为订阅者](https://docs.aws.amazon.com/zh_cn/sns/latest/dg/sns-sqs-as-subscriber.html)、[原始消息传输](https://docs.aws.amazon.com/zh_cn/sns/latest/dg/sns-large-payload-raw-message-delivery.html)、[`CreateTopic`](https://docs.aws.amazon.com/zh_cn/sns/latest/api/API_CreateTopic.html)、[配额](https://docs.aws.amazon.com/zh_cn/general/latest/gr/sns.html)）。
