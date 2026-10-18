@@ -232,3 +232,148 @@ name = "manual_sqs_dead_letter"
 path = "examples/manual/sqs_dead_letter.rs"
 required-features = ["testing"]
 test = true
+
+# --- examples: components-b ---
+
+[[example]]
+name = "sqs_service"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_service"
+path = "examples/manual/sqs_service.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_credentials"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_credentials"
+path = "examples/manual/sqs_broker_credentials.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_endpoint"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_endpoint"
+path = "examples/manual/sqs_broker_endpoint.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_startup"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_startup"
+path = "examples/manual/sqs_broker_startup.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_shutdown"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_shutdown"
+path = "examples/manual/sqs_broker_shutdown.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_prelude"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_prelude"
+path = "examples/manual/sqs_broker_prelude.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_broker_errors"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_broker_errors"
+path = "examples/manual/sqs_broker_errors.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_delivery_headers"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_headers"
+path = "examples/manual/sqs_delivery_headers.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_delivery_receive_count"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_receive_count"
+path = "examples/manual/sqs_delivery_receive_count.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_delivery_partition_key"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_partition_key"
+path = "examples/manual/sqs_delivery_partition_key.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_delivery_body"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_delivery_body"
+path = "examples/manual/sqs_delivery_body.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_testing"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_testing"
+path = "examples/manual/sqs_testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "sqs_testing_live"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_sqs_testing_live"
+path = "examples/manual/sqs_testing_live.rs"
+required-features = ["testing"]
+test = true
