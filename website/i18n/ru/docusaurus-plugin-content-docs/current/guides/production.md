@@ -116,6 +116,7 @@ aws-sdk-sqs = "1"
 | `create_if_missing` | `sqs:CreateQueue` |
 | публикация в очередь | `sqs:GetQueueUrl` и `sqs:SendMessage` на очереди |
 | публикация в тему | `sns:CreateTopic` и `sns:Publish` на теме |
+| `subscribe_queue_to_topic` | `sns:CreateTopic` и `sns:Subscribe` на теме, `sqs:GetQueueUrl`, `sqs:GetQueueAttributes` и `sqs:SetQueueAttributes` на очереди |
 
 ## Что показывает документ AsyncAPI {/* #what-the-asyncapi-document-shows */}
 
