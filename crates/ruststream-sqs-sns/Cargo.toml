@@ -377,3 +377,104 @@ name = "manual_sqs_testing_live"
 path = "examples/manual/sqs_testing_live.rs"
 required-features = ["testing"]
 test = true
+
+# --- examples: guides ---
+
+# Each guide is one service: `guide_<slug>` the form with the macros, `manual_guide_<slug>` the
+# same service written by hand. Each pair carries the tests that prove what its page says.
+
+[[example]]
+name = "guide_getting_started"
+path = "examples/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_getting_started"
+path = "examples/manual/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_consuming"
+path = "examples/guide/consuming.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_consuming"
+path = "examples/manual/guide/consuming.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_acknowledgement"
+path = "examples/guide/acknowledgement.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_acknowledgement"
+path = "examples/manual/guide/acknowledgement.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_retries"
+path = "examples/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_retries"
+path = "examples/manual/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_fifo"
+path = "examples/guide/fifo.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_fifo"
+path = "examples/manual/guide/fifo.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_fan_out"
+path = "examples/guide/fan_out.rs"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "manual_guide_fan_out"
+path = "examples/manual/guide/fan_out.rs"
+required-features = ["testing", "sns"]
+test = true
+
+[[example]]
+name = "guide_testing"
+path = "examples/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_testing"
+path = "examples/manual/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_production"
+path = "examples/guide/production.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_production"
+path = "examples/manual/guide/production.rs"
+required-features = ["testing"]
+test = true
