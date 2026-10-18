@@ -82,6 +82,8 @@ Each queue gets its own copy of every announcement, so billing and shipping work
 [`subscribe_queue_to_topic`](../components/sns/subscribe-queue-to-topic.md) subscribes a queue to a topic with raw message delivery.
 So a copy arrives as a plain SQS message: the payload is the body, and each header is a message attribute.
 Without raw delivery SNS would wrap the message in a JSON envelope of its own.
+SNS delivers to a queue only when the queue's access policy lets the topic send to it.
+The call adds that statement to the policy before it subscribes, and keeps the statements already there.
 The call creates the topic when it does not exist, and subscribing the same queue again changes nothing.
 
 Topology is usually infrastructure, created with Terraform or the console.
@@ -113,7 +115,8 @@ A topic whose name ends in `.fifo` is a FIFO topic.
 It carries the message group of a publish to the FIFO queues subscribed to it, with the [group steps](fifo.md) a FIFO queue takes.
 A FIFO queue subscribes only to a FIFO topic.
 
-The service needs `sns:CreateTopic` and `sns:Publish` to publish, and `sns:Subscribe` when it subscribes queues itself.
+The service needs `sns:CreateTopic` and `sns:Publish` to publish.
+To subscribe queues itself it also needs `sns:Subscribe` on the topic and `sqs:GetQueueAttributes` and `sqs:SetQueueAttributes` on each queue.
 
 ## Testing the fan-out
 

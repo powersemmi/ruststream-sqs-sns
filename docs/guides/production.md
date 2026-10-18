@@ -114,6 +114,7 @@ Each feature adds its own:
 | `create_if_missing` | `sqs:CreateQueue` |
 | a publish to a queue | `sqs:GetQueueUrl` and `sqs:SendMessage` on the queue |
 | a publish to a topic | `sns:CreateTopic` and `sns:Publish` on the topic |
+| `subscribe_queue_to_topic` | `sns:CreateTopic` and `sns:Subscribe` on the topic, `sqs:GetQueueUrl`, `sqs:GetQueueAttributes` and `sqs:SetQueueAttributes` on the queue |
 
 ## What the AsyncAPI document shows
 

@@ -39,6 +39,11 @@ the body and the attributes. A subscription made by
 turns raw delivery on, so a handler on the queue reads the same body and headers the publisher
 sent.
 
+SNS sends to a queue only when the queue's access policy allows the SNS service
+`sqs:SendMessage` on behalf of the topic. `subscribe_queue_to_topic` adds a statement scoped to
+the topic through `aws:SourceArn` and keeps the statements already in the policy. A queue that an
+operator subscribes needs the same statement.
+
 This crate publishes to SNS and does not consume from it: a topic is read through its queues. A
 topic named by name resolves through `CreateTopic`, which returns the ARN of an existing topic and
 creates a missing one. The ARN is cached after the first publish. A name that ends in `.fifo` makes

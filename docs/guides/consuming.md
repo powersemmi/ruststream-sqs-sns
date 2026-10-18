@@ -44,11 +44,14 @@ A background task receives the next batch while the handler works, and it never 
 A received message stays invisible to other consumers for the queue's visibility timeout.
 If it is not deleted by then, SQS hands it out again.
 [`visibility`](../components/subscriptions/visibility.md) asks for a timeout of its own on each receive, between one second and twelve hours.
+SQS counts it in whole seconds, so a fraction rounds up to the next second.
 `pack` asks for a minute.
 Without the step, the subscription reads the queue's own timeout once, when it opens.
 
 A handler may run longer than the timeout.
-While a delivery is alive, the crate extends its visibility every half period, so a slow handler does not see its message handed to another consumer.
+While a delivery is alive, the crate extends its visibility halfway through each timeout, so a slow handler does not see its message handed to another consumer.
+SQS keeps a message hidden for at most twelve hours from its receive.
+A handler that runs that long gets one last extension to the end of them and a warning in the log, and the message then goes to another consumer.
 
 ## Parallel handlers
 

@@ -36,7 +36,8 @@ The example is an invoices service that charges invoices to customers.
 An invoice over the credit limit waits for a credit check.
 [`retry_after`](../components/settlement/retry-after.md) sets the message's visibility timeout to 30 seconds, and SQS hands it out again when they end.
 SQS counts whole seconds, so a fraction of a second rounds up.
-A delay is at most twelve hours, the longest visibility SQS allows; a longer one is cut to twelve hours.
+SQS keeps a message hidden for at most twelve hours from its receive, so a delay ends within them.
+A longer delay is shortened to end with them, and the crate logs a warning that names the queue.
 The message stays on its queue the whole time, so a deferred retry survives a restart of the service.
 
 [`retry`](api:ruststream::runtime::HandlerOutcome::retry) sets the visibility to zero, and the message is handed out again at once.

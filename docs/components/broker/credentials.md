@@ -30,11 +30,11 @@ The service's role needs these permissions:
 |---|---|
 | `sqs:GetQueueUrl`, `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility` | every subscription |
 | `sqs:GetQueueAttributes` | a subscription that names no [visibility](../subscriptions/visibility.md), and the dead-letter queue of a [redrive policy](../settlement/dead-letters.md) |
-| `sqs:SetQueueAttributes` | a subscription with a redrive policy |
+| `sqs:SetQueueAttributes` | a subscription with a redrive policy, and the queue of [`subscribe_queue_to_topic`](../sns/subscribe-queue-to-topic.md) |
 | `sqs:CreateQueue` | a subscription with [`create_if_missing`](../subscriptions/create-if-missing.md) |
 | `sqs:SendMessage` | every publish to a queue |
 | `sns:Publish` | every publish to a [topic](../sns/index.md), and `sns:CreateTopic` for a topic named by name rather than ARN |
-| `sns:Subscribe` | [`subscribe_queue_to_topic`](../sns/subscribe-queue-to-topic.md), with `sqs:GetQueueAttributes` on the queue |
+| `sns:Subscribe` | [`subscribe_queue_to_topic`](../sns/subscribe-queue-to-topic.md), with `sns:CreateTopic` on the topic and `sqs:GetQueueUrl`, `sqs:GetQueueAttributes` and `sqs:SetQueueAttributes` on the queue |
 
 ## Example
 

@@ -30,7 +30,7 @@ ends it or it comes back for another receive.
 
 A receive hands the message out with a receipt handle and hides it from every other receive for
 the visibility timeout. The timeout is the queue's own, 30 seconds by default and up to 12 hours,
-unless the receive names one. The consumer deletes the message with the receipt handle of that
+unless the receive names one. SQS counts it in whole seconds, from one second up. The consumer deletes the message with the receipt handle of that
 receive.
 
 A message that is not deleted in time becomes visible again and is delivered once more.
@@ -44,9 +44,14 @@ delivered. The
 dead-letter queue is of the same kind as the source: a FIFO queue takes a FIFO dead-letter queue.
 
 SQS has no lease to renew. While a handler holds a delivery, this crate calls
-`ChangeMessageVisibility` every half of the timeout, at most once a second, so a slow handler is
-not raced by a second delivery of the same message. The extension stops when the delivery
-settles or is dropped. A queue whose timeout is zero gets no extension.
+`ChangeMessageVisibility` halfway through each timeout, so a slow handler is not raced by a second
+delivery of the same message. The other half is left for the call to reach the queue. The
+extension stops when the delivery settles or is dropped. A queue whose timeout is zero gets no
+extension.
+
+The 12 hours from the receive bound the extension too. A handler that holds a delivery that long
+gets one last extension to the end of them, and the crate logs a warning. After that the queue
+hands the message to another consumer.
 
 The behaviour is Amazon SQS's own
 ([visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html),

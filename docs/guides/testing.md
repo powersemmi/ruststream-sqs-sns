@@ -94,7 +94,7 @@ It models what a service's logic depends on:
 - A FIFO group waits while one of its messages is in flight, and a deduplication id is remembered for five minutes.
 - With `sns`, a topic delivers a copy to every queue subscribed with `subscribe_queue_to_topic`.
 
-What SQS or SNS refuses is refused there too: more than ten headers, a header name SQS does not take, an empty body or header value, a message over the size limit, a queue name over 80 characters, a dead-letter queue of the other kind, a `maxReceiveCount` over 1000, and a FIFO queue on a standard topic.
+What SQS or SNS refuses is refused there too: more than ten headers, a header name SQS does not take, an empty body or header value, a message over the size limit, a queue name over 80 characters, a dead-letter queue of the other kind, a `maxReceiveCount` over 1000, a visibility that would end more than twelve hours after the receive, and a FIFO queue on a standard topic.
 
 A standard queue keeps the order of its messages there, which SQS does not promise.
 A descriptor that names no visibility gets 30 seconds, the default of a new queue.

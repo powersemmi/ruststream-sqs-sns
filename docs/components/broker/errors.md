@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Errors
-description: "SqsError is the crate's one error type: configuration, queues, receives, publishes, SNS admin, a closed connection and refused settings."
+description: "SqsError is the crate's one error type: configuration, queues, receives, publishes, SNS admin, queue access policies, a closed connection and refused settings."
 ---
 
 import Tabs from '@theme/Tabs';
@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 # Errors
 
-[`SqsError`](api:ruststream_sqs_sns::SqsError) is the crate's one error type: configuration, queues, receives, publishes, SNS admin, a closed connection and refused settings.
+[`SqsError`](api:ruststream_sqs_sns::SqsError) is the crate's one error type: configuration, queues, receives, publishes, SNS admin, queue access policies, a closed connection and refused settings.
 
 Each variant names the step that failed and the queue or topic it was about.
 The SDK's failure behind it is its `source`, formatted with its whole cause chain, so the SDK's error types stay out of the crate's API.
@@ -21,6 +21,7 @@ The SDK's failure behind it is its `source`, formatted with its whole cause chai
 | `Receive` | a receive from an open subscription failed |
 | `Publish` | SQS refused a message, or SNS refused a notification |
 | `Admin` | a topic could not be created or a queue [subscribed](../sns/subscribe-queue-to-topic.md) to it (`sns` feature) |
+| `QueuePolicy` | a queue's access policy could not be read or written while [`subscribe_queue_to_topic`](../sns/subscribe-queue-to-topic.md) granted a topic the right to send to it (`sns` feature) |
 | `NotConnected` | a publisher was used before the broker connected, or after it [shut down](./shutdown.md) |
 | `InvalidQueue` | a descriptor is out of range: an empty name, a [wait](../subscriptions/wait.md) or a [visibility](../subscriptions/visibility.md) SQS does not allow |
 | `IncompleteRedrive` | a registration declared `max_attempts` without `dead_letter`, or the other way round ([dead letters](../settlement/dead-letters.md)) |

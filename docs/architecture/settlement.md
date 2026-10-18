@@ -20,7 +20,7 @@ export const settlement = {
   "retryEffect": ["Visible now"],
   "retryAfterOutcome": "retry_after(d)",
   "retryAfterCall": ["ChangeMessage", "Visibility(d)"],
-  "retryAfterEffect": ["Back after d,", "up to 12 h"],
+  "retryAfterEffect": ["Back after d,", "within 12 h", "of the receive"],
   "dropOutcome": "drop",
   "dropCall": ["DeleteMessage;", "at the cap:", "Visibility(0)"],
   "dropEffect": ["Gone, or to the", "dead-letter", "queue"],
@@ -55,7 +55,8 @@ queue, and a retry waits in the queue itself.
 <Diagram name="settlement" words={settlement} />
 
 `retry_after(d)` counts the delay in whole seconds, rounded up, so the message never comes back
-before `d`. The delay is capped at 12 hours, the longest visibility SQS allows. A delivery dropped
+before `d`. A delay that reaches past the 12 hours from the receive is shortened to end there, and
+the crate logs a warning that names the queue. A delivery dropped
 without a settlement makes no call: its extension stops, and the message returns when its current
 timeout lapses.
 

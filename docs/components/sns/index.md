@@ -25,6 +25,7 @@ SNS takes a message of up to 256 KiB.
 
 SNS is a publish target only: the service reads the queues subscribed to the topic.
 A queue joins a topic through [`subscribe_queue_to_topic`](./subscribe-queue-to-topic.md), or through the operator's own provisioning.
+Either way, SNS delivers to the queue only when the queue's access policy lets the topic send to it, and `subscribe_queue_to_topic` adds that statement itself.
 
 ## Example
 
