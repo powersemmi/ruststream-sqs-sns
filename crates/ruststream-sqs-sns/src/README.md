@@ -421,6 +421,9 @@ queue is left out rather than guessed: reading it takes a connection and the doc
 before anything connects. For the same reason a queue's ARN never appears, and neither does a
 credential, even when the broker is configured from an endpoint that carries one. One server
 describes the crate, with the protocol `sqs` and no protocol version, and SNS publishes share it.
+Its host is the endpoint's host and port when an endpoint is known, the regional host
+(`sqs.eu-west-1.amazonaws.com`) when a region is, and `sqs.amazonaws.com` otherwise; both come
+from the broker or from the config given to [`SqsBroker::from_config`].
 
 A publish position describes its destination too, because the framework hands the policy the name
 the document reports as the channel's address. A reply through [`SqsPublish`] carries an `sqs`
@@ -529,7 +532,8 @@ them, and credentials. The repository's own tests run one body both ways.
 * Credentials and region resolve on `connect` through the SDK's default chain (environment,
   shared profile, IMDS, SSO). [`SqsBroker::from_config`] takes a prebuilt `aws_config::SdkConfig`
   instead, which is also how a service pins an SDK behaviour version rather than tracking the
-  latest.
+  latest. An endpoint or a region named on the broker replaces the config's own; what the broker
+  does not name stays as the config has it.
 * [`endpoint`](SqsBroker::endpoint), [`region`](SqsBroker::region) and
   [`test_credentials`](SqsBroker::test_credentials) point the broker at a local stack; queue URLs
   the service returns are rebased onto that endpoint, so a stack's host-rewriting strategy changes
