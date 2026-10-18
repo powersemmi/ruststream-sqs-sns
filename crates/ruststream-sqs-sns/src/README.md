@@ -110,7 +110,8 @@ item's own documentation keeps the detail.
 - [SnsPublish][c-sns]: `SnsPublish`, the topic publish policy, and its live `SnsPublisher`
   (feature `sns`).
 - [subscribe_queue_to_topic][c-subscribe-queue]: `ConnectedSqsBroker::subscribe_queue_to_topic`,
-  a queue subscribed to a topic with raw message delivery.
+  a queue subscribed to a topic with raw message delivery, the topic granted the right to send
+  to it in the queue's access policy.
 - [fans_out_to][c-fans-out-to]: `SnsPublish::fans_out_to`, the queues an operator subscribed,
   named for a test (features `sns` and `testing`).
 

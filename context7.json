@@ -20,7 +20,7 @@
     "Chain the queue steps after the framework's at the mount site, `b.include(handler.batch(nonzero!(10)).wait(..))`, through the `SqsSubscription` trait in the prelude (page: Components > Subscriptions > SqsSubscription).",
     "Take a batch as a `&[T]` parameter and size it with `.batch(n)`: one `ReceiveMessage` call is one batch of at most ten messages (page: Components > Subscriptions > Batches).",
     "Cap redeliveries with `.max_attempts(n).dead_letter(queue)` right after `include`, always both halves, which become the queue's redrive policy (page: Components > Settlement > Dead letters).",
-    "Return `HandlerOutcome::retry_after(delay)` for a later retry: SQS hides the same message for the delay, up to 12 hours, and it keeps its receive count (page: Components > Settlement > retry_after).",
+    "Return `HandlerOutcome::retry_after(delay)` for a later retry: SQS hides the same message for the delay, within 12 hours of its receive, and it keeps its receive count (page: Components > Settlement > retry_after).",
     "Enable the `sns` feature and bind a reply with `.out_reply(SnsPublish::default())` to fan it out from a topic; the broker's default `SqsPublish` sends a reply to a queue (page: Components > SNS > SnsPublish).",
     "Set one FIFO message's group and deduplication id with the `group_id` and `deduplication_id` steps of `SqsPublishSteps`, or a position's group with `Publish::default().group_id(..)` (page: Components > Publishing > group_id).",
     "Bound a slot whose body names those steps as `Out<impl Publisher<Options = SqsPublishOptions>, Marker>`, and any other slot as `Out<impl Publisher, Marker>` (page: Components > Publishing > SqsPublishOptions).",

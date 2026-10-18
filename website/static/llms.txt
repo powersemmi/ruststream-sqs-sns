@@ -37,7 +37,7 @@ This site holds the guides, one page per component and the architecture of the c
 - [Batches](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/batches/): a slice handler over one `ReceiveMessage` call, at most ten messages
 - [FIFO](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/fifo/): a `.fifo` queue, which hands out each message group in order
 - [Outcomes](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/settlement/): what `ack`, `drop` and `retry` do to a message, one SQS call each
-- [retry_after](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/settlement/retry-after/): a retry that waits in the queue through the visibility timeout, up to 12 hours
+- [retry_after](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/settlement/retry-after/): a retry that waits in the queue through the visibility timeout, within 12 hours of the receive
 - [Dead letters](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/settlement/dead-letters/): `max_attempts` and `dead_letter` as the queue's redrive policy
 - [Delivery](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/delivery/): headers as SQS message attributes, read as a typed contract
 - [RECEIVE_COUNT_HEADER](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/delivery/receive-count/): the queue's receive count, so a handler can tell the last attempt
@@ -48,7 +48,7 @@ This site holds the guides, one page per component and the architecture of the c
 - [group_id](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/publishing/group-id/): the message group of a position, and the order in which a group is chosen
 - [deduplication_id](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/publishing/deduplication-id/): the idempotency key of one message on a FIFO destination
 - [SnsPublish](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/sns/): the topic publish policy behind the `sns` feature, which fans a reply out to every subscribed queue
-- [subscribe_queue_to_topic](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/sns/subscribe-queue-to-topic/): a queue subscribed to a topic with raw message delivery
+- [subscribe_queue_to_topic](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/sns/subscribe-queue-to-topic/): a queue subscribed to a topic with raw message delivery, the topic granted the right to send to it in the queue's access policy
 - [fans_out_to](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/sns/fans-out-to/): the queues an operator subscribed to a topic, named for a test
 - [SQS bindings](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/asyncapi/): the `sqs` and `sns` bindings of the AsyncAPI document behind the `asyncapi` feature
 - [Server](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/asyncapi/server/): the endpoint's host and port with the protocol `sqs`, never a credential
