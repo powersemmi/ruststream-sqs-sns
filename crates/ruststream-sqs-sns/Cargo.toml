@@ -97,3 +97,15 @@ name = "manual_guide_acknowledgement"
 path = "examples/manual/guide/acknowledgement.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_retries"
+path = "examples/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_retries"
+path = "examples/manual/guide/retries.rs"
+required-features = ["testing"]
+test = true
