@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkruststream_sqs_sns_website=self.webpackChunkruststream_sqs_sns_website||[]).push([["1928"],{6443(e,s,t){t.d(s,{AskAIWidget:()=>u});var n=t(6540),r=t(941);let u=(0,n.forwardRef)(function(e,s){return(0,n.useImperativeHandle)(s,()=>({open:()=>(0,r.gD)(),close:r.K3,openWithNewSession:e=>(0,r.gD)(e)})),null})}}]);
