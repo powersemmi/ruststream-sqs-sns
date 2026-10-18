@@ -557,6 +557,7 @@ mod tests {
     use aws_config::{BehaviorVersion, Region, SdkConfig};
 
     use super::*;
+    use crate::clients::Overrides;
 
     /// Content equality cannot tell a hand-over from a copy, so the buffer the framework wrote is
     /// identified by its address.
@@ -645,7 +646,7 @@ mod tests {
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new("us-east-1"))
             .build();
-        Clients::new(config, &Handle::current())
+        Clients::new(config, Overrides::default(), &Handle::current())
     }
 
     /// One delivery as the service hands it over, with `receives` as its

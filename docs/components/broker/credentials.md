@@ -18,8 +18,9 @@ The configuration follows the SDK's latest behaviour version.
 The connect also sets a per-attempt timeout of 25 seconds, above the 20 seconds a long poll waits.
 
 `from_config` takes an `aws_config::SdkConfig` the service builds itself: a named profile, a pinned behaviour version, its own HTTP client or credential provider.
-The broker uses that config as it is.
-The region, the credentials, the endpoint and the timeouts all come from it, and the broker's own `region` and `test_credentials` steps do not apply.
+The credentials, the timeouts and the rest of the SDK's settings come from that config.
+An [`endpoint`](./endpoint.md) or a `region` named on the broker replaces the config's own, and what the broker does not name stays as the config has it.
+`test_credentials` belongs to `new`: a prebuilt config signs with its own credential provider.
 The SDK sets no attempt timeout of its own, so a config without one lets every long poll run its full wait.
 A config with an attempt timeout under 20 seconds ends every long poll early, and each receive fails; the example sets 25 seconds, as `new` does.
 Transport security is the SDK's HTTPS client in both cases.

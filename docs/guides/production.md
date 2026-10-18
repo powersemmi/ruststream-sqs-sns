@@ -41,7 +41,7 @@ That request is the `GetQueueUrl` of the first subscription, at startup, so a se
 So the example builds it with `SdkConfig::builder()`, which does no I/O.
 The profile provider reads the `orders-service` profile on the first request; a profile with a `role_arn` assumes that role.
 The pinned behaviour version keeps the SDK's defaults from changing under the service when the SDK is updated.
-The broker uses the configuration as it is, so the configuration also carries the request timeout described [below](#timeouts-and-transport).
+The configuration also carries the request timeout described [below](#timeouts-and-transport): the broker keeps every setting of the configuration except an endpoint or a region named on the broker itself.
 The example needs two more dependencies:
 
 ```toml title="Cargo.toml"
@@ -71,8 +71,8 @@ The `orders` queue belongs to the infrastructure: Terraform, CloudFormation or t
 The descriptor leaves out `create_if_missing`, so a missing queue stops the service at startup instead of creating an empty one.
 It names its visibility, so the subscription does not read the queue's own timeout.
 
-On a broker built with `SqsBroker::new()`, [`endpoint`](../components/broker/endpoint.md) and [`region`](api:ruststream_sqs_sns::SqsBroker::region) point it at another endpoint, a VPC endpoint or a local stack.
-A configuration of your own names them with `endpoint_url` and `region` on the `SdkConfig` builder.
+[`endpoint`](../components/broker/endpoint.md) and [`region`](api:ruststream_sqs_sns::SqsBroker::region) point the broker at another endpoint, a VPC endpoint or a local stack.
+On a broker built with `from_config` they replace the configuration's own `endpoint_url` and `region`.
 The queue URLs SQS returns are rebased onto the endpoint.
 
 ## Timeouts and transport
@@ -118,7 +118,7 @@ Each feature adds its own:
 
 ## What the AsyncAPI document shows
 
-With the `asyncapi` feature, the service's AsyncAPI document names one [server](../components/asyncapi/server.md): the host of the broker's `endpoint`, or `sqs.amazonaws.com`.
+With the `asyncapi` feature, the service's AsyncAPI document names one [server](../components/asyncapi/server.md): the host of the broker's endpoint, or else the regional host of its region, such as `sqs.eu-west-1.amazonaws.com`.
 The document never holds a credential or a queue's ARN, so it can be published.
 
 The tests in the example file start the same app in process; the in-process SQS takes the region from the configuration and signs nothing.

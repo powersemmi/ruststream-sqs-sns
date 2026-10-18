@@ -28,13 +28,13 @@ use futures::future::lazy;
 #[cfg(feature = "testing")]
 use ruststream::testing::InProcess;
 use ruststream::{
-    Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, DescribeServer,
-    RetryDeclaration, ServerSpec, Subscribe,
+    Broker, BrokerMoves, ConnectedBroker, DeclareRetryError, DefaultPublish, RetryDeclaration,
+    Subscribe,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::clients::Clients;
+use crate::clients::{Clients, Overrides};
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process::{self, Bus};
@@ -45,6 +45,8 @@ use crate::queue::{Redrive, SqsQueue};
 #[cfg(feature = "sns")]
 use crate::sns::SnsPublisher;
 use crate::subscriber::SqsSubscriber;
+
+mod describe;
 
 /// The client state shared by the connected form and every handle derived from it.
 ///
@@ -473,8 +475,10 @@ impl SqsBroker {
 
     /// Uses an already built AWS config instead of resolving one from the environment.
     ///
-    /// The broker uses the config as it is, its timeouts included, so an attempt timeout under
-    /// 20 seconds ends every long poll early.
+    /// The broker keeps the config's settings, its timeouts included, so an attempt timeout
+    /// under 20 seconds ends every long poll early. An [`endpoint`](Self::endpoint) or a
+    /// [`region`](Self::region) named on the broker replaces the config's own in every client;
+    /// what the broker does not name stays as the config has it.
     ///
     /// A dedicated handler thread sends through clients of its own built from this config. An
     /// HTTP client the config names is shared by all of them, and so is its connection pool;
@@ -486,14 +490,16 @@ impl SqsBroker {
         }
     }
 
-    /// Overrides the service endpoint (a local stack for development). Queue URLs returned by
-    /// the service are rebased onto this endpoint.
+    /// Overrides the service endpoint (a local stack for development), the one of a config given
+    /// to [`from_config`](Self::from_config) included. Queue URLs returned by the service are
+    /// rebased onto this endpoint.
     pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
     }
 
-    /// Overrides the region.
+    /// Overrides the region, the one of a config given to [`from_config`](Self::from_config)
+    /// included.
     pub fn region(mut self, region: impl Into<String>) -> Self {
         self.region = Some(region.into());
         self
@@ -552,8 +558,12 @@ impl Broker for SqsBroker {
                     .endpoint
                     .clone()
                     .or_else(|| config.endpoint_url().map(str::to_owned));
+                let overrides = Overrides {
+                    endpoint: self.endpoint.clone(),
+                    region: self.region.clone().map(Region::new),
+                };
                 Ok::<_, SqsError>(Arc::new(Core::new(Transport::Aws(Aws {
-                    clients: Clients::new(config, &runtime),
+                    clients: Clients::new(config, overrides, &runtime),
                     runtime,
                     endpoint,
                     queue_urls: Mutex::new(HashMap::new()),
@@ -638,20 +648,6 @@ impl InProcess for SqsBroker {
 
 #[cfg(feature = "testing")]
 ruststream::register_testable_broker!(SqsBroker);
-
-impl DescribeServer for SqsBroker {
-    fn describe_server(&self) -> ServerSpec {
-        // An endpoint that carries no host at all (an empty override) says nothing about where
-        // clients connect, so the public service is the honest answer for the document.
-        let host = self
-            .endpoint
-            .as_deref()
-            .map(ServerSpec::host_from_url)
-            .filter(|host| !host.is_empty())
-            .unwrap_or_else(|| "sqs.amazonaws.com".to_owned());
-        ServerSpec::new(host, "sqs")
-    }
-}
 
 /// The typed witness that `connect` succeeded: holds the live SDK clients directly.
 #[derive(Debug)]
@@ -945,66 +941,171 @@ impl DefaultPublish for ConnectedSqsBroker {
 
 #[cfg(test)]
 mod tests {
-    use ruststream::DescribeServer;
+    use std::future::Future;
+    use std::thread;
 
-    use super::{Duration, SqsBroker, parse_visibility, resource_name};
+    use aws_config::{BehaviorVersion, Region, SdkConfig};
+    #[cfg(feature = "sns")]
+    use aws_sdk_sns::Client as SnsClient;
+    use aws_sdk_sqs::Client as SqsClient;
+    use aws_sdk_sqs::config::{Credentials, SharedCredentialsProvider};
+    use ruststream::Broker;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+    use tokio::runtime::Builder;
+    use tokio::time::timeout;
 
-    /// The host a description carries for `endpoint`.
-    fn described(endpoint: &str) -> String {
-        SqsBroker::new()
-            .endpoint(endpoint)
-            .describe_server()
-            .host
-            .expect("a configured endpoint describes a host")
+    use super::{
+        Aws, ConnectedSqsBroker, Duration, SqsBroker, Transport, parse_visibility, resource_name,
+    };
+
+    /// An address nothing listens on: a request that goes there is refused.
+    const NOWHERE: &str = "http://127.0.0.1:9";
+
+    /// A prebuilt config that names a region and an endpoint of its own.
+    fn prebuilt(region: &str, endpoint: &str) -> SdkConfig {
+        SdkConfig::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new(region.to_owned()))
+            .endpoint_url(endpoint)
+            .credentials_provider(SharedCredentialsProvider::new(Credentials::new(
+                "test", "test", None, None, "test",
+            )))
+            .build()
     }
 
-    #[test]
-    fn a_description_carries_the_host_and_port_of_every_endpoint_form() {
-        assert_eq!(described("http://localstack:4566"), "localstack:4566");
-        assert_eq!(described("localstack:4566"), "localstack:4566");
-        assert_eq!(
-            described("https://sqs.eu-west-1.amazonaws.com"),
-            "sqs.eu-west-1.amazonaws.com"
+    /// A listener standing in for an endpoint, and the URL that names it.
+    async fn endpoint() -> (TcpListener, String) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a local port binds");
+        let url = format!(
+            "http://{}",
+            listener
+                .local_addr()
+                .expect("a bound listener has an address")
         );
-        assert_eq!(
-            described("http://localstack:4566/queues/"),
-            "localstack:4566"
-        );
-        assert_eq!(
-            described("http://user:pass@localstack:4566"),
-            "localstack:4566"
-        );
+        (listener, url)
     }
 
-    #[test]
-    fn a_description_carries_neither_a_scheme_nor_credentials() {
-        for endpoint in [
-            "http://localstack:4566",
-            "localstack:4566",
-            "https://sqs.eu-west-1.amazonaws.com",
-            "http://localstack:4566/queues/",
-            "http://user:pass@localstack:4566",
-        ] {
-            let host = described(endpoint);
-            assert!(
-                !host.contains("://") && !host.contains('@'),
-                "the description of {endpoint:?} published {host:?}",
-            );
+    fn aws(connected: &ConnectedSqsBroker) -> &Aws {
+        match &connected.core.transport {
+            Transport::Aws(aws) => aws,
+            #[cfg(feature = "testing")]
+            Transport::InProcess(_) => unreachable!("the broker connected to AWS"),
         }
     }
 
-    #[test]
-    fn a_path_that_carries_an_at_sign_is_not_mistaken_for_credentials() {
-        // The cuts are ordered for this case: taking the credentials out first would leave the
-        // tail of the path as the host.
-        assert_eq!(described("https://localstack:4566/a@b"), "localstack:4566");
+    /// The lowercased head of the first request `request` makes reach `listener`.
+    async fn request_head<Sent>(listener: TcpListener, request: Sent) -> String
+    where
+        Sent: Future + Send + 'static,
+        Sent::Output: Send,
+    {
+        let sending = tokio::spawn(request);
+        let (mut socket, _) = timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("no request reached the endpoint the broker should send to")
+            .expect("the listener accepts");
+        let mut head = Vec::new();
+        let mut chunk = [0; 4096];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = socket.read(&mut chunk).await.expect("the request reads");
+            assert_ne!(
+                read, 0,
+                "the connection closed before the request head ended"
+            );
+            head.extend_from_slice(&chunk[..read]);
+        }
+        sending.abort();
+        String::from_utf8_lossy(&head).to_lowercase()
     }
 
-    #[test]
-    fn the_public_service_is_described_when_no_endpoint_is_configured() {
-        let described = SqsBroker::new().describe_server();
-        assert_eq!(described.host.as_deref(), Some("sqs.amazonaws.com"));
-        assert_eq!(described.protocol, "sqs");
+    /// The head of the first SQS request the connected broker sends, as `listener` receives it.
+    async fn sqs_request(listener: TcpListener, connected: &ConnectedSqsBroker) -> String {
+        request_head(
+            listener,
+            aws(connected).clients.sqs(SqsClient::list_queues).send(),
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_endpoint_and_region_named_on_the_broker_override_a_prebuilt_config() {
+        let (listener, named) = endpoint().await;
+        let connected = SqsBroker::from_config(prebuilt("us-east-1", NOWHERE))
+            .endpoint(named)
+            .region("eu-west-1")
+            .connect()
+            .await
+            .expect("the broker connects");
+        let head = sqs_request(listener, &connected).await;
+        assert!(head.contains("/eu-west-1/sqs/aws4_request"), "{head}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_named_endpoint_keeps_the_region_of_a_prebuilt_config() {
+        let (listener, named) = endpoint().await;
+        let connected = SqsBroker::from_config(prebuilt("ap-south-1", NOWHERE))
+            .endpoint(named)
+            .connect()
+            .await
+            .expect("the broker connects");
+        let head = sqs_request(listener, &connected).await;
+        assert!(head.contains("/ap-south-1/sqs/aws4_request"), "{head}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_named_region_keeps_the_endpoint_of_a_prebuilt_config() {
+        let (listener, configured) = endpoint().await;
+        let connected = SqsBroker::from_config(prebuilt("us-east-1", &configured))
+            .region("eu-west-1")
+            .connect()
+            .await
+            .expect("the broker connects");
+        let head = sqs_request(listener, &connected).await;
+        assert!(head.contains("/eu-west-1/sqs/aws4_request"), "{head}");
+    }
+
+    /// A thread of another runtime builds clients of its own, and they honour the broker too.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_thread_of_another_runtime_sends_where_the_broker_names() {
+        let (listener, named) = endpoint().await;
+        let connected = SqsBroker::from_config(prebuilt("us-east-1", NOWHERE))
+            .endpoint(named)
+            .region("eu-west-1")
+            .connect()
+            .await
+            .expect("the broker connects");
+        let request = thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let runtime = Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("a current-thread runtime builds");
+                    runtime.block_on(async { aws(&connected).clients.sqs(SqsClient::list_queues) })
+                })
+                .join()
+                .expect("the other thread finished")
+        });
+        let head = request_head(listener, request.send()).await;
+        assert!(head.contains("/eu-west-1/sqs/aws4_request"), "{head}");
+    }
+
+    #[cfg(feature = "sns")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_sns_client_honours_the_broker_as_well() {
+        let (listener, named) = endpoint().await;
+        let connected = SqsBroker::from_config(prebuilt("us-east-1", NOWHERE))
+            .endpoint(named)
+            .region("eu-west-1")
+            .connect()
+            .await
+            .expect("the broker connects");
+        let send = aws(&connected).clients.sns(SnsClient::list_topics).send();
+        let head = request_head(listener, send).await;
+        assert!(head.contains("/eu-west-1/sns/aws4_request"), "{head}");
     }
 
     /// A framework destination carries dots freely and neither service takes them in a name, so

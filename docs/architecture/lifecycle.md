@@ -38,7 +38,7 @@ reaches the connection the runtime opened. The runtime connects the broker when 
 Connect loads the AWS configuration through the SDK's [default chain](../components/broker/credentials.md),
 with the [endpoint and region](../components/broker/endpoint.md) the broker names, and sets a
 25-second timeout per attempt, above the 20-second long poll. A broker built with `from_config`
-takes its `SdkConfig` as it is, timeouts included. Then connect builds the SDK clients. The SDK fetches credentials
+keeps its `SdkConfig`, timeouts included, except an endpoint or a region the broker names. Then connect builds the SDK clients. The SDK fetches credentials
 lazily, on the first request. In a service that request is the first subscription's
 `GetQueueUrl`, so a bad credential fails the start on subscribe.
 

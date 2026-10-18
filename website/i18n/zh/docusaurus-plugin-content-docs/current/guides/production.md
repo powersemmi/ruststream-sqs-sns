@@ -42,7 +42,8 @@ SDK 在签名第一个请求时读取凭证。
 所以示例用不做 I/O 的 `SdkConfig::builder()` 构建它。
 profile 提供者在第一次请求时读取 `orders-service` profile；带有 `role_arn` 的 profile 会承担该角色。
 固定的行为版本让 SDK 更新时，服务所用的 SDK 默认值不随之改变。
-Broker 原样使用这份配置，所以配置还要携带[下文](#timeouts-and-transport)所说的请求超时。
+配置还要携带[下文](#timeouts-and-transport)所说的请求超时。
+Broker 保留配置的全部设置，只有在 Broker 自身上指定的端点和区域会取代配置中的值。
 示例还需要两个依赖：
 
 ```toml title="Cargo.toml"
@@ -72,8 +73,8 @@ aws-sdk-sqs = "1"
 描述符不用 `create_if_missing`，所以缺失的队列会让服务在启动时停止，而不是创建一个空队列。
 描述符指定了可见性，所以订阅不读取队列自己的超时。
 
-对于用 `SqsBroker::new()` 构建的 Broker，[`endpoint`](../components/broker/endpoint.md) 和 [`region`](api:ruststream_sqs_sns::SqsBroker::region) 让它指向另一个端点、VPC 端点或本地环境。
-你自己的配置在 `SdkConfig` 构建器上用 `endpoint_url` 和 `region` 指定它们。
+[`endpoint`](../components/broker/endpoint.md) 和 [`region`](api:ruststream_sqs_sns::SqsBroker::region) 让 Broker 指向另一个端点、VPC 端点或本地环境。
+对于用 `from_config` 构建的 Broker，它们会取代配置自身的 `endpoint_url` 和 `region`。
 SQS 返回的队列 URL 会被改写到该端点上。
 
 ## 超时与传输 {/* #timeouts-and-transport */}
@@ -119,7 +120,7 @@ SDK 按自己的重试策略重试失败的请求。
 
 ## AsyncAPI 文档展示什么 {/* #what-the-asyncapi-document-shows */}
 
-启用 `asyncapi` feature 时，服务的 AsyncAPI 文档指定一个[服务器](../components/asyncapi/server.md)：Broker 的 `endpoint` 所在主机，或者 `sqs.amazonaws.com`。
+启用 `asyncapi` feature 时，服务的 AsyncAPI 文档指定一个[服务器](../components/asyncapi/server.md)：Broker 端点所在的主机；没有端点时，是其区域的区域主机，例如 `sqs.eu-west-1.amazonaws.com`。
 文档从不包含凭证或队列的 ARN，因此可以公开发布。
 
 示例文件中的测试在进程内启动同一个应用；进程内 SQS 从配置中获取区域，不签名任何东西。

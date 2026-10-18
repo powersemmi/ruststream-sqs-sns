@@ -6,8 +6,8 @@
 //! the broker's own runtime for as long as that thread computes. Each runtime therefore sends
 //! through clients of its own. The broker's runtime, every worker thread of it included, uses the
 //! set `connect` built. Any other runtime uses a set built for its thread on the first request,
-//! from the same `SdkConfig`: the credentials provider and its cache are shared, and only the HTTP
-//! client and its pool are the thread's own.
+//! from the same `SdkConfig` and the same overrides: the credentials provider and its cache are
+//! shared, and only the HTTP client and its pool are the thread's own.
 //!
 //! A thread decides once, on its first request through a broker, whether it runs that broker's
 //! runtime, and keeps the answer: a thread that later runs a different runtime keeps sending
@@ -17,10 +17,13 @@ use std::cell::RefCell;
 use std::ptr;
 use std::sync::{Arc, Weak};
 
-use aws_config::SdkConfig;
+use aws_config::{Region, SdkConfig};
 #[cfg(feature = "sns")]
 use aws_sdk_sns::Client as SnsClient;
+#[cfg(feature = "sns")]
+use aws_sdk_sns::config::Builder as SnsConfig;
 use aws_sdk_sqs::Client as SqsClient;
+use aws_sdk_sqs::config::Builder as SqsConfig;
 use tokio::runtime::{Handle, Id};
 
 /// The SDK clients of one broker, and the recipe for a thread's own set.
@@ -29,7 +32,20 @@ pub(crate) struct Clients {
     runtime: Id,
     /// What a thread's own set is built from, so it shares the credentials and their cache.
     config: SdkConfig,
+    overrides: Overrides,
     home: ClientSet,
+}
+
+/// What the broker names over the `SdkConfig`: each value it names replaces the config's own in
+/// every client, and a value it leaves out stays as the config has it.
+///
+/// The values go onto each service's client config rather than into the `SdkConfig`, because the
+/// service config built from an `SdkConfig` prefers a service-specific endpoint from the
+/// environment (`AWS_ENDPOINT_URL_SQS`) to the shared one, and the broker's own word is final.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Overrides {
+    pub(crate) endpoint: Option<String>,
+    pub(crate) region: Option<Region>,
 }
 
 /// One SDK client per service this build talks to.
@@ -42,11 +58,24 @@ pub(crate) struct ClientSet {
 impl ClientSet {
     /// Clients with an HTTP client and a connection pool of their own: the config leaves the HTTP
     /// client to the SDK, which builds a fresh one for every client.
-    fn new(config: &SdkConfig) -> Self {
-        Self {
-            sqs: SqsClient::new(config),
+    fn new(config: &SdkConfig, overrides: &Overrides) -> Self {
+        let mut sqs = SqsConfig::from(config);
+        #[cfg(feature = "sns")]
+        let mut sns = SnsConfig::from(config);
+        if let Some(endpoint) = &overrides.endpoint {
+            sqs.set_endpoint_url(Some(endpoint.clone()));
             #[cfg(feature = "sns")]
-            sns: SnsClient::new(config),
+            sns.set_endpoint_url(Some(endpoint.clone()));
+        }
+        if let Some(region) = &overrides.region {
+            sqs.set_region(Some(region.clone()));
+            #[cfg(feature = "sns")]
+            sns.set_region(Some(region.clone()));
+        }
+        Self {
+            sqs: SqsClient::from_conf(sqs.build()),
+            #[cfg(feature = "sns")]
+            sns: SnsClient::from_conf(sns.build()),
         }
     }
 }
@@ -74,12 +103,14 @@ thread_local! {
 }
 
 impl Clients {
-    /// The clients `connect` builds on `runtime`, from `config`.
-    pub(crate) fn new(config: SdkConfig, runtime: &Handle) -> Arc<Self> {
+    /// The clients `connect` builds on `runtime`, from `config` with what `overrides` names
+    /// over it.
+    pub(crate) fn new(config: SdkConfig, overrides: Overrides, runtime: &Handle) -> Arc<Self> {
         Arc::new(Self {
             runtime: runtime.id(),
-            home: ClientSet::new(&config),
+            home: ClientSet::new(&config, &overrides),
             config,
+            overrides,
         })
     }
 
@@ -141,7 +172,7 @@ impl Clients {
         let placement = if current.id() == self.runtime {
             Placement::Home
         } else {
-            Placement::Own(ClientSet::new(&self.config))
+            Placement::Own(ClientSet::new(&self.config, &self.overrides))
         };
         let mut entries = entries.borrow_mut();
         // A broker that is gone leaves its entry behind; the thread drops such entries when it
@@ -174,14 +205,14 @@ mod tests {
     use tokio::runtime::{Builder, Handle};
     use tokio::task::JoinError;
 
-    use super::{ClientSet, Clients};
+    use super::{ClientSet, Clients, Overrides};
 
     fn clients() -> Arc<Clients> {
         let config = SdkConfig::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new("us-east-1"))
             .build();
-        Clients::new(config, &Handle::current())
+        Clients::new(config, Overrides::default(), &Handle::current())
     }
 
     /// The address of the set a request from here goes through.

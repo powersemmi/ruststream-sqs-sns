@@ -53,7 +53,7 @@ tracing.workspace = true
 ruststream = { workspace = true, features = ["asyncapi", "conformance", "testing", "macros", "json"] }
 serde.workspace = true
 serde_json = "1"
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 
 # The examples are the sources of the documentation site's code blocks: each one compiles, and
 # the ones a page shows carry the tests that prove what the page says. They are grouped by the
