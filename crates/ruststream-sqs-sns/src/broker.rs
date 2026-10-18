@@ -103,6 +103,9 @@ pub(crate) struct Aws {
     /// Topic-name -> ARN cache for the SNS publisher.
     #[cfg(feature = "sns")]
     pub(crate) topic_arns: Mutex<HashMap<String, String>>,
+    /// Held while a queue's access policy is read, merged and written back.
+    #[cfg(feature = "sns")]
+    pub(crate) policy_writes: Mutex<()>,
 }
 
 impl Core {
@@ -556,6 +559,8 @@ impl Broker for SqsBroker {
                     queue_urls: Mutex::new(HashMap::new()),
                     #[cfg(feature = "sns")]
                     topic_arns: Mutex::new(HashMap::new()),
+                    #[cfg(feature = "sns")]
+                    policy_writes: Mutex::new(()),
                 }))))
             })
             .await?
@@ -679,10 +684,21 @@ impl ConnectedSqsBroker {
     /// wires them itself does so from a startup hook, on a clone of the app's broker: a clone
     /// connects through the connection the app's broker already holds.
     ///
+    /// SNS delivers to a queue only when the queue's access policy lets the SNS service send to
+    /// it on behalf of the topic. The call adds that statement to the queue's policy first,
+    /// scoped to this topic through `aws:SourceArn`, and keeps every statement already there. A
+    /// policy that already grants the topic is not written again, so the call is safe on every
+    /// start. Two services granting different topics on one queue at the same moment can lose
+    /// one of the grants, because SQS offers no conditional write of a policy.
+    ///
+    /// The caller needs `sns:CreateTopic` and `sns:Subscribe` on the topic, and
+    /// `sqs:GetQueueUrl`, `sqs:GetQueueAttributes` and `sqs:SetQueueAttributes` on the queue.
+    ///
     /// # Errors
     ///
-    /// Returns [`SqsError`] when the topic or queue cannot be resolved or the subscription
-    /// call fails.
+    /// Returns [`SqsError`] when the topic or queue cannot be resolved, the queue's access
+    /// policy cannot be read or written ([`SqsError::QueuePolicy`]), or the subscription call
+    /// fails.
     ///
     /// # Examples
     ///
@@ -747,6 +763,9 @@ impl ConnectedSqsBroker {
         let topic_arn = aws.topic_arn(topic).await?;
         let queue_url = aws.queue_url(queue).await?;
         let queue_arn = aws.queue_arn(queue, &queue_url).await?;
+        // The grant goes first, so the subscription never exists while the topic cannot deliver.
+        aws.grant_topic_send((topic, queue), &queue_url, &queue_arn, &topic_arn)
+            .await?;
         let subscribed = aws
             .clients
             .sns(SnsClient::subscribe)

@@ -55,6 +55,22 @@ pub enum SqsError {
         source: Box<dyn StdError + Send + Sync>,
     },
 
+    /// Granting a topic the right to deliver into a queue failed.
+    ///
+    /// SNS delivers to a queue only when the queue's access policy allows it, so a subscription
+    /// whose grant could not be written would drop every notification.
+    #[cfg(feature = "sns")]
+    #[error("granting topic '{topic}' the right to send to queue '{queue}' failed: {source}")]
+    QueuePolicy {
+        /// The topic the grant is for.
+        topic: String,
+        /// The queue whose access policy carries the grant.
+        queue: String,
+        /// The SDK's failure, with its cause chain, or why the queue's policy could not be read.
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
+
     /// The handle is used before `connect` filled the shared connection, or after `shutdown`.
     #[error("sqs broker is not connected")]
     NotConnected,

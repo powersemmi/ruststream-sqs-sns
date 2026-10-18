@@ -27,11 +27,13 @@ use bytes::Bytes;
 use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Str};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::clients::Clients;
 use crate::error::sdk_err;
 #[cfg(feature = "testing")]
 use crate::in_process::BusReceipt;
+use crate::queue::whole_seconds;
 
 /// Header carrying the partition key, mapped onto the FIFO message group id.
 ///
@@ -42,6 +44,32 @@ pub const PARTITION_KEY_HEADER: &str = "partition-key";
 /// Header exposing the approximate receive count on received messages.
 pub const RECEIVE_COUNT_HEADER: &str = "sqs-receive-count";
 
+/// How long SQS keeps a received message invisible at most, counted from the receive. Extending
+/// the visibility does not restart it, and a change that reaches past it is refused.
+pub(crate) const VISIBILITY_WINDOW: Duration = Duration::from_hours(12);
+
+/// What a visibility change leaves unclaimed at the end of [`VISIBILITY_WINDOW`]. The window is
+/// counted from before the receive was sent, which starts it earlier than the queue starts its own,
+/// and the margin also covers the change call's own trip to the queue and the SDK's retries of it,
+/// so the change lands inside the window rather than being refused at its edge.
+pub(crate) const WINDOW_MARGIN: Duration = Duration::from_secs(10);
+
+/// How a received delivery is held invisible: the timeout its extension re-arms, and when the
+/// receive that handed it over was sent.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Hold {
+    pub(crate) visibility: Duration,
+    pub(crate) received: Instant,
+}
+
+/// The whole seconds of the visibility window a delivery received at `received` can still claim.
+fn window_left(received: Instant) -> u64 {
+    VISIBILITY_WINDOW
+        .saturating_sub(WINDOW_MARGIN)
+        .saturating_sub(received.elapsed())
+        .as_secs()
+}
+
 /// Marker attribute set when the payload travels base64-encoded (SQS bodies are text; binary
 /// payloads have no other faithful form).
 pub(crate) const ENCODING_ATTRIBUTE: &str = "ruststream-payload-encoding";
@@ -50,7 +78,7 @@ pub(crate) const ENCODING_ATTRIBUTE: &str = "ruststream-payload-encoding";
 ///
 /// `ack` deletes the message; `nack(requeue = true)` zeroes its visibility so it redelivers
 /// immediately; `nack_after(delay)` sets the visibility to the delay, so deferred retry is
-/// native. `nack(requeue = false)` deletes: SQS has no drop verb short of deletion - poison
+/// native, up to the end of the twelve hours SQS keeps a received message invisible. `nack(requeue = false)` deletes: SQS has no drop verb short of deletion - poison
 /// routing belongs to the queue's redrive policy, driven by repeated receives. The one exception
 /// is the delivery that has used up that policy's receives: there a discard returns the message
 /// instead, because being received once more is how SQS carries it to the dead-letter queue, and
@@ -66,6 +94,9 @@ pub struct SqsMessage {
     /// The `maxReceiveCount` the registration's declaration wrote onto the queue, where it
     /// declared one.
     redrive_max: Option<NonZeroU32>,
+    /// When the receive that handed this delivery over was sent: the queue's twelve hours of
+    /// invisibility run from about then.
+    received: Instant,
     receipt: Receipt,
 }
 
@@ -129,7 +160,7 @@ impl SqsMessage {
         clients: Arc<Clients>,
         queue_url: String,
         receipt: String,
-        visibility: Duration,
+        hold: Hold,
         redrive_max: Option<NonZeroU32>,
     ) -> Self {
         let (payload, headers) = decode_message(message);
@@ -143,13 +174,14 @@ impl SqsMessage {
             clients.home().sqs.clone(),
             queue_url.clone(),
             receipt.clone(),
-            visibility,
+            hold,
         ));
         Self {
             payload,
             headers,
             receives: receives_of(message),
             redrive_max,
+            received: hold.received,
             receipt: Receipt::Aws(AwsReceipt {
                 clients,
                 queue_url,
@@ -173,7 +205,17 @@ impl SqsMessage {
             headers,
             receives: receives_of(message),
             redrive_max,
+            received: receipt.received(),
             receipt: Receipt::InProcess(receipt),
+        }
+    }
+
+    /// The queue this delivery came from, as the logs name it.
+    fn queue(&self) -> &str {
+        match &self.receipt {
+            Receipt::Aws(aws) => &aws.queue_url,
+            #[cfg(feature = "testing")]
+            Receipt::InProcess(receipt) => receipt.queue(),
         }
     }
 
@@ -283,11 +325,24 @@ impl IncomingMessage for SqsMessage {
 
     async fn nack_after(self, delay: Duration) -> Result<(), AckError> {
         self.stop_extending();
-        // Setting the visibility to the delay is the native deferred retry (capped at the
-        // protocol's 12 hours). SQS counts whole seconds, so a fraction rounds up: rounding down
-        // would redeliver before the delay the handler asked for.
-        let seconds = delay.as_secs() + u64::from(delay.subsec_nanos() > 0);
-        let seconds = i32::try_from(seconds.min(43_200)).unwrap_or(43_200);
+        // Setting the visibility to the delay is the native deferred retry. SQS counts whole
+        // seconds, so a fraction rounds up: rounding down would redeliver before the delay the
+        // handler asked for.
+        let requested = whole_seconds(delay);
+        // The queue refuses a change past twelve hours from the receive, and a refused change
+        // would bring the delivery back as soon as its last extension lapses. The end of the
+        // window is the latest the queue allows, so the delay is shortened to it.
+        let left = window_left(self.received);
+        if requested > left {
+            tracing::warn!(
+                queue = self.queue(),
+                requested_secs = requested,
+                granted_secs = left,
+                "a deferred retry reaches past the twelve hours SQS keeps a received message \
+                 invisible; the delivery comes back when they run out"
+            );
+        }
+        let seconds = i32::try_from(requested.min(left)).unwrap_or(i32::MAX);
         self.set_visibility(seconds).await
     }
 
@@ -296,38 +351,90 @@ impl IncomingMessage for SqsMessage {
     }
 }
 
+/// How often a held delivery's `visibility` is re-armed: halfway through it, which leaves the
+/// other half for the call to reach the queue.
+///
+/// There is no floor. A descriptor takes whole seconds from one up, so the shortest period is half
+/// a second; a floor of a second would land the re-arm of a one-second timeout at the moment it
+/// lapses, where it races the queue handing the message to another consumer.
+pub(crate) fn extension_period(visibility: Duration) -> Duration {
+    visibility / 2
+}
+
 /// Keeps a message invisible while its handle is alive: re-arms the visibility to `visibility`
-/// every half period. Aborted on settle/drop; a failed extension is logged and retried on the
-/// next tick (the message may redeliver, which at-least-once permits).
+/// every [`extension_period`]. Aborted on settle/drop; a failed extension is logged and retried on
+/// the next tick (the message may redeliver, which at-least-once permits).
 ///
 /// A queue configured with no invisibility at all has nothing to extend, so the task ends
 /// instead of re-arming a zero once a second for as long as the handler runs.
+///
+/// SQS keeps a received message invisible for at most twelve hours from the receive. The last
+/// extension reaches the end of that window and the task ends there, with a warning: past it
+/// the queue hands the message to another consumer while the handler still holds it.
 async fn extend_visibility(
     client: Client,
     queue_url: String,
     receipt: String,
-    visibility: Duration,
+    Hold {
+        visibility,
+        received,
+    }: Hold,
 ) {
     if visibility.is_zero() {
         return;
     }
-    let period = (visibility / 2).max(Duration::from_secs(1));
-    let seconds = i32::try_from(visibility.as_secs().min(43_200)).unwrap_or(43_200);
+    let period = extension_period(visibility);
+    let full = visibility.as_secs();
     loop {
         tokio::time::sleep(period).await;
-        let outcome = client
-            .change_message_visibility()
-            .queue_url(&queue_url)
-            .receipt_handle(&receipt)
-            .visibility_timeout(seconds)
-            .send()
-            .await;
-        if let Err(err) = outcome {
-            tracing::debug!(
+        let Extension { seconds, last } = extension(full, window_left(received));
+        if seconds > 0 {
+            let outcome = client
+                .change_message_visibility()
+                .queue_url(&queue_url)
+                .receipt_handle(&receipt)
+                .visibility_timeout(i32::try_from(seconds).unwrap_or(i32::MAX))
+                .send()
+                .await;
+            if let Err(err) = outcome {
+                tracing::debug!(
+                    queue_url = %queue_url,
+                    error = %aws_sdk_sqs::error::DisplayErrorContext(&err),
+                    "sqs visibility extension failed"
+                );
+            }
+        }
+        if last {
+            tracing::warn!(
                 queue_url = %queue_url,
-                error = %aws_sdk_sqs::error::DisplayErrorContext(&err),
-                "sqs visibility extension failed"
+                "a handler has held a delivery for the twelve hours SQS keeps a received message \
+                 invisible; the queue hands it out again when they run out"
             );
+            return;
+        }
+    }
+}
+
+/// One re-arm of a held delivery's visibility.
+#[derive(Debug, PartialEq, Eq)]
+struct Extension {
+    /// The seconds the re-arm asks for.
+    seconds: u64,
+    /// Whether it reaches the end of the visibility window, so no later re-arm can move it.
+    last: bool,
+}
+
+/// The re-arm of a `full` timeout when `left` seconds of the visibility window remain.
+const fn extension(full: u64, left: u64) -> Extension {
+    if full < left {
+        Extension {
+            seconds: full,
+            last: false,
+        }
+    } else {
+        Extension {
+            seconds: left,
+            last: true,
         }
     }
 }
@@ -557,9 +664,50 @@ mod tests {
             offline_clients(),
             "http://localhost:4566/000000000000/queue".to_owned(),
             "receipt".to_owned(),
-            Duration::from_secs(30),
+            Hold {
+                visibility: Duration::from_secs(30),
+                received: Instant::now(),
+            },
             redrive_max.and_then(NonZeroU32::new),
         )
+    }
+
+    /// The window runs from the receive, less the margin a change call needs to land inside it.
+    #[tokio::test(start_paused = true)]
+    async fn the_visibility_window_runs_from_the_receive() {
+        let received = Instant::now();
+        assert_eq!(window_left(received), 12 * 60 * 60 - 10);
+        tokio::time::advance(Duration::from_hours(1)).await;
+        assert_eq!(window_left(received), 11 * 60 * 60 - 10);
+        tokio::time::advance(Duration::from_hours(11)).await;
+        assert_eq!(window_left(received), 0, "nothing is left past the window");
+    }
+
+    /// A held delivery is re-armed to its full timeout while the window has room for it, and to
+    /// the end of the window once it does not, after which nothing can move it.
+    #[test]
+    fn the_extension_stops_at_the_end_of_the_window() {
+        assert_eq!(
+            extension(30, 600),
+            Extension {
+                seconds: 30,
+                last: false
+            }
+        );
+        assert_eq!(
+            extension(30, 12),
+            Extension {
+                seconds: 12,
+                last: true
+            }
+        );
+        assert_eq!(
+            extension(30, 0),
+            Extension {
+                seconds: 0,
+                last: true
+            }
+        );
     }
 
     /// The runtime picks the native path off this flag, so a delivery that can change its own

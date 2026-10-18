@@ -26,6 +26,16 @@ use crate::subscriber::SqsSubscriber;
 /// The protocol cap on long polling.
 const MAX_WAIT: Duration = Duration::from_secs(20);
 
+/// `duration` in the whole seconds SQS counts a timeout in, rounded up: rounding down would make
+/// a message visible before the time it was asked to stay hidden for.
+pub(crate) const fn whole_seconds(duration: Duration) -> u64 {
+    if duration.subsec_nanos() > 0 {
+        duration.as_secs() + 1
+    } else {
+        duration.as_secs()
+    }
+}
+
 /// The registration's retry declaration in the queue's own vocabulary.
 ///
 /// A redrive policy is one setting with two halves: after `max_receive_count` receives SQS moves
@@ -137,6 +147,9 @@ impl SqsQueue {
 
     /// The visibility timeout requested per receive; the crate extends it in the background
     /// while a handler holds the message. Defaults to the queue's configured timeout.
+    ///
+    /// SQS takes whole seconds from one second to twelve hours. A value outside that range is
+    /// rejected before any I/O, and a fraction of a second rounds up to the next whole second.
     pub fn visibility(mut self, visibility: Duration) -> Self {
         self.visibility = Some(visibility);
         self
@@ -160,8 +173,10 @@ impl SqsQueue {
         self.wait
     }
 
+    /// The visibility timeout as SQS is asked for it, in whole seconds.
     pub(crate) fn visibility_value(&self) -> Option<Duration> {
         self.visibility
+            .map(|visibility| Duration::from_secs(whole_seconds(visibility)))
     }
 
     pub(crate) fn create_value(&self) -> bool {
@@ -231,7 +246,9 @@ impl SqsQueue {
             queue: QueueObject {
                 name: &self.queue,
                 fifo_queue: is_fifo(&self.queue),
-                visibility_timeout: self.visibility.map(|visibility| visibility.as_secs()),
+                visibility_timeout: self
+                    .visibility_value()
+                    .map(|visibility| visibility.as_secs()),
                 receive_message_wait_time: self.wait.as_secs(),
             },
         };
@@ -253,7 +270,7 @@ impl SqsQueue {
             ));
         }
         if let Some(visibility) = self.visibility
-            && (visibility.is_zero() || visibility > Duration::from_hours(12))
+            && (visibility < Duration::from_secs(1) || visibility > Duration::from_hours(12))
         {
             return Err(SqsError::InvalidQueue(
                 "visibility must be within 1s..=12h".into(),
@@ -490,6 +507,37 @@ mod tests {
             ),
             "the refusal names the missing half",
         );
+    }
+
+    #[test]
+    fn sub_second_visibility_is_rejected_before_io() {
+        assert!(matches!(
+            SqsQueue::new("q")
+                .visibility(Duration::from_millis(999))
+                .validate(),
+            Err(SqsError::InvalidQueue(_))
+        ));
+        assert!(
+            SqsQueue::new("q")
+                .visibility(Duration::from_secs(1))
+                .validate()
+                .is_ok(),
+            "one second is the shortest timeout SQS takes"
+        );
+    }
+
+    /// The value every consumer of the setting reads (the receive, the extender, the in-process
+    /// queue and the document) is the whole number of seconds SQS is asked for.
+    #[test]
+    fn a_fractional_visibility_rounds_up_to_whole_seconds() {
+        let held = |millis| {
+            SqsQueue::new("q")
+                .visibility(Duration::from_millis(millis))
+                .visibility_value()
+        };
+        assert_eq!(held(1_500), Some(Duration::from_secs(2)));
+        assert_eq!(held(2_000), Some(Duration::from_secs(2)));
+        assert_eq!(SqsQueue::new("q").visibility_value(), None);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::broker::resource_name;
-use crate::message::{decode_message, is_service_text};
+use crate::message::{VISIBILITY_WINDOW, decode_message, is_service_text};
 use crate::publisher::{FifoSettings, is_fifo};
 
 /// The visibility timeout SQS gives a queue created without one.
@@ -69,6 +69,8 @@ pub(crate) struct Outbound {
 pub(crate) struct Received {
     pub(crate) message: AwsMessage,
     pub(crate) receipt: u64,
+    /// When the receive handed it over: its twelve hours of invisibility run from here.
+    pub(crate) at: Instant,
 }
 
 /// The in-process account one connected broker reaches.
@@ -138,6 +140,8 @@ struct Stored {
 
 struct InFlight {
     stored: Stored,
+    /// When the receive handed it over: no visibility change reaches past twelve hours from it.
+    received: Instant,
     /// Bumped by every visibility change, so a timer armed by an earlier one finds it stale.
     generation: u64,
 }
@@ -634,14 +638,17 @@ impl Bus {
             }
             stored.receives = stored.receives.saturating_add(1);
             let receipt = self.next();
+            let at = Instant::now();
             received.push(Received {
                 message: wire_message(&stored.outbound, Some(receipt), Some(stored.receives)),
                 receipt,
+                at,
             });
             queue.in_flight.insert(
                 receipt,
                 InFlight {
                     stored,
+                    received: at,
                     generation: 0,
                 },
             );
@@ -675,7 +682,8 @@ impl Bus {
         drop(account);
     }
 
-    /// `ChangeMessageVisibility`: the message becomes visible again after `visibility`.
+    /// `ChangeMessageVisibility`: the message becomes visible again after `visibility`. A change
+    /// that reaches past twelve hours from the receive is refused, as the service refuses it.
     pub(crate) fn change_visibility(
         self: &Arc<Self>,
         key: &str,
@@ -699,6 +707,14 @@ impl Bus {
                 self.enqueue(queue, entry.stored);
             }
             return Ok(());
+        }
+        if entry.received.elapsed() + visibility > VISIBILITY_WINDOW {
+            return Err(format!(
+                "the message was received {}s ago, and a visibility timeout of {}s would keep it \
+                 invisible past the 12 hours from its receive the service allows",
+                entry.received.elapsed().as_secs(),
+                visibility.as_secs()
+            ));
         }
         entry.generation += 1;
         let generation = entry.generation;
@@ -763,5 +779,50 @@ impl fmt::Debug for Bus {
         #[cfg(feature = "sns")]
         debug.field("topics", &topics);
         debug.finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    use tokio::runtime::Handle;
+
+    use super::{Bus, Outbound};
+
+    /// SQS keeps a received message invisible for at most twelve hours from its receive, and a
+    /// change that reaches past them is refused rather than shortened.
+    #[tokio::test(start_paused = true)]
+    async fn a_visibility_change_past_twelve_hours_from_the_receive_is_refused() {
+        let bus = Bus::new(None, "eu-west-1", Handle::current());
+        let _notify = bus.open("reports");
+        let outbound = Outbound {
+            body: "report".to_owned(),
+            attributes: HashMap::new(),
+            fifo: None,
+        };
+        bus.send("reports", "reports", outbound)
+            .expect("the queue takes the message");
+        let received = bus
+            .receive("reports", 1)
+            .pop()
+            .expect("the message is there");
+
+        tokio::time::advance(Duration::from_hours(1)).await;
+
+        bus.change_visibility("reports", received.receipt, Duration::from_hours(11))
+            .expect("eleven hours more ends where the twelve from the receive end");
+        let refused = bus
+            .change_visibility(
+                "reports",
+                received.receipt,
+                Duration::from_hours(11) + Duration::from_secs(1),
+            )
+            .expect_err("one second more reaches past them");
+        assert!(
+            refused.contains("12 hours"),
+            "the refusal names the limit, got {refused}"
+        );
     }
 }
