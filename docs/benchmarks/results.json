@@ -2,8 +2,8 @@
   "schema": 3,
   "crate": "ruststream-sqs-sns",
   "crate_version": "0.7.0",
-  "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-23",
+  "core_version": "0.7.0",
+  "measured_at": "2026-10-18",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -11,11 +11,11 @@
     "cores": "12 physical, 24 logical",
     "memory": "62.4 GiB",
     "memory_speed": "unknown",
-    "os": "Linux 7.2.6-x64v3-xanmod1-1",
+    "os": "Linux 7.2.10-x64v3-xanmod1-1",
     "broker": "localstack/localstack:4.14.0 (the LocalStack emulator, not the hosted service) in Docker on localhost",
-    "round_trip": "641 us per request to the stand",
-    "rustc": "1.98.1",
-    "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
+    "round_trip": "612 us per request to the stand",
+    "rustc": "1.99.0",
+    "profile": "bench, inheriting release (opt-level = 3, lto = fat, codegen-units = 16, debug = line-tables-only)",
     "features": "ruststream-sqs-sns default (none), ruststream macros,json",
     "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)",
     "valgrind": "3.25.1"
@@ -24,52 +24,52 @@
     {
       "name": "Standard queue, 512 B JSON, delete per message",
       "unit": "msg/s",
-      "messages": 4476,
+      "messages": 4432,
       "pairs": 3,
       "raw": {
-        "best": 714,
-        "median": 704,
-        "worst": 702
+        "best": 724,
+        "median": 711,
+        "worst": 657
       },
       "adapter": {
-        "best": 694,
-        "median": 694,
-        "worst": 692
+        "best": 705,
+        "median": 621,
+        "worst": 526
       },
       "framework": {
-        "best": 699,
-        "median": 695,
-        "worst": 693
+        "best": 718,
+        "median": 687,
+        "worst": 655
       },
-      "overhead_percent": 2.1,
-      "adapter_overhead_percent": 2.8,
-      "adapter_verdict": "measured",
-      "verdict": "measured",
-      "broker_bound": true
+      "overhead_percent": 0.9,
+      "adapter_overhead_percent": 2.7,
+      "adapter_verdict": "indistinguishable",
+      "verdict": "indistinguishable",
+      "broker_bound": false
     },
     {
       "name": "FIFO queue, 64 message groups, 512 B JSON, delete per message",
       "unit": "msg/s",
-      "messages": 4339,
+      "messages": 4338,
       "pairs": 3,
       "raw": {
-        "best": 696,
-        "median": 695,
-        "worst": 692
+        "best": 692,
+        "median": 691,
+        "worst": 685
       },
       "adapter": {
-        "best": 676,
-        "median": 675,
-        "worst": 673
+        "best": 686,
+        "median": 685,
+        "worst": 683
       },
       "framework": {
         "best": 679,
-        "median": 677,
-        "worst": 677
+        "median": 679,
+        "worst": 679
       },
-      "overhead_percent": 2.4,
-      "adapter_overhead_percent": 2.9,
-      "adapter_verdict": "measured",
+      "overhead_percent": 1.8,
+      "adapter_overhead_percent": 0.9,
+      "adapter_verdict": "indistinguishable",
       "verdict": "measured",
       "broker_bound": false
     }
@@ -79,12 +79,12 @@
       "name": "standard queue, JSON decode into a small struct, delete per message",
       "messages": 1000,
       "framework": {
-        "instructions": 494759.0,
+        "instructions": 454735.5,
         "allocations": 461.3
       },
       "cold": {
-        "instructions": 3919564,
-        "allocations": 3725
+        "instructions": 2514593,
+        "allocations": 2728
       },
       "gated": true
     },
@@ -92,12 +92,12 @@
       "name": "reply through the default SqsPublish policy, one SendMessage each",
       "messages": 1000,
       "framework": {
-        "instructions": 895058.5,
+        "instructions": 823549.6,
         "allocations": 871.3
       },
       "cold": {
-        "instructions": 3889704,
-        "allocations": 3726
+        "instructions": 2541645,
+        "allocations": 2729
       },
       "gated": true
     },
@@ -105,14 +105,19 @@
       "name": "batches of 10, one ReceiveMessage each, delete per message",
       "messages": 1000,
       "framework": {
-        "instructions": 491688.4,
+        "instructions": 452297.8,
         "allocations": 461.3
       },
       "cold": {
-        "instructions": 3930188,
-        "allocations": 3727
+        "instructions": 2534373,
+        "allocations": 2730
       },
       "gated": true
     }
-  ]
+  ],
+  "code_measured": {
+    "crate_version": "0.7.0",
+    "core_version": "0.7.0",
+    "measured_at": "2026-10-18"
+  }
 }

@@ -1,70 +1,161 @@
-//! FIFO message groups: ordering per customer, with the group carried by the publisher.
+//! FIFO message groups: each customer's orders are fulfilled in the order they were placed, and a
+//! startup replay rides one group the publish policy fixes.
 //!
-//! Run a local stack first (`just brokers-up`), then:
-//! `cargo run --example sqs_fifo_group`
+//! ```text
+//! cargo test --example sqs_fifo_group --features testing
+//! cargo run --example sqs_fifo_group --features testing -- run
+//! ```
 
 use std::io;
 
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// The message declares both where it goes and which headers travel with it.
-#[derive(Debug, Deserialize, Serialize, Outgoing)]
-#[outgoing(name = "orders-groups.fifo", headers = Shipment)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+#[outgoing(name = "orders")]
+struct Order {
+    id: u64,
+    customer: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+#[outgoing(name = "fulfillment.fifo")]
 struct OrderPlaced {
     id: u64,
     customer: String,
 }
 
-#[derive(Debug, Serialize)]
-struct Shipment {
-    carrier: String,
-}
-
-#[subscriber(SqsQueue::new("orders-groups.fifo").create_if_missing())]
-async fn handle(order: &OrderPlaced) -> HandlerOutcome {
-    println!("order {} for {}", order.id, order.customer);
-    HandlerOutcome::ack()
-}
+#[derive(OutSlot)]
+#[publishes(OrderPlaced)]
+struct Placements;
 
 // --8<-- [start:publish]
-async fn place(publisher: &SqsPublisher, order: &OrderPlaced) -> io::Result<()> {
-    let meta = Shipment {
-        carrier: "dhl".to_owned(),
+/// One customer's orders reach fulfillment in the order they were placed; different customers'
+/// orders do not wait for each other. The group is the customer.
+#[subscriber(SqsQueue::new("orders"))]
+async fn place(
+    order: &Order,
+    Out(placements): Out<impl Publisher<Options = SqsPublishOptions>, Placements>,
+) -> HandlerOutcome {
+    let placed = OrderPlaced {
+        id: order.id,
+        customer: order.customer.clone(),
     };
-    // Ordering is per customer, so the group is a setting of this one message; the contract
-    // carries the headers.
-    publisher
-        .message(order)
-        .with_headers(&meta)
+    let sent = placements
+        .message(&placed)
         .group_id(&order.customer)
         .publish()
-        .await
-        .map_err(io::Error::other)
+        .await;
+    if let Err(err) = sent {
+        tracing::warn!(order.id, %err, "order not placed");
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
 }
 // --8<-- [end:publish]
 
-#[app]
-fn service() -> impl App {
-    RustStream::new(AppInfo::new("sqs-fifo-group", "0.1.0")).with_broker(
-        SqsBroker::new()
-            .endpoint("http://localhost:4566")
-            .test_credentials()
-            .region("us-east-1"),
-        |b| {
-            b.include(handle);
-            // The policy fixes the group every send from this hook falls back to; the call in
-            // `place` names the customer's own and wins over it.
-            b.after_startup(
-                Publish::default().group_id("bootstrap"),
-                async move |sqs| -> io::Result<()> {
-                    let order = OrderPlaced {
-                        id: 1,
-                        customer: "acme".to_owned(),
-                    };
-                    place(&sqs, &order).await
-                },
-            );
-        },
-    )
+#[subscriber(SqsQueue::new("fulfillment.fifo"))]
+async fn fulfil(order: &OrderPlaced) -> HandlerOutcome {
+    tracing::info!(order.id, order.customer, "order fulfilled");
+    HandlerOutcome::ack()
+}
+
+/// The orders a previous run accepted and did not hand on; a real service reads its own store.
+fn pending() -> Vec<OrderPlaced> {
+    vec![OrderPlaced {
+        id: 1,
+        customer: "acme".to_owned(),
+    }]
+}
+
+// --8<-- [start:policy]
+fn service(broker: SqsBroker) -> impl App {
+    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
+        b.include(place).out(Placements, Publish::default()).build();
+        b.include(fulfil);
+        // The replay keeps its own order: every message the hook sends is in the group `replay`.
+        b.after_startup(
+            Publish::default().group_id("replay"),
+            async move |sqs| -> io::Result<()> {
+                for order in pending() {
+                    sqs.message(&order)
+                        .publish()
+                        .await
+                        .map_err(io::Error::other)?;
+                }
+                Ok(())
+            },
+        );
+    })
+}
+// --8<-- [end:policy]
+
+/// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve
+/// the region and credentials.
+fn broker(endpoint: &str) -> SqsBroker {
+    SqsBroker::new()
+        .endpoint(endpoint)
+        .test_credentials()
+        .region("us-east-1")
+}
+
+#[ruststream::app]
+fn app() -> impl App {
+    service(broker("http://localhost:4566"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use ruststream::testing::TestApp;
+    use ruststream_sqs_sns::PARTITION_KEY_HEADER;
+    use ruststream_sqs_sns::prelude::*;
+
+    use super::{Order, OrderPlaced, Placements, broker, service};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_replay_rides_the_group_the_policy_fixed() -> Result<(), Box<dyn Error>> {
+        let tb = TestApp::start(service(broker("http://localhost:4566"))).await?;
+        tb.settle().await?;
+
+        // A FIFO delivery carries its message group in the partition-key header.
+        tb.broker::<SqsBroker>()
+            .published::<OrderPlaced>("fulfillment.fifo")
+            .assert_called_once()
+            .with_header(PARTITION_KEY_HEADER, "replay");
+        tb.broker::<SqsBroker>()
+            .subscriber("fulfillment.fifo")
+            .assert_called_once()
+            .settled(HandlerOutcome::ack());
+        tb.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_order_rides_its_customers_group() -> Result<(), Box<dyn Error>> {
+        let tb = TestApp::start(service(broker("http://localhost:4566"))).await?;
+        tb.settle().await?;
+        tb.broker::<SqsBroker>()
+            .message(&Order {
+                id: 2,
+                customer: "globex".to_owned(),
+            })
+            .publish()
+            .await?;
+
+        tb.out::<Placements>()
+            .assert_called_once()
+            .with_options(&SqsPublishOptions::default().group_id("globex"));
+        tb.broker::<SqsBroker>()
+            .published::<OrderPlaced>("fulfillment.fifo")
+            .assert_called(2)
+            .with(&OrderPlaced {
+                id: 2,
+                customer: "globex".to_owned(),
+            })
+            .with_header(PARTITION_KEY_HEADER, "globex");
+        tb.shutdown().await?;
+        Ok(())
+    }
 }

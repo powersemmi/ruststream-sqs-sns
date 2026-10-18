@@ -42,7 +42,7 @@ test-brokers: brokers-up
 
 # What this crate costs over the aws-sdk-sqs client it wraps: two scenarios run as a RustStream
 # service and as a hand-written loop, against the stand the tests use. On demand only - it takes
-# minutes and it wants the machine to itself. The page it feeds is docs/benchmarks.md.
+# minutes and it wants the machine to itself. It feeds the site's benchmarks pages.
 bench *ARGS: brokers-up
     #!/usr/bin/env bash
     set -euo pipefail
@@ -57,8 +57,8 @@ bench *ARGS: brokers-up
 
 # What this crate's own code costs per message, counted under valgrind: instructions through
 # callgrind and allocations through DHAT, each scenario a service on the production broker against
-# the stand the tests use, started, filled from another thread and drained. The page it feeds is
-# the code table of docs/benchmarks.md. RUSTFLAGS is cleared because valgrind aborts on the
+# the stand the tests use, started, filled from another thread and drained. It feeds the code
+# table of the site's benchmarks pages. RUSTFLAGS is cleared because valgrind aborts on the
 # instructions a recent CPU advertises. Needs valgrind.
 #
 # The benchmarks hand the measurement to gungraun's runner, which has to be the release of the
