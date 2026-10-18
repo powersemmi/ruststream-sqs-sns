@@ -10,3 +10,4 @@ description: "Guides to building Amazon SQS services with ruststream-sqs-sns, th
 built on the official [`aws-sdk-sqs`](https://docs.rs/aws-sdk-sqs) client. A service reads and
 writes SQS queues, and with the `sns` feature it also publishes to SNS topics. The guides take an
 SQS service from installation to production.
+Start with [Getting started](getting-started.md).
