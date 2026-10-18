@@ -1,124 +1,39 @@
 ---
 title: 基准测试
-description: "ruststream-sqs-sns 在每条消息上的开销：与原生 aws-sdk-sqs 客户端对比的吞吐量，以及其代码的指令数和内存分配次数。"
+description: "ruststream-sqs-sns 在每条消息上的开销：与裸 aws-sdk-sqs 客户端对照的吞吐量，以及它自身代码的指令数和内存分配次数。"
 ---
 
-# 基准测试 {/* #benchmarks */}
+import {Environment, MovedSections, Results} from '@site/src/components/Benchmarks';
+import {sqs} from '@site/src/components/Benchmarks/sqs';
 
-这个 crate 的订阅者与发布者处在 SQS 客户端和你的代码之间，运行时则在它们之上。两者每条消息都要付出
-时间：接收泵、它交出的投递、它的 `ack` 背后的删除、进入你的处理器的分派。本页给出各自的开销有多大，
-参照物是同样的工作用 `aws-sdk-sqs` 手写一遍。
+export const labels = {"loading": "正在读取结果...", "scenario": "场景", "raw": "裸客户端", "adapter": "Broker crate", "framework": "RustStream", "overhead": "额外开销", "against": "（比客户端 {percent}）", "indistinguishable": "无法区分", "brokerBound": "受 Broker 限制", "measured": "测量于", "details": "这些数字是怎样测得的", "pending": "尚未公布结果：{brokers}。", "instructions": "指令数", "allocations": "内存分配", "cold": "冷启动", "table": "以表格显示数字", "axis": "各循环比裸客户端最佳一轮低多少", "rounds": "各轮，从最佳到最慢", "best": "最佳一轮", "median": "中位一轮", "noise": "轮次的波动范围", "comparison": "与裸客户端对照", "code": "代码的开销", "broker": "Broker", "plugin": "{plugin} 插件", "pluginRaw": "不用插件", "pluginAdapter": "手写的插件", "pluginFramework": "crate 自带的插件", "pluginAxis": "各循环比不用插件的应用最佳一轮低多少", "pluginAgainst": "（比不用插件 {percent}）", "pluginOverhead": "比手写插件", "pluginOverHand": "（比手写插件 {percent}）"};
 
-同一个进程把一个场景跑三遍，是三个循环，各自只差一件事：由什么来承载消息。
+export const machine = {"cpu": "处理器", "architecture": "架构", "cpu_frequency": "频率", "cores": "核心数", "memory": "内存", "memory_speed": "内存速度", "os": "操作系统", "broker": "Broker", "rustc": "编译器", "profile": "构建配置", "features": "特性", "rustflags": "RUSTFLAGS", "round_trip": "往返时间", "valgrind": "Valgrind"};
 
-- **原生客户端** - `aws-sdk-sqs`，由基准测试里的循环直接驱动。
-- **本 crate** - 同一个循环，跑在这个 crate 的 Broker、订阅、投递、`ack` 和发布者上；没有处理器，
-  没有路由器，没有分派。
-- **完整服务** - 用户写的那个服务：`#[subscriber]`、应用、运行时。
+# 基准测试
 
-因此两个开销列回答的是两个不同的问题。**本 crate 相对原生**是这个 crate 的订阅者与发布者相对它们
-包装的客户端的代价，这是本仓库要负责的问题。**服务相对原生**是整条链路的代价；两列之间的落差就是
-运行时在这个 Broker 上所占的份额。之所以发布在这里，是因为一个随 Broker 而变的份额说明的是两者如何
-衔接，而不是核心本身。
+`ruststream-sqs-sns` 在每条消息上的开销：与裸 `aws-sdk-sqs` 客户端对照的吞吐量，以及它自身代码的指令数和内存分配次数。
 
-其余一切在三者之间保持相同：AWS 配置、接收参数、接收请求的等待时间、每条消息的删除及其发生的位置、
-解码成同一个类型、消息体的字节、tokio 运行时和构建方式。这套流程属于框架本身，写在
-[“方法”一节](https://powersemmi.github.io/ruststream/latest/zh/benchmarks/#methodology)里。
+## 与裸客户端对照 {/* #against-a-raw-client */}
 
-测试台是实时测试所用的 LocalStack 模拟器，而不是托管服务。下面每个数字说的都是一次投递在这个 crate
-内部的代价，别的什么也没说。
+第一张图对同一个 SQS 端点把每个场景用三种方式运行。`裸客户端` 直接驱动 `aws-sdk-sqs`。`Broker crate` 用一个自己的循环驱动本 crate 的订阅，上面没有运行时。`RustStream` 是用户写的服务：应用里的一个 `#[subscriber]` 处理器。第一项差值是本 crate 比它所封装的客户端多付出的开销，第二项是运行时在其上增加的开销。
 
-## 数字 {/* #the-numbers */}
+每个循环画成一条横条，从最佳一轮延伸到最慢的一轮，圆点标出最佳一轮，缺口标出中位一轮。坐标轴的零点是裸客户端的最佳一轮，圆点在零点右侧表示更慢。空心圆点表示该循环与裸客户端的差异小于各轮的波动范围。图表下方的表格列出最佳一轮，括号里是中位数。
 
-三个交错轮次中的最佳值，括号里是中位的一轮。越大越好。
+两个场景都用一次单独的 `DeleteMessage` 删除每条消息，因为这正是 `ack` 在这里做的事。FIFO 场景把消息分散到 64 个消息组上，因此被扣住的组绝不会决定速度，[消息组](../sqs/fifo.md)一页用图说明了这一点。
 
-<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载已发布的结果……", "scenario": "场景", "raw": "原生客户端", "adapter": "本 crate", "framework": "完整服务", "adapterOverhead": "本 crate 相对原生", "overhead": "服务相对原生", "indistinguishable": "无法区分", "brokerBound": "受 Broker 限制", "machine": "机器", "os": "操作系统", "broker": "Broker", "build": "构建", "versions": "版本", "measured": "测量于", "codeMeasured": "代码开销测量于", "codeUnpublished": "此结果文档不含代码开销。", "instructions": "每条消息的指令数", "allocations": "每条消息的内存分配次数", "cold": "冷启动（指令 / 分配）", "unavailable": "读不到结果。它们发布在 {url}。", "unknownSchema": "已发布的结果声明的 schema 是 {schema}，本页无法渲染。"}'></div>
+## 代码的开销 {/* #cost-of-the-code */}
 
-表格在你的浏览器里从最近一次运行写下的文档读取，所以本页没有任何可能过期的副本。
+第二张图统计一条消息在服务线程上的开销：稳态下 callgrind 测得的指令数和 DHAT 测得的内存分配次数。每个场景都是一个基于 [`SqsBroker`](api:ruststream_sqs_sns::SqsBroker)、连接同一个端点的服务。计数包括框架的分发和本 crate 的代码，也包括 AWS SDK 在该线程上的工作：构建并签名每个请求、HTTP 交换，以及解析每个应答。这部分工作占了每个数字的大部分，因此这些数字不能与客户端在自己线程上工作的 Broker 的数字相比较。`冷启动` 是加载 AWS 配置、解析队列、读取它的可见性超时并取得第一条消息一次性付出的开销。
 
-两行的节奏都由往返决定，这正是本页最要紧的一点。一次投递要付出自己的一次 `DeleteMessage`，因为这
-正是这个 crate 的 `ack` 所做的事，再加上把它那一批带过来的 `ReceiveMessage` 的十分之一。到测试台的
-往返时间是单独测量的，发布在下面，这些往返约占一次投递耗时的一半；往返达到一半的行标为受 Broker 限制。
-本 crate 和框架的工作落在原生客户端同样要付的等待里，所以各循环之差是这部分工作代价的下界，而不是对它
-的测量。
+## 结果 {/* #results */}
 
-标为“无法区分”的行，是两边之差小于各自运行之间离散范围的行。低于运行噪声的数字读起来像是从未测得
-的精度，所以不发布。
-
-同一次运行的机器可读形式在
-[`benchmarks/results.json`](https://powersemmi.github.io/ruststream-sqs-sns/latest/benchmarks/results.json)，
-框架站点用它构建跨 Broker 的汇总表。
-
-## crate 自身的代码 {/* #the-crates-own-code */}
-
-<div id="benchmark-code"></div>
-
-第二张表是一条消息在本 crate 代码路径上的开销，是数出来的，不是计时得来的：指令数由 callgrind 统计，
-内存分配次数由 DHAT 统计。每个场景都是用户会写的那种服务：用服务里同样的构造方式建在 `SqsBroker` 上，
-指向同一个 LocalStack 测试台，并在单线程运行时上启动。在启动和排空之间，由另一个线程往队列里填消息，
-这个线程不计入。
-
-计入的是服务线程执行的一切：框架、本 crate，以及 `aws-sdk-sqs` 和它的 HTTP 栈在这个线程上的工作，
-也就是构建并签名每个请求、解析每个应答。客户端自己开的线程不计入，每次往返中模拟器那一侧也不计入。
-每次投递都要分摊一次 `ReceiveMessage`，并付出自己的一次 `DeleteMessage`，回复还要再加一次
-`SendMessage`，所以每一行的大部分是 AWS 客户端的工作，而不是本 crate 的。
-
-指令数和分配次数都是稳态下每条消息的值：1000 次投递的运行和 2000 次投递的运行之间的斜率。最后一列
-是启动服务并处理第一次投递一次性付出的开销：加载 AWS 配置、解析队列、读取它的可见性超时时间。这些
-数字是绝对值，框架自身的开销也算在内；框架单独的开销由核心库在它的
-[基准测试页面](https://powersemmi.github.io/ruststream/latest/zh/benchmarks/)上公布。
-
-一批是十条消息，这是一次 `ReceiveMessage` 最多返回的条数；批里的每次投递仍然各自用一次调用删除。
-
-同一个二进制文件跑四次，指令数相差不到半个百分点，分配次数在 170 万次里最多差三次，这取决于模拟器
-如何作答、套接字的读取如何切分。`just bench-code` 在分配次数超过场景声明的下限时失败，这个下限是测到的
-最大计数再加千分之一；加上 `--baseline=main` 时，指令数多出百分之二以上也算失败。改变开销
-的合并请求要附上自己的数字。
+<Results entry={sqs} labels={labels} details="/architecture/benchmarks/methodology/" />
 
 ## 机器 {/* #the-machine */}
 
-<div id="benchmark-environment"></div>
+<Environment entry={sqs} labels={machine} />
 
-构建标志与数字一起发布，因为它们会改变这些数字：用 `-C target-cpu=native` 构建出的二进制，别的机器
-无法复现它的结果，所以配方在构建前会清空这个变量。
+数字来自本版本的 `docs/benchmarks/results.json`，由基准测试命令写入。[方法论](methodology.md)说明它们是怎样测得的，[数字](numbers.md)说明可以从中得出什么结论。
 
-## 这些数字不代表什么 {/* #what-they-do-not-mean */}
-
-测试台是模拟器。它在本地回环上用普通 HTTP 讲 SQS 和 SNS 的 API，因此 TLS 握手、凭证刷新和区域延迟
-都不在其中。配对依然成立：两边面对的是同一个模拟器，发布的是两者之差。饱和状况则不成立：区域中的
-队列按另一种时间尺度作答，这些数字没有一个能说明服务在那里的代价。
-
-两边都请求 20 秒的等待时间，这是 crate 的默认值，也是协议上限。在始终有积压的队列上这个等待不会
-走完，因为接收一有可答的内容就会作答；但它决定了空队列的代价，两边若在这一项上不一致，发布出来的
-就是长轮询策略，而不是分派代价。
-
-这里只有一个消费者、一个队列、一个小消息体和本地回环上的模拟器。它测的是一次投递在这个 crate 内部
-的代价，本页的行也不能与为另一个 Broker 发布的行相比：不同传输每条消息做的工作并不相同。
-
-一次运行测量的窗口从第一次投递开始，到最后一次投递被读完时结束，两边一致，所以结算它的那次删除落在
-两边的数字之外。那是一次运行携带的数千次删除中的一次。
-
-FIFO 的数字取自把消息体分散到 64 个消息组的队列。FIFO 队列在某个消息组有投递在途时会压住这个组，
-因此只用少数几个组的运行测的是这种压制；组数多到这个程度，接收总有未被触及的消息组可以作答。
-
-这些数字是一台机器在某一天的快照。
-它们由人手工重测，测量期间机器只跑这一项：这一页要讲的差值，比与其他任务共用的机器上的噪声还小。
-
-## 自己跑一遍 {/* #running-it-yourself */}
-
-```bash
-just bench
-```
-
-这条配方从 `docker-compose.test.yml` 启动测试台，跑完两个场景，停掉测试台，并把测得的结果写回
-`docs/benchmarks/results.json`。它需要几分钟，并且要独占这台机器。消息条数不是固定的：一次探测
-运行会把它定下来，使每次被测量的运行在所在机器上至少持续五秒。
-
-```bash
-just bench-code
-```
-
-这条配方启动同一个测试台，在 valgrind 下统计代码表，停掉测试台，并重写同一份文档里的 `code` 部分。
-它需要几分钟，还要有 valgrind；基准测试运行器由配方自己安装，版本与 `Cargo.lock` 锁定的一致。
-`just bench-code 5000` 让每个场景跑五千次投递，而不是一千次：数字更稳，运行也更久。公布的数字
-是在一千次投递下测得的。
+<MovedSections />
