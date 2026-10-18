@@ -85,7 +85,7 @@ item's own documentation keeps the detail.
 
 ## Settlement
 
-- [Settlement][c-settlement]: what `ack`, `drop` and `retry` do to a message.
+- [Outcomes][c-settlement]: what `ack`, `drop` and `retry` do to a message.
 - [retry_after][c-retry-after]: a retry that waits in the queue through the visibility timeout.
 - [Dead letters][c-dead-letters]: `max_attempts` and `dead_letter`, the queue's redrive policy.
 

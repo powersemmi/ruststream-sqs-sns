@@ -1,12 +1,12 @@
 ---
-title: Settlement
+title: Outcomes
 description: "Each outcome is one SQS call: ack and drop delete the message, retry makes it visible again at once."
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Settlement
+# Outcomes
 
 Each outcome is one SQS call: `ack` and `drop` delete the message, `retry` makes it visible again at once.
 
