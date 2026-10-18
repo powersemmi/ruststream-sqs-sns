@@ -72,6 +72,38 @@ pub(crate) struct Redrive {
 ///
 /// The same options are also reachable at the mount site through [`SqsSubscription`], which is
 /// where they go when the registration names a batch size first.
+///
+/// `max_attempts(n)` and `dead_letter(name)` right after `include` are one setting here, the
+/// queue's redrive policy: the subscription writes both onto the queue when it opens, and SQS
+/// counts the receives and moves a spent delivery to the dead-letter queue itself. Half a policy
+/// is [`SqsError::IncompleteRedrive`] at startup.
+///
+/// ```
+/// use ruststream_sqs_sns::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Invoice {
+///     id: u64,
+/// }
+///
+/// #[subscriber(SqsQueue::new("invoices"))]
+/// async fn settle(invoice: &Invoice) -> HandlerOutcome {
+///     if invoice.id == 0 {
+///         return HandlerOutcome::retry();
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[app]
+/// fn service() -> impl App {
+///     RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(SqsBroker::new(), |b| {
+///         b.include(settle)
+///             .max_attempts(nonzero!(3u32))
+///             .dead_letter("invoices-dead");
+///     })
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub struct SqsQueue {
@@ -336,7 +368,12 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
 /// fn service() -> impl App {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
 ///         // The framework's batch size first, then this crate's settings on the same chain.
-///         b.include(reconcile.batch(nonzero!(6)).wait(Duration::from_secs(20)));
+///         b.include(
+///             reconcile
+///                 .batch(nonzero!(6))
+///                 .wait(Duration::from_secs(20))
+///                 .create_if_missing(),
+///         );
 ///     })
 /// }
 /// ```
