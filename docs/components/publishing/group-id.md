@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 
 [`group_id`](api:ruststream_sqs_sns::SqsPublish::group_id) on the policy orders everything a position publishes within one group; a call's own step and the partition key win over it.
 
-A FIFO queue delivers the messages of one group in the order they were sent, one group member at a time.
+A [FIFO queue](../subscriptions/fifo.md) delivers the messages of one group in the order they were sent, one group member at a time.
 Messages of different groups do not wait for each other.
 A group belongs to a position: a slot, a reply or a lifecycle hook.
 Every send from that position to a `.fifo` destination falls back to the group its policy fixed.

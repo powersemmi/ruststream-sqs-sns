@@ -14,7 +14,7 @@ The core builds the AsyncAPI document from the app, before anything connects.
 This crate adds the specification's `sqs` binding, version `0.3.0`, and with the `sns` feature its `sns` binding, version `1.0.0`.
 A [server](./server.md) reports where the service connects.
 A [channel](./channels.md) reports the queue behind it, whether the service reads it or publishes to it.
-A fan-out position's channel reports its [topic](./topics.md).
+A [fan-out](../sns/index.md) position's channel reports its [topic](./topics.md).
 
 Everything comes from the service's own declarations: the broker, the descriptors and the destinations the mount sites resolved.
 A setting the queue holds but the service did not name stays out, because reading it takes a connection.

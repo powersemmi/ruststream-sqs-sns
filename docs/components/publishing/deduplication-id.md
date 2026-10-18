@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 
 [`deduplication_id`](api:ruststream_sqs_sns::SqsPublishSteps::deduplication_id) names one message's idempotency key on a FIFO destination; left unnamed, every send gets a process-unique id.
 
-A FIFO queue accepts a message whose deduplication id it has seen in the last five minutes and does not deliver it again.
+A [FIFO queue](../subscriptions/fifo.md) accepts a message whose deduplication id it has seen in the last five minutes and does not deliver it again.
 The repeated publish succeeds, so the sender cannot tell the two apart and does not need to.
 An id derived from the input makes a handler's publish idempotent: SQS delivers a message at least once, and a second run of the handler sends the same id.
 

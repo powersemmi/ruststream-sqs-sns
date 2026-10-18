@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 [`retry_after(delay)`](api:ruststream::runtime::HandlerOutcome::retry_after) sets the message's visibility to the delay, so it returns on the same queue with its receive count, after at most 12 hours.
 
 SQS holds a message back natively: `ChangeMessageVisibility` hides it for the delay, and the next receive after that hands it out again.
-Nothing is republished and no copy is made, so the message keeps its id, its attributes and its receive count.
+Nothing is republished and no copy is made, so the message keeps its id, its attributes and its [receive count](../delivery/receive-count.md).
 SQS counts whole seconds, so a fraction of a second rounds up.
 SQS keeps a message hidden for at most twelve hours from its receive, so the longest delay is what remains of those twelve hours.
 The delay waits on the queue, not in the service, so a service that stops in the meantime loses nothing.

@@ -13,7 +13,7 @@ import TabItem from '@theme/TabItem';
 
 The visibility timeout is what each receive asks for: how long a received message stays hidden from every other receive.
 The range is one second to twelve hours, and a value outside it stops the service at startup with [`SqsError::InvalidQueue`](api:ruststream_sqs_sns::SqsError::InvalidQueue).
-A subscription that names none takes the queue's own timeout, which it reads once with `GetQueueAttributes` when it opens, so it needs the `sqs:GetQueueAttributes` permission.
+A subscription that names none takes the queue's own timeout, which it reads once with `GetQueueAttributes` when it opens, so it needs the `sqs:GetQueueAttributes` [permission](../broker/credentials.md).
 A handler may take longer than the timeout.
 While a handler holds a delivery, the crate re-arms the timeout every half period with `ChangeMessageVisibility`, so no other consumer receives the message in the meantime.
 SQS keeps a message hidden for at most twelve hours from its receive.

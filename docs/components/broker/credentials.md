@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Credentials
-description: "Credentials and region resolve through the AWS SDK's default chain at connect; from_config takes a prebuilt SdkConfig instead."
+description: "The AWS SDK's default chain supplies the region and the credentials, fetched on the first request; from_config takes a prebuilt SdkConfig instead."
 ---
 
 import Tabs from '@theme/Tabs';
@@ -9,11 +9,11 @@ import TabItem from '@theme/TabItem';
 
 # Credentials
 
-Credentials and region resolve through the AWS SDK's default chain at connect; [`from_config`](api:ruststream_sqs_sns::SqsBroker::from_config) takes a prebuilt `SdkConfig` instead.
+The AWS SDK's default chain supplies the region and the credentials, fetched on the first request; [`from_config`](api:ruststream_sqs_sns::SqsBroker::from_config) takes a prebuilt `SdkConfig` instead.
 
 A broker built with [`new`](api:ruststream_sqs_sns::SqsBroker::new) loads its configuration with `aws_config` when it connects.
 The region comes from `AWS_REGION` or the shared profile, and the credentials from the environment, the shared profile files, SSO, or the instance or container role.
-The SDK fetches the credentials on the first request, so a service with a subscription meets a missing credential at startup.
+The SDK fetches the credentials on the first request, a subscription's `GetQueueUrl` at [startup](./startup.md), so a service with a subscription meets a missing credential there.
 The configuration follows the SDK's latest behaviour version.
 The connect also sets a per-attempt timeout of 25 seconds, above the 20 seconds a long poll waits.
 

@@ -17,8 +17,8 @@ A bare name takes the descriptor's defaults: a [20 second long poll](./wait.md) 
 SQS takes only `[A-Za-z0-9_-]` in a queue name, so every other character of the name becomes `-` on the way, and a `.fifo` suffix survives: `order.events` reads the queue `order-events`.
 Two subscriptions on one queue compete for its messages, and each message goes to one of them.
 A subscription receives at most one batch ahead of its handler.
-A queue that does not exist stops the service at startup, unless the subscription [creates it](./create-if-missing.md).
-Once the service runs, a queue deleted under a subscription ends that subscription, and any other receive error is retried after one second.
+A queue that does not exist stops the service at [startup](../broker/startup.md), unless the subscription [creates it](./create-if-missing.md).
+Once the service runs, a queue deleted under a subscription ends that subscription, and any other [receive error](../broker/errors.md) is retried after one second.
 The manual form passes the name to [`subscriber(name, body)`](api:ruststream::runtime::subscriber), and [`Unnamed<SqsQueue>`](api:ruststream::Unnamed) in place of the name leaves it to [`name`](api:ruststream::runtime::SubscriberSettings::name) at the mount site.
 
 ## Example
