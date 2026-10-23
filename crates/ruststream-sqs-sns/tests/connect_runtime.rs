@@ -27,7 +27,7 @@ use tokio::sync::oneshot;
 use tokio::task::spawn_blocking;
 use tokio::time::timeout;
 
-mod live;
+use crate::live;
 
 use live::{RECV_TIMEOUT, admin, connect, unique};
 

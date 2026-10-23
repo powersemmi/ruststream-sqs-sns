@@ -45,7 +45,7 @@ use ruststream_sqs_sns::{
     PARTITION_KEY_HEADER, SqsBroker, SqsPublish, SqsPublishOptions, SqsQueue,
 };
 
-mod live;
+use crate::live;
 
 use live::{RECV_TIMEOUT, connect, unique};
 

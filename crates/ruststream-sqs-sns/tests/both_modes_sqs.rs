@@ -18,7 +18,7 @@ use ruststream_sqs_sns::RECEIVE_COUNT_HEADER;
 use ruststream_sqs_sns::prelude::*;
 use serde::{Deserialize, Serialize};
 
-mod live;
+use crate::live;
 
 /// The endpoint the service is built with. In process it only shapes the queue URLs; live it is
 /// the stack.

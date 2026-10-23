@@ -17,7 +17,7 @@ use ruststream::ConnectedBroker;
 use ruststream_sqs_sns::{ConnectedSqsBroker, SqsQueue};
 use serde_json::{Value, json};
 
-mod live;
+use crate::live;
 
 use live::{admin, connect, queue_attribute, unique};
 
