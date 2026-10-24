@@ -11,6 +11,7 @@
 // what one of them leaves alone is not dead code.
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use aws_config::{BehaviorVersion, Region};
@@ -69,8 +70,13 @@ pub(crate) fn broker(endpoint: &str) -> SqsBroker {
 }
 
 /// Per-test unique queue, so runs do not observe each other's leftovers.
+///
+/// The process id tells runs apart, and the sequence number tells apart the tests of one
+/// binary that ask for the same name: an example and its manual twin are modules of one binary.
 pub(crate) fn unique(name: &str) -> String {
-    format!("it-{name}-{}", std::process::id())
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!("it-{name}-{}-{sequence}", std::process::id())
 }
 
 /// An SDK client of the test's own, for reading back what the service holds. Deliberately not

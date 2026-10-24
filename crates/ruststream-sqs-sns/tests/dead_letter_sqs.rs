@@ -20,7 +20,7 @@ use ruststream::{
 };
 use ruststream_sqs_sns::{ConnectedSqsBroker, SqsQueue};
 
-mod live;
+use crate::live;
 
 use live::{QUIET, RECV_TIMEOUT, connect, unique};
 

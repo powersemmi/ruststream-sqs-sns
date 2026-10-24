@@ -22,7 +22,7 @@ use ruststream::{
 };
 use ruststream_sqs_sns::{PARTITION_KEY_HEADER, SnsPublish, SqsPublishSteps, SqsQueue};
 
-mod live;
+use crate::live;
 
 use live::{QUIET, RECV_TIMEOUT, connect, unique};
 
