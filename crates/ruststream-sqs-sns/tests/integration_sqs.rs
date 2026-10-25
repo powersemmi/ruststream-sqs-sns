@@ -17,7 +17,7 @@ use ruststream_sqs_sns::{
     ConnectedSqsBroker, PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER, SqsError, SqsQueue,
 };
 
-mod live;
+use crate::live;
 
 use live::{QUIET, RECV_TIMEOUT, admin, connect, queue_attribute, unique};
 
