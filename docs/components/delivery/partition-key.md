@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: PARTITION_KEY_HEADER
-description: "PARTITION_KEY_HEADER is the portable spelling of the FIFO message group: sent as MessageGroupId on FIFO, an ordinary attribute on a standard queue, read back on delivery either way."
+description: "PARTITION_KEY_HEADER is the portable FIFO message group: MessageGroupId on FIFO, an ordinary attribute on a standard queue, read back on delivery."
 ---
 
 import Tabs from '@theme/Tabs';
