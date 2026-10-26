@@ -20,7 +20,7 @@ use ruststream::{
     ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, PublishPolicy,
     Publisher, Serialized, Subscriber,
 };
-use ruststream_sqs_sns::{PARTITION_KEY_HEADER, SnsPublish, SqsPublishSteps, SqsQueue};
+use ruststream_sqs_sns::{PARTITION_KEY_HEADER, SnsPublish, SqsError, SqsPublishSteps, SqsQueue};
 
 use crate::live;
 
@@ -234,6 +234,61 @@ async fn a_dotted_destination_name_reaches_the_topic() {
         .expect("delivery is ok");
     assert_eq!(message.payload(), b"dotted");
     message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+// SNS carries at most ten message attributes as well. Ten headers fit, and a binary payload
+// brings the crate's own marker as the eleventh; the publish names it instead of passing on the
+// service's generic refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_notification_over_the_attribute_limit_names_what_the_crate_added() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+    let queue = unique("too-many-attributes");
+    let topic = unique("too-many-attributes-topic");
+    let _subscriber = connected
+        .subscribe_queue(source(&queue))
+        .await
+        .expect("subscription opens");
+    connected
+        .subscribe_queue_to_topic(&topic, &queue)
+        .await
+        .expect("queue subscribes to topic");
+
+    let headers: HeaderMap = (0..10)
+        .map(|index| (format!("x-header-{index}"), "value"))
+        .collect();
+    let refused = connected
+        .sns_publisher()
+        .publish(
+            OutgoingMessage::new(&topic, [0u8, 159, 146].as_slice()).with_headers(headers),
+            None,
+        )
+        .await
+        .expect_err("eleven attributes are more than a notification carries");
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::TooManyAttributes {
+                count: 11,
+                limit: 10,
+                ..
+            }
+        ),
+        "got {reason}"
+    );
+    assert!(
+        reason.contains(&topic),
+        "the refusal names the topic: {reason}"
+    );
+    assert!(
+        reason.contains("ruststream-payload-encoding"),
+        "the refusal names the marker: {reason}"
+    );
 
     connected.shutdown().await.expect("shutdown succeeds");
 }

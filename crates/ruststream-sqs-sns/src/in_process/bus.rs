@@ -31,9 +31,6 @@ pub(crate) const DEFAULT_VISIBILITY: Duration = Duration::from_secs(30);
 /// How long a FIFO queue remembers a deduplication id.
 const DEDUPLICATION_WINDOW: Duration = Duration::from_mins(5);
 
-/// The most message attributes one message carries, on SQS and on SNS alike.
-const MAX_ATTRIBUTES: usize = 10;
-
 /// The largest SQS message, body and attributes together.
 pub(crate) const SQS_MAX_MESSAGE: usize = 1_048_576;
 
@@ -241,20 +238,14 @@ pub(crate) fn topic_key(name: &str) -> Result<String, String> {
 }
 
 /// Refuses what the service refuses in a message: an empty body, characters it does not carry,
-/// more than ten attributes, an attribute it cannot name or with no value, and a size over `limit`.
+/// an attribute it cannot name or with no value, and a size over `limit`. The limit on the number
+/// of attributes is the publisher's own check, made while the headers become attributes.
 pub(crate) fn check_message(outbound: &Outbound, limit: usize) -> Result<(), String> {
     if outbound.body.is_empty() {
         return Err("the message body must not be empty".to_owned());
     }
     if !is_service_text(&outbound.body) {
         return Err("the message body carries characters the service does not accept".to_owned());
-    }
-    if outbound.attributes.len() > MAX_ATTRIBUTES {
-        return Err(format!(
-            "a message carries at most {MAX_ATTRIBUTES} message attributes, and this one carries \
-             {}: a header becomes an attribute",
-            outbound.attributes.len()
-        ));
     }
     let mut size = outbound.body.len();
     for (name, value) in &outbound.attributes {

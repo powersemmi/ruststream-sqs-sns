@@ -44,6 +44,40 @@ pub enum SqsError {
         source: Box<dyn StdError + Send + Sync>,
     },
 
+    /// A header cannot travel as a message attribute, so the publish refuses the message instead
+    /// of sending it without the header.
+    #[error("header '{header}' cannot travel to '{destination}': {source}")]
+    InvalidHeader {
+        /// The queue or topic the message targeted.
+        destination: String,
+        /// The header's name.
+        header: String,
+        /// Why the header has no attribute form.
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
+
+    /// A message needs more message attributes than SQS and SNS carry on one message.
+    ///
+    /// Every header but [`PARTITION_KEY_HEADER`](crate::PARTITION_KEY_HEADER) becomes an
+    /// attribute, and the crate adds `ruststream-payload-encoding` to a payload that travels
+    /// base64.
+    #[error(
+        "'{destination}' takes at most {limit} message attributes, and this message needs \
+         {count}: every header but 'partition-key' becomes one{}",
+        added_note(*.crate_added)
+    )]
+    TooManyAttributes {
+        /// The queue or topic the message targeted.
+        destination: String,
+        /// The attributes the message needs.
+        count: usize,
+        /// The most a message carries.
+        limit: usize,
+        /// The attribute the crate itself added to the count, if it added one.
+        crate_added: Option<&'static str>,
+    },
+
     /// A topic admin call (create, subscribe) failed.
     #[cfg(feature = "sns")]
     #[error("sns admin error for '{name}': {source}")]
@@ -108,6 +142,14 @@ pub enum SqsError {
         /// The setting that has no meaning there.
         setting: &'static str,
     },
+}
+
+/// The tail of a [`SqsError::TooManyAttributes`] message: which attribute the crate added.
+fn added_note(crate_added: Option<&str>) -> String {
+    crate_added.map_or_else(
+        || ", and the crate added none of its own".to_owned(),
+        |name| format!(", and the crate added '{name}' because the payload travels base64"),
+    )
 }
 
 /// Formats an SDK error with its full cause chain and boxes it, so transport failures stay

@@ -10,9 +10,11 @@
     allow(clippy::infallible_destructuring_match)
 )]
 
+use std::collections::HashMap;
 use std::future::{Future, ready};
 
 use aws_sdk_sns::Client as SnsClient;
+use aws_sdk_sns::error::BuildError;
 use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 #[cfg(feature = "asyncapi")]
@@ -25,7 +27,7 @@ use crate::broker::{ConnectedSqsBroker, Core, CoreCell, Transport};
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process;
-use crate::message::{ENCODING_ATTRIBUTE, PARTITION_KEY_HEADER, encode_body, is_service_text};
+use crate::message::{AttributeValue, encode_attributes_with, encode_body};
 use crate::publisher::{SqsPublishOptions, fifo_settings, is_fifo};
 
 /// The binding version this crate writes for the `sns` protocol.
@@ -199,42 +201,31 @@ impl SnsPublisher {
         let (destination, payload, headers) = msg.into_parts();
         let (body, base64_marker) = encode_body(payload);
 
+        // The same mapping the SQS side makes, refusals and limit included: SNS carries the
+        // same attribute types and as many of them.
+        let mut attributes = HashMap::with_capacity(headers.len() + usize::from(base64_marker));
+        let partition_key =
+            encode_attributes_with(&headers, base64_marker, destination, |name, value| {
+                let attribute = match value {
+                    AttributeValue::Text(text) => SnsAttributeValue::builder()
+                        .data_type("String")
+                        .string_value(text),
+                    AttributeValue::Binary(bytes) => SnsAttributeValue::builder()
+                        .data_type("Binary")
+                        .binary_value(Blob::new(bytes)),
+                };
+                attributes.insert(name.to_owned(), attribute.build()?);
+                Ok::<_, BuildError>(())
+            })?
+            .map(|key| String::from_utf8_lossy(key).into_owned());
+
         let mut publish = aws
             .clients
             .sns(SnsClient::publish)
             .topic_arn(&arn)
             .message(body);
-        let mut partition_key = None;
-        for (name, value) in headers.iter() {
-            if name == PARTITION_KEY_HEADER {
-                partition_key = Some(String::from_utf8_lossy(value).into_owned());
-                continue;
-            }
-            // The same split the SQS side makes, for the same reason: a value the service
-            // refuses as text travels as binary rather than being mangled or rejected. A
-            // `HeaderMap` value is bytes on both sides, so a subscriber reads back what was
-            // written either way.
-            let attribute = match std::str::from_utf8(value) {
-                Ok(text) if is_service_text(text) => SnsAttributeValue::builder()
-                    .data_type("String")
-                    .string_value(text)
-                    .build(),
-                _ => SnsAttributeValue::builder()
-                    .data_type("Binary")
-                    .binary_value(Blob::new(value))
-                    .build(),
-            };
-            if let Ok(attribute) = attribute {
-                publish = publish.message_attributes(name, attribute);
-            }
-        }
-        if base64_marker
-            && let Ok(marker) = SnsAttributeValue::builder()
-                .data_type("String")
-                .string_value("base64")
-                .build()
-        {
-            publish = publish.message_attributes(ENCODING_ATTRIBUTE, marker);
+        if !attributes.is_empty() {
+            publish = publish.set_message_attributes(Some(attributes));
         }
         if let Some(settings) = fifo_settings(
             destination,

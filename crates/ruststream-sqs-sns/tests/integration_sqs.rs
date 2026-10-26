@@ -7,7 +7,8 @@ use std::num::NonZeroU32;
 use std::pin::pin;
 use std::time::{Duration, Instant};
 
-use aws_sdk_sqs::types::QueueAttributeName;
+use aws_sdk_sqs::primitives::Blob;
+use aws_sdk_sqs::types::{MessageAttributeValue, QueueAttributeName};
 use futures::StreamExt;
 use ruststream::{
     ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, RetryDeclaration,
@@ -639,6 +640,153 @@ async fn a_missing_queue_is_reported_rather_than_created() {
             .is_err(),
         "a refused subscription created the queue anyway",
     );
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// The attribute the crate adds to a payload that travels base64.
+const PAYLOAD_MARKER: &str = "ruststream-payload-encoding";
+
+/// Ten headers, the most a message carries as attributes.
+fn ten_headers() -> HeaderMap {
+    (0..10)
+        .map(|index| (format!("x-header-{index}"), "value"))
+        .collect()
+}
+
+// Ten headers fit, and a binary payload brings the crate's own marker as the eleventh attribute.
+// The service would refuse the send with a generic answer; the publish names the count, the
+// limit and the attribute the crate added instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_over_the_attribute_limit_names_what_the_crate_added() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+    let queue = unique("too-many-attributes");
+    let _subscriber = connected
+        .subscribe_queue(SqsQueue::new(&queue).create_if_missing())
+        .await
+        .expect("subscription opens");
+
+    let refused = connected
+        .publisher()
+        .publish(
+            OutgoingMessage::new(&queue, [0u8, 159, 146].as_slice()).with_headers(ten_headers()),
+            None,
+        )
+        .await
+        .expect_err("eleven attributes are more than a message carries");
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::TooManyAttributes {
+                count: 11,
+                limit: 10,
+                ..
+            }
+        ),
+        "got {reason}"
+    );
+    assert!(
+        reason.contains(&queue),
+        "the refusal names the queue: {reason}"
+    );
+    assert!(
+        reason.contains(PAYLOAD_MARKER),
+        "the refusal names the marker: {reason}"
+    );
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+// A producer outside RustStream writes attributes of every type the service has. Each one reaches
+// the delivery's headers: text and numbers as their text, binary values as the bytes written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_foreign_producers_attributes_all_reach_the_headers() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+    let queue = unique("foreign-attributes");
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(5)),
+        )
+        .await
+        .expect("subscription opens");
+
+    let client = admin(&endpoint).await;
+    let url = client
+        .get_queue_url()
+        .queue_name(&queue)
+        .send()
+        .await
+        .expect("the queue is there")
+        .queue_url()
+        .expect("GetQueueUrl returns the URL")
+        .to_owned();
+    let attribute = |data_type: &str| MessageAttributeValue::builder().data_type(data_type);
+    client
+        .send_message()
+        .queue_url(url)
+        .message_body("plain")
+        .message_attributes(
+            "text",
+            attribute("String")
+                .string_value("acme")
+                .build()
+                .expect("typed"),
+        )
+        .message_attributes(
+            "number",
+            attribute("Number")
+                .string_value("42")
+                .build()
+                .expect("typed"),
+        )
+        .message_attributes(
+            "custom",
+            attribute("String.tenant")
+                .string_value("eu")
+                .build()
+                .expect("typed"),
+        )
+        .message_attributes(
+            "blob",
+            attribute("Binary")
+                .binary_value(Blob::new([0u8, 255, 7]))
+                .build()
+                .expect("typed"),
+        )
+        .message_attributes(
+            "image",
+            attribute("Binary.png")
+                .binary_value(Blob::new([137u8, 80]))
+                .build()
+                .expect("typed"),
+        )
+        .send()
+        .await
+        .expect("the foreign send succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    let headers = message.headers();
+    assert_eq!(message.payload(), b"plain");
+    assert_eq!(headers.get_str("text"), Some("acme"));
+    assert_eq!(headers.get_str("number"), Some("42"));
+    assert_eq!(headers.get_str("custom"), Some("eu"));
+    assert_eq!(headers.get("blob"), Some([0u8, 255, 7].as_slice()));
+    assert_eq!(headers.get("image"), Some([137u8, 80].as_slice()));
+    message.ack().await.expect("ack succeeds");
 
     connected.shutdown().await.expect("shutdown succeeds");
 }

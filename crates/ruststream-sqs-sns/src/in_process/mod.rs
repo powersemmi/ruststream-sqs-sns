@@ -118,7 +118,7 @@ fn frame(
     default_group: Option<&str>,
 ) -> Result<Outbound, SqsError> {
     let (body, base64_marker) = encode_body(payload);
-    let (attributes, partition_key) = encode_attributes(headers, base64_marker);
+    let (attributes, partition_key) = encode_attributes(headers, base64_marker, destination)?;
     let fifo = fifo_settings(destination, fifo, options, partition_key, default_group)?;
     Ok(Outbound {
         body,

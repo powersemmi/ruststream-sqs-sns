@@ -385,7 +385,7 @@ impl SqsPublisher {
         // The destination is the caller's string and outlives the message the body is taken from.
         let (destination, payload, headers) = msg.into_parts();
         let (body, base64_marker) = encode_body(payload);
-        let (attributes, partition_key) = encode_attributes(&headers, base64_marker);
+        let (attributes, partition_key) = encode_attributes(&headers, base64_marker, destination)?;
         let fifo = is_fifo(destination) || is_fifo(&url);
         let settings = fifo_settings(
             destination,

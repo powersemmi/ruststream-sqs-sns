@@ -12,11 +12,13 @@
     allow(clippy::infallible_destructuring_match)
 )]
 
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
 use aws_sdk_sqs::Client;
+use aws_sdk_sqs::error::BuildError;
 use aws_sdk_sqs::primitives::Blob;
 use aws_sdk_sqs::types::{
     Message as AwsMessage, MessageAttributeValue, MessageSystemAttributeName,
@@ -30,7 +32,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::clients::Clients;
-use crate::error::sdk_err;
+use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process::BusReceipt;
 use crate::queue::whole_seconds;
@@ -508,48 +510,103 @@ pub(crate) fn encode_body(payload: BytesMut) -> (String, bool) {
     }
 }
 
-/// Converts headers into SQS message attributes (String for values the service carries as text,
-/// Binary otherwise), pulling the partition key out for the FIFO group id.
+/// The most message attributes one message carries, on SQS and on SNS alike.
+pub(crate) const MAX_ATTRIBUTES: usize = 10;
+
+/// The form one header takes as a message attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttributeValue<'a> {
+    /// A `String` attribute: the value is text the service carries.
+    Text(&'a str),
+    /// A `Binary` attribute: the bytes as written.
+    Binary(&'a [u8]),
+}
+
+/// Walks the headers as the message attributes they become, handing each one to `put`, and
+/// returns the partition key, which becomes the FIFO group id instead of an attribute.
 ///
-/// A `HeaderMap` value is bytes on both sides of the wire, so the choice between the two
-/// attribute types is invisible to a service: what it wrote is what it reads back.
+/// A value the service carries as text becomes a `String` attribute and any other value a
+/// `Binary` one. A `HeaderMap` value is bytes on both sides of the wire, so the choice between
+/// the two is invisible to a service: what it wrote is what it reads back. The marker of a
+/// base64 payload comes last.
+///
+/// # Errors
+///
+/// Returns [`SqsError::InvalidHeader`] for an attribute `put` cannot build, and
+/// [`SqsError::TooManyAttributes`] when the message needs more attributes than it carries.
+pub(crate) fn encode_attributes_with<'h, BuildError>(
+    headers: &'h HeaderMap,
+    base64_marker: bool,
+    destination: &str,
+    mut put: impl FnMut(&'h str, AttributeValue<'h>) -> Result<(), BuildError>,
+) -> Result<Option<&'h [u8]>, SqsError>
+where
+    BuildError: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let invalid =
+        |header: &str, source: Box<dyn std::error::Error + Send + Sync>| SqsError::InvalidHeader {
+            destination: destination.to_owned(),
+            header: header.to_owned(),
+            source,
+        };
+    let mut group = None;
+    let mut count = usize::from(base64_marker);
+    for (name, value) in headers.iter() {
+        if name == PARTITION_KEY_HEADER {
+            group = Some(value);
+            continue;
+        }
+        count += 1;
+        let attribute = match std::str::from_utf8(value) {
+            Ok(text) if is_service_text(text) => AttributeValue::Text(text),
+            _ => AttributeValue::Binary(value),
+        };
+        put(name, attribute).map_err(|source| invalid(name, source.into()))?;
+    }
+    if count > MAX_ATTRIBUTES {
+        return Err(SqsError::TooManyAttributes {
+            destination: destination.to_owned(),
+            count,
+            limit: MAX_ATTRIBUTES,
+            crate_added: base64_marker.then_some(ENCODING_ATTRIBUTE),
+        });
+    }
+    if base64_marker {
+        put(ENCODING_ATTRIBUTE, AttributeValue::Text("base64"))
+            .map_err(|source| invalid(ENCODING_ATTRIBUTE, source.into()))?;
+    }
+    Ok(group)
+}
+
+/// Converts headers into SQS message attributes, pulling the partition key out for the FIFO
+/// group id. See [`encode_attributes_with`] for the mapping and its refusals.
+///
+/// # Errors
+///
+/// Returns [`SqsError::InvalidHeader`] and [`SqsError::TooManyAttributes`] as
+/// [`encode_attributes_with`] does.
 pub(crate) fn encode_attributes(
     headers: &HeaderMap,
     base64_marker: bool,
-) -> (
-    std::collections::HashMap<String, MessageAttributeValue>,
-    Option<String>,
-) {
-    let mut attributes = std::collections::HashMap::new();
-    let mut group = None;
-    for (name, value) in headers.iter() {
-        if name == PARTITION_KEY_HEADER {
-            group = Some(String::from_utf8_lossy(value).into_owned());
-            continue;
-        }
-        let attribute = match std::str::from_utf8(value) {
-            Ok(text) if is_service_text(text) => MessageAttributeValue::builder()
+    destination: &str,
+) -> Result<(HashMap<String, MessageAttributeValue>, Option<String>), SqsError> {
+    let mut attributes = HashMap::with_capacity(headers.len() + usize::from(base64_marker));
+    let group = encode_attributes_with(headers, base64_marker, destination, |name, value| {
+        let attribute = match value {
+            AttributeValue::Text(text) => MessageAttributeValue::builder()
                 .data_type("String")
-                .string_value(text)
-                .build(),
-            _ => MessageAttributeValue::builder()
+                .string_value(text),
+            AttributeValue::Binary(bytes) => MessageAttributeValue::builder()
                 .data_type("Binary")
-                .binary_value(Blob::new(value))
-                .build(),
+                .binary_value(Blob::new(bytes)),
         };
-        if let Ok(attribute) = attribute {
-            attributes.insert(name.to_owned(), attribute);
-        }
-    }
-    if base64_marker
-        && let Ok(marker) = MessageAttributeValue::builder()
-            .data_type("String")
-            .string_value("base64")
-            .build()
-    {
-        attributes.insert(ENCODING_ATTRIBUTE.to_owned(), marker);
-    }
-    (attributes, group)
+        attributes.insert(name.to_owned(), attribute.build()?);
+        Ok::<_, BuildError>(())
+    })?;
+    Ok((
+        attributes,
+        group.map(|key| String::from_utf8_lossy(key).into_owned()),
+    ))
 }
 
 #[cfg(test)]
@@ -619,7 +676,8 @@ mod tests {
     fn header_values_the_service_refuses_become_binary_attributes() {
         let mut headers = HeaderMap::new();
         headers.insert("x-trace", Bytes::from_static(&[0u8, 1, 2, 3]));
-        let (attributes, _) = encode_attributes(&headers, false);
+        let (attributes, _) =
+            encode_attributes(&headers, false, "orders").expect("the headers fit");
         let attribute = attributes.get("x-trace").expect("the header is carried");
         assert_eq!(attribute.data_type(), "Binary");
         assert_eq!(
@@ -628,12 +686,40 @@ mod tests {
         );
     }
 
+    /// Ten headers is the most a message carries; the partition key takes none of them, and an
+    /// eleventh header with no marker beside it is refused with the crate adding nothing.
+    #[test]
+    fn the_attribute_limit_counts_the_headers_that_become_attributes() {
+        let mut headers: HeaderMap = (0..10)
+            .map(|index| (format!("x-header-{index}"), "value"))
+            .collect();
+        headers.insert(PARTITION_KEY_HEADER, "user-42");
+        let (attributes, _) = encode_attributes(&headers, false, "orders").expect("ten fit");
+        assert_eq!(attributes.len(), 10);
+
+        headers.insert("x-header-10", "value");
+        let refused = encode_attributes(&headers, false, "orders").expect_err("eleven do not");
+        assert!(
+            matches!(
+                refused,
+                SqsError::TooManyAttributes {
+                    count: 11,
+                    crate_added: None,
+                    ..
+                }
+            ),
+            "got {refused}"
+        );
+        assert!(refused.to_string().contains("added none"), "got {refused}");
+    }
+
     #[test]
     fn partition_key_header_becomes_the_group_id() {
         let mut headers = HeaderMap::new();
         headers.insert(PARTITION_KEY_HEADER, "user-42");
         headers.insert("x-tenant", "acme");
-        let (attributes, group) = encode_attributes(&headers, false);
+        let (attributes, group) =
+            encode_attributes(&headers, false, "orders").expect("the headers fit");
         assert_eq!(group.as_deref(), Some("user-42"));
         assert!(attributes.contains_key("x-tenant"));
         assert!(!attributes.contains_key(PARTITION_KEY_HEADER));
