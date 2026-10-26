@@ -37,7 +37,8 @@ once, in no particular order.
 the message's [`PARTITION_KEY_HEADER`](../components/delivery/partition-key.md), which holds
 its [FIFO message group](../components/subscriptions/fifo.md). So a group never spreads over two lanes, and the order [Groups](sqs/fifo.md)
 keeps on the queue is kept in the service. Lanes fewer than groups serve several groups each. A
-standard queue has no group, so its messages have no key and rotate over the lanes.
+standard queue has no groups: a message published there with the header carries it as an
+attribute and goes to its key's lane, and a message without it rotates over the lanes.
 
 The pump stays at most one receive ahead of the handlers. A message it received and has not handed
 over yet is kept invisible by its extender meanwhile. A FIFO queue also holds back a group while one of its messages is in flight, which keeps a

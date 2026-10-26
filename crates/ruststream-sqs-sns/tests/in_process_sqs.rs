@@ -371,6 +371,192 @@ async fn refused_headers(headers: HeaderMap) -> Result<String, Box<dyn Error>> {
     Ok(refused.to_string())
 }
 
+/// The error a publish of `payload` with `headers` to the queue `orders` reports.
+async fn refused_message(payload: &[u8], headers: HeaderMap) -> Result<SqsError, Box<dyn Error>> {
+    let connected = connected().await?;
+    let _subscriber = connected.subscribe_queue(SqsQueue::new("orders")).await?;
+    connected
+        .publisher()
+        .publish(
+            OutgoingMessage::new("orders", payload).with_headers(headers),
+            None,
+        )
+        .await
+        .err()
+        .ok_or_else(|| "SQS refuses the message, so the publish must fail".into())
+}
+
+/// Ten headers, the most a message carries as attributes.
+fn ten_headers() -> HeaderMap {
+    (0..10)
+        .map(|index| (format!("x-header-{index}"), "value"))
+        .collect()
+}
+
+/// Ten headers fit, and a binary payload brings the crate's own marker as the eleventh
+/// attribute: the refusal names the count, the limit and the attribute the crate added.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_payload_marker_counts_toward_the_attribute_limit() -> Result<(), Box<dyn Error>> {
+    let refused = refused_message(&[0u8, 159, 146], ten_headers()).await?;
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::TooManyAttributes {
+                count: 11,
+                limit: 10,
+                crate_added: Some("ruststream-payload-encoding"),
+                ..
+            }
+        ),
+        "got {reason}"
+    );
+    assert!(
+        reason.contains("'orders'"),
+        "the refusal names the queue: {reason}"
+    );
+    assert!(
+        reason.contains("ruststream-payload-encoding"),
+        "the refusal names the marker: {reason}"
+    );
+    Ok(())
+}
+
+/// The partition key becomes the message group, not an attribute, so ten headers beside it fit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_partition_key_takes_no_attribute() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let mut subscriber = connected
+        .subscribe_queue(SqsQueue::new("orders.fifo"))
+        .await?;
+    let mut headers = ten_headers();
+    headers.insert("partition-key", "user-42");
+    connected
+        .publisher()
+        .publish(
+            OutgoingMessage::new("orders.fifo", b"{}".as_slice()).with_headers(headers),
+            None,
+        )
+        .await?;
+    let mut stream = pin!(subscriber.stream());
+    let delivery = stream.next().await.ok_or("the stream ended")??;
+    assert_eq!(
+        delivery.headers().len(),
+        12,
+        "ten headers, the group and the receive count"
+    );
+    assert_eq!(delivery.headers().get_str("partition-key"), Some("user-42"));
+    delivery.ack().await?;
+    Ok(())
+}
+
+/// A notification carries attributes under the same limit, and the topic's refusal names the
+/// marker the same way.
+#[cfg(feature = "sns")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_notification_over_the_attribute_limit_is_refused() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let refused = connected
+        .sns_publisher()
+        .publish(
+            OutgoingMessage::new("events", [0u8, 159, 146].as_slice()).with_headers(ten_headers()),
+            None,
+        )
+        .await
+        .err()
+        .ok_or("SNS refuses the message, so the publish must fail")?;
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::TooManyAttributes {
+                count: 11,
+                crate_added: Some("ruststream-payload-encoding"),
+                ..
+            }
+        ),
+        "got {reason}"
+    );
+    assert!(
+        reason.contains("'events'"),
+        "the refusal names the topic: {reason}"
+    );
+    Ok(())
+}
+
+/// A standard queue has no message groups, so the partition key travels there as an ordinary
+/// attribute and counts toward the ten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_partition_key_counts_as_an_attribute_on_a_standard_queue() -> Result<(), Box<dyn Error>>
+{
+    let mut headers = ten_headers();
+    headers.insert("partition-key", "user-42");
+    let refused = refused_message(b"{}", headers).await?;
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::TooManyAttributes {
+                count: 11,
+                crate_added: None,
+                ref attributes,
+                ..
+            } if attributes.iter().any(|name| name == "partition-key")
+        ),
+        "got {reason}"
+    );
+    assert!(
+        reason.contains("partition-key"),
+        "the refusal names the attributes: {reason}"
+    );
+    Ok(())
+}
+
+/// A partition key published to a standard topic reaches the standard queue behind it as the
+/// same header.
+#[cfg(feature = "sns")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_standard_topic_carries_the_partition_key_as_a_header() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let mut inbox = connected.subscribe_queue(SqsQueue::new("audit")).await?;
+    connected
+        .subscribe_queue_to_topic("events", "audit")
+        .await?;
+    let mut headers = HeaderMap::new();
+    headers.insert("partition-key", "user-42");
+    connected
+        .sns_publisher()
+        .publish(
+            OutgoingMessage::new("events", b"{}".as_slice()).with_headers(headers),
+            None,
+        )
+        .await?;
+    let mut stream = pin!(inbox.stream());
+    let delivery = stream.next().await.ok_or("the stream ended")??;
+    assert_eq!(delivery.headers().get_str("partition-key"), Some("user-42"));
+    delivery.ack().await?;
+    Ok(())
+}
+
+/// The crate reads the marker attribute off every delivery, so a header of that name would be
+/// taken for it on the way back and lost: the publish refuses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_header_named_like_the_payload_marker_is_refused() -> Result<(), Box<dyn Error>> {
+    let mut headers = HeaderMap::new();
+    headers.insert("ruststream-payload-encoding", "base64");
+    let refused = refused_message(b"{}", headers).await?;
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::InvalidHeader { ref destination, ref header, .. }
+                if destination == "orders" && header == "ruststream-payload-encoding"
+        ),
+        "got {reason}"
+    );
+    Ok(())
+}
+
 /// Every header becomes a message attribute, and a message carries at most ten of them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_message_with_more_than_ten_headers_is_refused() -> Result<(), Box<dyn Error>> {
