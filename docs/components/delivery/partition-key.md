@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: PARTITION_KEY_HEADER
-description: "PARTITION_KEY_HEADER is the portable spelling of the FIFO message group: sent as MessageGroupId, read back on delivery, ignored by standard queues."
+description: "PARTITION_KEY_HEADER is the portable spelling of the FIFO message group: sent as MessageGroupId on FIFO, an ordinary attribute on a standard queue, read back on delivery either way."
 ---
 
 import Tabs from '@theme/Tabs';
@@ -9,12 +9,11 @@ import TabItem from '@theme/TabItem';
 
 # PARTITION_KEY_HEADER
 
-[`PARTITION_KEY_HEADER`](api:ruststream_sqs_sns::PARTITION_KEY_HEADER) is the portable spelling of the FIFO message group: sent as `MessageGroupId`, read back on delivery, ignored by standard queues.
+[`PARTITION_KEY_HEADER`](api:ruststream_sqs_sns::PARTITION_KEY_HEADER) is the portable spelling of the FIFO message group: sent as `MessageGroupId` on a FIFO queue, as an ordinary attribute on a standard one, and read back on delivery either way.
 
 The header's name is `partition-key`, the one the core's in-memory broker uses, so a service that sets it runs unchanged on another broker.
-It never becomes a message attribute.
-A publish to a `.fifo` queue or topic sends it as the message group, and a delivery from a FIFO queue carries the group back in it.
-A standard queue has no message groups, so the header is dropped there, and a delivery from a standard queue carries none.
+A publish to a `.fifo` queue or topic sends it as the message group, not as an attribute, and a delivery from a FIFO queue carries the group back in it.
+A standard queue or topic has no message groups, so there the header travels as an ordinary `String` attribute and counts toward the ten a message carries; a delivery carries it back as the same header.
 
 The group of a FIFO publish resolves from the most specific setting: the call's own [`group_id`](../publishing/group-id.md) step, then this header, then the group the publish policy fixed.
 A FIFO publish that names none goes under the group `default`.

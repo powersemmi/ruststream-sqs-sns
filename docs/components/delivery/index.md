@@ -15,7 +15,7 @@ A handler reads the same bytes either way, and never sees which type carried the
 No envelope wraps the message, so any other SQS producer or consumer reads it as it is.
 
 SQS and SNS take at most ten attributes on one message.
-A publish that needs more fails before it is sent, with [`SqsError::TooManyAttributes`](api:ruststream_sqs_sns::SqsError::TooManyAttributes): it names the destination, the count, the limit and the attribute the crate added, if it added one.
+A publish that needs more fails before it is sent, with [`SqsError::TooManyAttributes`](api:ruststream_sqs_sns::SqsError::TooManyAttributes): it names the destination, the count, the limit, the attributes, and the one the crate added, if it added one.
 An attribute name is 1 to 256 letters, digits, `_`, `-` and `.`, and a value is never empty.
 A message SQS refuses fails the publish with [`SqsError::Publish`](api:ruststream_sqs_sns::SqsError::Publish), and the [in-process account](../testing/index.md) refuses it the same way.
 A message is at most 1 MiB, body and attributes together.

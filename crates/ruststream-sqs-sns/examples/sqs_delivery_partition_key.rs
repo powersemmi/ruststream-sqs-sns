@@ -1,5 +1,6 @@
 //! `PARTITION_KEY_HEADER`: the portable spelling of a FIFO message group. A FIFO queue sends it as
-//! the message group and hands it back on delivery; a standard queue ignores it.
+//! the message group and hands it back on delivery; a standard queue carries it as an
+//! ordinary attribute and hands it back the same way.
 //!
 //! ```text
 //! cargo test --example sqs_delivery_partition_key --features testing
@@ -100,7 +101,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_standard_queue_ignores_the_key() -> Result<(), Box<dyn Error>> {
+    async fn a_standard_queue_carries_the_key_as_a_header() -> Result<(), Box<dyn Error>> {
         let tb = TestApp::start(app()).await?;
         let mut headers = HeaderMap::new();
         headers.insert(PARTITION_KEY_HEADER, "acme");
@@ -111,6 +112,10 @@ mod tests {
             .publish()
             .await?;
 
+        tb.broker::<SqsBroker>()
+            .published::<Order>("orders")
+            .assert_called_once()
+            .with_header(PARTITION_KEY_HEADER, "acme");
         tb.broker::<SqsBroker>()
             .subscriber("orders")
             .assert_called_once()

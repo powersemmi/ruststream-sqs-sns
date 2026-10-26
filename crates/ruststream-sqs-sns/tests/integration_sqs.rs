@@ -71,6 +71,11 @@ async fn roundtrip_preserves_payload_headers_and_partition_key() {
         Some("application/json")
     );
     assert_eq!(message.headers().get_str("x-tenant"), Some("acme"));
+    assert_eq!(
+        message.headers().get_str(PARTITION_KEY_HEADER),
+        Some("user-42"),
+        "a standard queue carries the partition key as an attribute"
+    );
     message.ack().await.expect("ack succeeds");
 
     connected.shutdown().await.expect("shutdown succeeds");
@@ -823,6 +828,50 @@ async fn a_foreign_producers_attributes_all_reach_the_headers() {
     assert_eq!(headers.get_str("custom"), Some("eu"));
     assert_eq!(headers.get("blob"), Some([0u8, 255, 7].as_slice()));
     assert_eq!(headers.get("image"), Some([137u8, 80].as_slice()));
+    message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+// A standard queue has no message groups, so the partition key travels as an ordinary attribute
+// and comes back as the same header.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_standard_queue_carries_the_partition_key_as_a_header() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+    let queue = unique("standard-partition-key");
+    let mut subscriber = connected
+        .subscribe_queue(
+            SqsQueue::new(&queue)
+                .create_if_missing()
+                .wait(Duration::from_secs(5)),
+        )
+        .await
+        .expect("subscription opens");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(PARTITION_KEY_HEADER, "user-42");
+    connected
+        .publisher()
+        .publish(
+            OutgoingMessage::new(&queue, b"{}".as_slice()).with_headers(headers),
+            None,
+        )
+        .await
+        .expect("publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(
+        message.headers().get_str(PARTITION_KEY_HEADER),
+        Some("user-42")
+    );
     message.ack().await.expect("ack succeeds");
 
     connected.shutdown().await.expect("shutdown succeeds");

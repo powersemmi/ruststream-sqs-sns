@@ -59,12 +59,14 @@ pub enum SqsError {
 
     /// A message needs more message attributes than SQS and SNS carry on one message.
     ///
-    /// Every header but [`PARTITION_KEY_HEADER`](crate::PARTITION_KEY_HEADER) becomes an
-    /// attribute, and the crate adds `ruststream-payload-encoding` to a payload that travels
-    /// base64.
+    /// Every header becomes an attribute, except
+    /// [`PARTITION_KEY_HEADER`](crate::PARTITION_KEY_HEADER) on a FIFO destination, where it
+    /// becomes the message group. The crate adds `ruststream-payload-encoding` to a payload that
+    /// travels base64.
     #[error(
         "'{destination}' takes at most {limit} message attributes, and this message needs \
-         {count}: every header but 'partition-key' becomes one{}",
+         {count} ({}): every header becomes one, except 'partition-key' on a FIFO destination{}",
+        .attributes.join(", "),
         added_note(*.crate_added)
     )]
     TooManyAttributes {
@@ -76,6 +78,8 @@ pub enum SqsError {
         limit: usize,
         /// The attribute the crate itself added to the count, if it added one.
         crate_added: Option<&'static str>,
+        /// The names of the attributes the message needs, the crate's own included.
+        attributes: Vec<String>,
     },
 
     /// A topic admin call (create, subscribe) failed.

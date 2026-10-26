@@ -203,9 +203,10 @@ impl SnsPublisher {
 
         // The same mapping the SQS side makes, refusals and limit included: SNS carries the
         // same attribute types and as many of them.
+        let fifo = is_fifo(&arn);
         let mut attributes = HashMap::with_capacity(headers.len() + usize::from(base64_marker));
         let partition_key =
-            encode_attributes_with(&headers, base64_marker, destination, |name, value| {
+            encode_attributes_with(&headers, base64_marker, fifo, destination, |name, value| {
                 let attribute = match value {
                     AttributeValue::Text(text) => SnsAttributeValue::builder()
                         .data_type("String")
@@ -229,7 +230,7 @@ impl SnsPublisher {
         }
         if let Some(settings) = fifo_settings(
             destination,
-            is_fifo(&arn),
+            fifo,
             options,
             partition_key,
             self.default_group.as_deref(),

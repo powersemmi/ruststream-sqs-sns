@@ -303,8 +303,8 @@ pub(crate) struct FifoSettings {
 /// fixed, then `"default"`, because FIFO rejects a send with no group at all.
 ///
 /// Only this crate's own settings refuse a standard destination. A `partition-key` header is a
-/// portable hint a service may set for every broker it publishes to, so a standard queue
-/// ignores it the way it always has.
+/// portable hint a service may set for every broker it publishes to, so it names no group on a
+/// standard queue; it travels there as an ordinary attribute and comes back as the same header.
 pub(crate) fn fifo_settings(
     destination: &str,
     fifo: bool,
@@ -385,8 +385,9 @@ impl SqsPublisher {
         // The destination is the caller's string and outlives the message the body is taken from.
         let (destination, payload, headers) = msg.into_parts();
         let (body, base64_marker) = encode_body(payload);
-        let (attributes, partition_key) = encode_attributes(&headers, base64_marker, destination)?;
         let fifo = is_fifo(destination) || is_fifo(&url);
+        let (attributes, partition_key) =
+            encode_attributes(&headers, base64_marker, fifo, destination)?;
         let settings = fifo_settings(
             destination,
             fifo,
@@ -612,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn a_standard_queue_still_ignores_a_portable_partition_key() {
+    fn a_portable_partition_key_names_no_group_on_a_standard_queue() {
         let resolved =
             settings("orders", None, Some("header"), None).expect("a portable hint is not an ask");
         assert!(resolved.is_none());

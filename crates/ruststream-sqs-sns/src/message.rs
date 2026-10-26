@@ -525,7 +525,9 @@ pub(crate) enum AttributeValue<'a> {
 }
 
 /// Walks the headers as the message attributes they become, handing each one to `put`, and
-/// returns the partition key, which becomes the FIFO group id instead of an attribute.
+/// returns the partition key of a `fifo` destination, which becomes its group id instead of an
+/// attribute. A standard destination has no groups, so there the partition key is an attribute
+/// like any other header.
 ///
 /// A value the service carries as text becomes a `String` attribute and any other value a
 /// `Binary` one. A `HeaderMap` value is bytes on both sides of the wire, so the choice between
@@ -540,6 +542,7 @@ pub(crate) enum AttributeValue<'a> {
 pub(crate) fn encode_attributes_with<'h, BuildError>(
     headers: &'h HeaderMap,
     base64_marker: bool,
+    fifo: bool,
     destination: &str,
     mut put: impl FnMut(&'h str, AttributeValue<'h>) -> Result<(), BuildError>,
 ) -> Result<Option<&'h [u8]>, SqsError>
@@ -555,7 +558,7 @@ where
     let mut group = None;
     let mut count = usize::from(base64_marker);
     for (name, value) in headers.iter() {
-        if name == PARTITION_KEY_HEADER {
+        if fifo && name == PARTITION_KEY_HEADER {
             group = Some(value);
             continue;
         }
@@ -580,6 +583,14 @@ where
             count,
             limit: MAX_ATTRIBUTES,
             crate_added: base64_marker.then_some(ENCODING_ATTRIBUTE),
+            // The refusal path only: the names are collected once the send is already off.
+            attributes: headers
+                .iter()
+                .map(|(name, _)| name)
+                .filter(|name| !(fifo && *name == PARTITION_KEY_HEADER))
+                .chain(base64_marker.then_some(ENCODING_ATTRIBUTE))
+                .map(ToOwned::to_owned)
+                .collect(),
         });
     }
     if base64_marker {
@@ -589,8 +600,8 @@ where
     Ok(group)
 }
 
-/// Converts headers into SQS message attributes, pulling the partition key out for the FIFO
-/// group id. See [`encode_attributes_with`] for the mapping and its refusals.
+/// Converts headers into SQS message attributes, pulling the partition key of a `fifo` queue out
+/// for its group id. See [`encode_attributes_with`] for the mapping and its refusals.
 ///
 /// # Errors
 ///
@@ -599,21 +610,23 @@ where
 pub(crate) fn encode_attributes(
     headers: &HeaderMap,
     base64_marker: bool,
+    fifo: bool,
     destination: &str,
 ) -> Result<(HashMap<String, MessageAttributeValue>, Option<String>), SqsError> {
     let mut attributes = HashMap::with_capacity(headers.len() + usize::from(base64_marker));
-    let group = encode_attributes_with(headers, base64_marker, destination, |name, value| {
-        let attribute = match value {
-            AttributeValue::Text(text) => MessageAttributeValue::builder()
-                .data_type("String")
-                .string_value(text),
-            AttributeValue::Binary(bytes) => MessageAttributeValue::builder()
-                .data_type("Binary")
-                .binary_value(Blob::new(bytes)),
-        };
-        attributes.insert(name.to_owned(), attribute.build()?);
-        Ok::<_, BuildError>(())
-    })?;
+    let group =
+        encode_attributes_with(headers, base64_marker, fifo, destination, |name, value| {
+            let attribute = match value {
+                AttributeValue::Text(text) => MessageAttributeValue::builder()
+                    .data_type("String")
+                    .string_value(text),
+                AttributeValue::Binary(bytes) => MessageAttributeValue::builder()
+                    .data_type("Binary")
+                    .binary_value(Blob::new(bytes)),
+            };
+            attributes.insert(name.to_owned(), attribute.build()?);
+            Ok::<_, BuildError>(())
+        })?;
     Ok((
         attributes,
         group.map(|key| String::from_utf8_lossy(key).into_owned()),
@@ -688,7 +701,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-trace", Bytes::from_static(&[0u8, 1, 2, 3]));
         let (attributes, _) =
-            encode_attributes(&headers, false, "orders").expect("the headers fit");
+            encode_attributes(&headers, false, true, "orders.fifo").expect("the headers fit");
         let attribute = attributes.get("x-trace").expect("the header is carried");
         assert_eq!(attribute.data_type(), "Binary");
         assert_eq!(
@@ -705,11 +718,13 @@ mod tests {
             .map(|index| (format!("x-header-{index}"), "value"))
             .collect();
         headers.insert(PARTITION_KEY_HEADER, "user-42");
-        let (attributes, _) = encode_attributes(&headers, false, "orders").expect("ten fit");
+        let (attributes, _) =
+            encode_attributes(&headers, false, true, "orders.fifo").expect("ten fit");
         assert_eq!(attributes.len(), 10);
 
         headers.insert("x-header-10", "value");
-        let refused = encode_attributes(&headers, false, "orders").expect_err("eleven do not");
+        let refused =
+            encode_attributes(&headers, false, true, "orders.fifo").expect_err("eleven do not");
         assert!(
             matches!(
                 refused,
@@ -742,13 +757,29 @@ mod tests {
         assert_eq!(headers.get_str(ENCODING_ATTRIBUTE), Some("gzip"));
     }
 
+    /// A standard queue has no groups, so the partition key is an attribute like any other.
+    #[test]
+    fn a_partition_key_is_an_attribute_on_a_standard_queue() {
+        let mut headers = HeaderMap::new();
+        headers.insert(PARTITION_KEY_HEADER, "user-42");
+        let (attributes, group) =
+            encode_attributes(&headers, false, false, "orders").expect("the headers fit");
+        assert_eq!(group, None);
+        assert_eq!(
+            attributes
+                .get(PARTITION_KEY_HEADER)
+                .and_then(MessageAttributeValue::string_value),
+            Some("user-42")
+        );
+    }
+
     #[test]
     fn partition_key_header_becomes_the_group_id() {
         let mut headers = HeaderMap::new();
         headers.insert(PARTITION_KEY_HEADER, "user-42");
         headers.insert("x-tenant", "acme");
         let (attributes, group) =
-            encode_attributes(&headers, false, "orders").expect("the headers fit");
+            encode_attributes(&headers, false, true, "orders.fifo").expect("the headers fit");
         assert_eq!(group.as_deref(), Some("user-42"));
         assert!(attributes.contains_key("x-tenant"));
         assert!(!attributes.contains_key(PARTITION_KEY_HEADER));

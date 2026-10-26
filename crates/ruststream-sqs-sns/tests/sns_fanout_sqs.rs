@@ -292,3 +292,48 @@ async fn a_notification_over_the_attribute_limit_names_what_the_crate_added() {
 
     connected.shutdown().await.expect("shutdown succeeds");
 }
+
+// A standard topic has no message groups, so the partition key travels as an ordinary attribute
+// on both hops and reaches the subscribed queue as the same header.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_standard_topic_carries_the_partition_key_as_a_header() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+    let queue = unique("standard-key-inbox");
+    let topic = unique("standard-key-topic");
+    let mut subscriber = connected
+        .subscribe_queue(source(&queue))
+        .await
+        .expect("subscription opens");
+    connected
+        .subscribe_queue_to_topic(&topic, &queue)
+        .await
+        .expect("queue subscribes to topic");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(PARTITION_KEY_HEADER, "user-42");
+    connected
+        .sns_publisher()
+        .publish(
+            OutgoingMessage::new(&topic, b"notice".as_slice()).with_headers(headers),
+            None,
+        )
+        .await
+        .expect("sns publish succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(
+        message.headers().get_str(PARTITION_KEY_HEADER),
+        Some("user-42")
+    );
+    message.ack().await.expect("ack succeeds");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}

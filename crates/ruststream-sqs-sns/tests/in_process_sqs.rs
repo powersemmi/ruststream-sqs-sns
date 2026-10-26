@@ -484,6 +484,60 @@ async fn a_notification_over_the_attribute_limit_is_refused() -> Result<(), Box<
     Ok(())
 }
 
+/// A standard queue has no message groups, so the partition key travels there as an ordinary
+/// attribute and counts toward the ten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_partition_key_counts_as_an_attribute_on_a_standard_queue() -> Result<(), Box<dyn Error>>
+{
+    let mut headers = ten_headers();
+    headers.insert("partition-key", "user-42");
+    let refused = refused_message(b"{}", headers).await?;
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::TooManyAttributes {
+                count: 11,
+                crate_added: None,
+                ref attributes,
+                ..
+            } if attributes.iter().any(|name| name == "partition-key")
+        ),
+        "got {reason}"
+    );
+    assert!(
+        reason.contains("partition-key"),
+        "the refusal names the attributes: {reason}"
+    );
+    Ok(())
+}
+
+/// A partition key published to a standard topic reaches the standard queue behind it as the
+/// same header.
+#[cfg(feature = "sns")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_standard_topic_carries_the_partition_key_as_a_header() -> Result<(), Box<dyn Error>> {
+    let connected = connected().await?;
+    let mut inbox = connected.subscribe_queue(SqsQueue::new("audit")).await?;
+    connected
+        .subscribe_queue_to_topic("events", "audit")
+        .await?;
+    let mut headers = HeaderMap::new();
+    headers.insert("partition-key", "user-42");
+    connected
+        .sns_publisher()
+        .publish(
+            OutgoingMessage::new("events", b"{}".as_slice()).with_headers(headers),
+            None,
+        )
+        .await?;
+    let mut stream = pin!(inbox.stream());
+    let delivery = stream.next().await.ok_or("the stream ended")??;
+    assert_eq!(delivery.headers().get_str("partition-key"), Some("user-42"));
+    delivery.ack().await?;
+    Ok(())
+}
+
 /// The crate reads the marker attribute off every delivery, so a header of that name would be
 /// taken for it on the way back and lost: the publish refuses it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

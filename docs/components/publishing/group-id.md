@@ -23,7 +23,7 @@ The policy's group comes last, and a send that names none at all goes under `"de
 A FIFO delivery carries its group in the partition-key header, which is where a handler and a test read it.
 
 A group on a position that publishes to a standard queue fails the publish with [`SqsError::NotFifo`](api:ruststream_sqs_sns::SqsError::NotFifo).
-A partition key alone is a portable hint, so a standard queue ignores it.
+A partition key alone is a portable hint: it names no group on a standard queue and travels there as an ordinary attribute.
 [`SnsPublish::group_id`](api:ruststream_sqs_sns::SnsPublish::group_id) does the same for a FIFO topic.
 
 ## Example
