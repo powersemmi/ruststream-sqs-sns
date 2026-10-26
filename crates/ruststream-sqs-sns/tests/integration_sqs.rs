@@ -701,6 +701,43 @@ async fn a_publish_over_the_attribute_limit_names_what_the_crate_added() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
+// The crate reads the marker attribute off every delivery, so a header of that name would be
+// taken for it on the way back and lost. The publish refuses it instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_header_named_like_the_payload_marker_is_refused() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    let connected = connect(&endpoint).await;
+    let queue = unique("marker-header");
+    let _subscriber = connected
+        .subscribe_queue(SqsQueue::new(&queue).create_if_missing())
+        .await
+        .expect("subscription opens");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(PAYLOAD_MARKER, "base64");
+    let refused = connected
+        .publisher()
+        .publish(
+            OutgoingMessage::new(&queue, b"{\"id\":1}".as_slice()).with_headers(headers),
+            None,
+        )
+        .await
+        .expect_err("the crate's own attribute name is not a header a service may send");
+    let reason = refused.to_string();
+    assert!(
+        matches!(refused, SqsError::InvalidHeader { ref header, .. } if header == PAYLOAD_MARKER),
+        "got {reason}"
+    );
+    assert!(
+        reason.contains(&queue),
+        "the refusal names the queue: {reason}"
+    );
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
 // A producer outside RustStream writes attributes of every type the service has. Each one reaches
 // the delivery's headers: text and numbers as their text, binary values as the bytes written.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

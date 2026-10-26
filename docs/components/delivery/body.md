@@ -18,7 +18,9 @@ Any other payload travels base64-encoded, with the attribute `ruststream-payload
 
 The receiving side decodes the body again before the handler sees it.
 A handler receives the bytes the producer published, and the marker attribute never reaches its headers.
+An attribute of that name with any other value is not the marker, and it arrives as a header.
 The marker counts towards the ten attributes of a message, so a binary payload leaves nine for the service's own headers.
+A publish with a header named `ruststream-payload-encoding` fails with [`SqsError::InvalidHeader`](api:ruststream_sqs_sns::SqsError::InvalidHeader), because the receiving side would take it for the marker.
 SQS refuses an empty body, and so does the [in-process account](../testing/index.md).
 
 A handler that reads the bytes itself takes a `#[derive(Deserialized)]` newtype over `&[u8]`, and no codec runs.

@@ -447,8 +447,10 @@ pub(crate) fn decode_message(message: &AwsMessage) -> (Bytes, HeaderMap) {
     let mut base64_payload = false;
     if let Some(attributes) = message.message_attributes() {
         for (name, value) in attributes {
-            if name == ENCODING_ATTRIBUTE {
-                base64_payload = value.string_value() == Some("base64");
+            // The marker is the crate's only when it says what the crate writes; a producer
+            // that meant something else by the name keeps it as a header.
+            if name == ENCODING_ATTRIBUTE && value.string_value() == Some("base64") {
+                base64_payload = true;
                 continue;
             }
             if let Some(text) = value.string_value() {
@@ -532,8 +534,9 @@ pub(crate) enum AttributeValue<'a> {
 ///
 /// # Errors
 ///
-/// Returns [`SqsError::InvalidHeader`] for an attribute `put` cannot build, and
-/// [`SqsError::TooManyAttributes`] when the message needs more attributes than it carries.
+/// Returns [`SqsError::InvalidHeader`] for a header named like the crate's payload marker (the
+/// read side would take it for the marker and lose it) and for an attribute `put` cannot build,
+/// and [`SqsError::TooManyAttributes`] when the message needs more attributes than it carries.
 pub(crate) fn encode_attributes_with<'h, BuildError>(
     headers: &'h HeaderMap,
     base64_marker: bool,
@@ -555,6 +558,14 @@ where
         if name == PARTITION_KEY_HEADER {
             group = Some(value);
             continue;
+        }
+        if name == ENCODING_ATTRIBUTE {
+            return Err(invalid(
+                name,
+                "the name is the attribute that marks a base64 payload, which the subscriber \
+                 takes off every delivery"
+                    .into(),
+            ));
         }
         count += 1;
         let attribute = match std::str::from_utf8(value) {
@@ -711,6 +722,24 @@ mod tests {
             "got {refused}"
         );
         assert!(refused.to_string().contains("added none"), "got {refused}");
+    }
+
+    /// A delivery whose marker attribute says anything but `base64` came from a producer that
+    /// meant something else by it: the body is read as it is and the attribute stays a header.
+    #[test]
+    fn a_marker_attribute_that_is_not_the_crates_stays_a_header() {
+        let attribute = MessageAttributeValue::builder()
+            .data_type("String")
+            .string_value("gzip")
+            .build()
+            .expect("typed");
+        let message = AwsMessage::builder()
+            .body("plain")
+            .message_attributes(ENCODING_ATTRIBUTE, attribute)
+            .build();
+        let (payload, headers) = decode_message(&message);
+        assert_eq!(payload.as_ref(), b"plain");
+        assert_eq!(headers.get_str(ENCODING_ATTRIBUTE), Some("gzip"));
     }
 
     #[test]

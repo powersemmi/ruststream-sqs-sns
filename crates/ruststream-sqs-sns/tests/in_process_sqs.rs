@@ -484,6 +484,25 @@ async fn a_notification_over_the_attribute_limit_is_refused() -> Result<(), Box<
     Ok(())
 }
 
+/// The crate reads the marker attribute off every delivery, so a header of that name would be
+/// taken for it on the way back and lost: the publish refuses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_header_named_like_the_payload_marker_is_refused() -> Result<(), Box<dyn Error>> {
+    let mut headers = HeaderMap::new();
+    headers.insert("ruststream-payload-encoding", "base64");
+    let refused = refused_message(b"{}", headers).await?;
+    let reason = refused.to_string();
+    assert!(
+        matches!(
+            refused,
+            SqsError::InvalidHeader { ref destination, ref header, .. }
+                if destination == "orders" && header == "ruststream-payload-encoding"
+        ),
+        "got {reason}"
+    );
+    Ok(())
+}
+
 /// Every header becomes a message attribute, and a message carries at most ten of them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_message_with_more_than_ten_headers_is_refused() -> Result<(), Box<dyn Error>> {
