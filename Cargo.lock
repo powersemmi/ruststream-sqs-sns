@@ -1558,7 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "ruststream-sqs-sns"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aws-config",
  "aws-sdk-sns",
@@ -1577,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "ruststream-sqs-sns-bench"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "aws-config",
  "aws-sdk-sqs",
