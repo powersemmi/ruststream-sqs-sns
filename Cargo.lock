@@ -1598,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "ruststream-example-suite"
 version = "0.0.0"
-source = "git+https://github.com/powersemmi/ruststream?branch=main#47a8550c108ca6522b68638e14047d0992a52724"
+source = "git+https://github.com/powersemmi/ruststream?branch=main#d2e1db18f2ec6dd8b992682dc95e68edaaa873fd"
 dependencies = [
  "toml",
 ]
