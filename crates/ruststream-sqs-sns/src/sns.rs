@@ -30,7 +30,7 @@ use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process;
 use crate::message::{AttributeValue, encode_attributes_with, encode_body};
-use crate::publisher::{SqsPublishOptions, fifo_settings, is_fifo};
+use crate::publisher::{SqsPublishOptions, fifo_settings, is_fifo, unsent};
 
 /// The binding version this crate writes for the `sns` protocol.
 #[cfg(feature = "asyncapi")]
@@ -173,13 +173,13 @@ impl Publisher for SnsPublisher {
         #[cfg(feature = "testing")]
         let destination = msg.name();
         #[cfg(feature = "testing")]
-        self.core()
+        if let Err(err) = self
+            .core()
             .and_then(|core| in_process::declare_fan_out(core, destination, &self.fan_out))
-            .map_err(PublishMessageError::new)?;
-        let published = self
-            .publish_to_topic(msg, options)
-            .await
-            .map_err(PublishMessageError::new);
+        {
+            return Err(PublishMessageError::with_message(err, msg));
+        }
+        let published = self.publish_to_topic(msg, options).await;
         #[cfg(feature = "testing")]
         if published.is_ok() {
             self.note(destination);
@@ -190,12 +190,17 @@ impl Publisher for SnsPublisher {
 
 impl SnsPublisher {
     /// `Publish` of one message to the topic it names.
-    async fn publish_to_topic(
+    ///
+    /// Refused before the request is built, the message comes back whole, as on the SQS side.
+    async fn publish_to_topic<'msg>(
         &self,
-        msg: OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'msg, Take>,
         options: Option<&SqsPublishOptions>,
-    ) -> Result<(), SqsError> {
-        let core = self.core()?;
+    ) -> PublishOutcome<'msg, SqsError, Take> {
+        let core = match self.core() {
+            Ok(core) => core,
+            Err(err) => return Err(PublishMessageError::with_message(err, msg)),
+        };
         let aws = match &core.transport {
             Transport::Aws(aws) => aws,
             #[cfg(feature = "testing")]
@@ -203,17 +208,24 @@ impl SnsPublisher {
                 return in_process::publish_topic(bus, msg, options, self.default_group.as_deref());
             }
         };
-        let arn = aws.topic_arn(msg.name()).await?;
+        let arn = match aws.topic_arn(msg.name()).await {
+            Ok(arn) => arn,
+            Err(err) => return Err(PublishMessageError::with_message(err, msg)),
+        };
         // The destination is the caller's string and outlives the message the body is taken from.
         let (destination, payload, headers) = msg.into_parts();
-        let (body, base64_marker) = encode_body(payload);
+        let body = encode_body(payload);
 
         // The same mapping the SQS side makes, refusals and limit included: SNS carries the
         // same attribute types and as many of them.
         let fifo = is_fifo(&arn);
-        let mut attributes = HashMap::with_capacity(headers.len() + usize::from(base64_marker));
-        let partition_key =
-            encode_attributes_with(&headers, base64_marker, fifo, destination, |name, value| {
+        let mut attributes = HashMap::with_capacity(headers.len() + usize::from(body.base64_marker()));
+        let resolved = encode_attributes_with(
+            &headers,
+            body.base64_marker(),
+            fifo,
+            destination,
+            |name, value| {
                 let attribute = match value {
                     AttributeValue::Text(text) => SnsAttributeValue::builder()
                         .data_type("String")
@@ -224,36 +236,41 @@ impl SnsPublisher {
                 };
                 attributes.insert(name.to_owned(), attribute.build()?);
                 Ok::<_, BuildError>(())
-            })?
-            .map(|key| String::from_utf8_lossy(key).into_owned());
+            },
+        )
+        .and_then(|partition_key| {
+            fifo_settings(
+                destination,
+                fifo,
+                options,
+                partition_key.map(|key| String::from_utf8_lossy(key).into_owned()),
+                self.default_group.as_deref(),
+            )
+        });
+        let settings = match resolved {
+            Ok(settings) => settings,
+            Err(err) => return Err(unsent(err, destination, body, headers)),
+        };
 
         let mut publish = aws
             .clients
             .sns(SnsClient::publish)
             .topic_arn(&arn)
-            .message(body);
+            .message(body.into_string());
         if !attributes.is_empty() {
             publish = publish.set_message_attributes(Some(attributes));
         }
-        if let Some(settings) = fifo_settings(
-            destination,
-            fifo,
-            options,
-            partition_key,
-            self.default_group.as_deref(),
-        )? {
+        if let Some(settings) = settings {
             publish = publish
                 .message_group_id(settings.group)
                 .message_deduplication_id(settings.deduplication);
         }
-        publish
-            .send()
-            .await
-            .map(|_| ())
-            .map_err(|e| SqsError::Publish {
+        publish.send().await.map(|_| ()).map_err(|e| {
+            PublishMessageError::new(SqsError::Publish {
                 destination: destination.to_owned(),
                 source: sdk_err(&e),
             })
+        })
     }
 }
 
