@@ -11,6 +11,7 @@
 // what one of them leaves alone is not dead code.
 #![allow(dead_code)]
 
+use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -71,12 +72,15 @@ pub(crate) fn broker(endpoint: &str) -> SqsBroker {
 
 /// Per-test unique queue, so runs do not observe each other's leftovers.
 ///
-/// The process id tells runs apart, and the sequence number tells apart the tests of one
-/// binary that ask for the same name: an example and its manual twin are modules of one binary.
+/// The process id tells runs apart. Within one binary, every module that includes this file has
+/// a counter of its own (an example and its manual twin are modules of one binary, and ask for the
+/// same names), so the counter's address tells the copies apart and its sequence number tells
+/// apart the calls of one copy.
 pub(crate) fn unique(name: &str) -> String {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
-    format!("it-{name}-{}-{sequence}", std::process::id())
+    let copy = ptr::from_ref(&NEXT).addr();
+    format!("it-{name}-{}-{copy:x}-{sequence}", std::process::id())
 }
 
 /// An SDK client of the test's own, for reading back what the service holds. Deliberately not
