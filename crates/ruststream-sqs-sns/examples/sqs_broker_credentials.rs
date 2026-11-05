@@ -8,6 +8,8 @@
 //! SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --example sqs_broker_credentials --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 // A plain build compiles the service; the tests that use it exist only in the test build.
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 

@@ -6,6 +6,8 @@
 //! cargo run --example guide_fan_out --features testing,sns -- run
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 use std::io;
 
 use ruststream_sqs_sns::prelude::*;
