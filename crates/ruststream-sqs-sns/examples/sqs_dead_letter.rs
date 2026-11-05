@@ -47,8 +47,8 @@ fn service(broker: SqsBroker) -> impl App {
         // dead-letter queue it points at. The subscription writes them when it opens.
         b.include(settle)
             .max_attempts(nonzero!(3u32))
-            .dead_letter("invoices-dead");
-        b.include(escalate);
+            .dead_letter("invoices-dead")
+            .include(escalate)
     })
 }
 // --8<-- [end:mount]
@@ -104,12 +104,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_cap_without_a_dead_letter_queue_stops_startup() {
-        let app = RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(
-            broker("http://localhost:4566"),
-            |b| {
-                b.include(settle).max_attempts(nonzero!(3u32));
-            },
-        );
+        let app = RustStream::new(AppInfo::new("invoices", "0.1.0"))
+            .with_broker(broker("http://localhost:4566"), |b| {
+                b.include(settle).max_attempts(nonzero!(3u32))
+            });
 
         let refused = TestApp::start(app)
             .await

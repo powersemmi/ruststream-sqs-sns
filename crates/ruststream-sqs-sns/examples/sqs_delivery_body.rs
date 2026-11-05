@@ -31,9 +31,8 @@ async fn store(thumbnail: &Thumbnail<'_>) -> HandlerOutcome {
 
 /// The service reading `queue`, which it creates on a fresh stack.
 fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
-    RustStream::new(AppInfo::new("thumbnails", "0.1.0")).with_broker(broker, |b| {
-        b.include(store.name(queue).create_if_missing());
-    })
+    RustStream::new(AppInfo::new("thumbnails", "0.1.0"))
+        .with_broker(broker, |b| b.include(store.name(queue).create_if_missing()))
 }
 
 /// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve

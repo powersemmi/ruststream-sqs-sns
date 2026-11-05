@@ -31,9 +31,8 @@ async fn bill(order: &Order, Headers(meta): Headers<OrderMeta>) -> HandlerOutcom
 
 #[app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-        b.include(bill);
-    })
+    RustStream::new(AppInfo::new("billing", "0.1.0"))
+        .with_broker(SqsBroker::new(), |b| b.include(bill))
 }
 
 #[cfg(test)]

@@ -77,8 +77,8 @@ fn app() -> impl App {
         |b| {
             b.include(dispatch)
                 .out(Shipments, Publish::default())
-                .build();
-            b.include(ship);
+                .build()
+                .include(ship)
         },
     )
 }

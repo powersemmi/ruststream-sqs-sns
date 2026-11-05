@@ -68,9 +68,10 @@ fn service(broker: SqsBroker) -> impl App {
         .after_startup(async move |_state| wire_topology(topology).await)
         .with_broker(broker, |b| {
             // One step moves the reply from the queue of that name to the topic.
-            b.include(accept).out_reply(SnsPublish::default());
-            b.include(bill);
-            b.include(ship);
+            b.include(accept)
+                .out_reply(SnsPublish::default())
+                .include(bill)
+                .include(ship)
         })
 }
 // --8<-- [end:app]

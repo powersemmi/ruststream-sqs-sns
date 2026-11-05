@@ -64,8 +64,8 @@ fn app() -> impl App {
             // Four deliveries of one invoice, the first included; then SQS moves it.
             b.include(charge)
                 .max_attempts(nonzero!(4u32))
-                .dead_letter("invoices-dead");
-            b.include(review);
+                .dead_letter("invoices-dead")
+                .include(review)
         },
     )
 }
@@ -135,12 +135,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_cap_without_a_dead_letter_queue_refuses_to_start() {
-        let app = RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(
-            SqsBroker::new().region("us-east-1"),
-            |b| {
-                b.include(charge).max_attempts(nonzero!(4u32));
-            },
-        );
+        let app = RustStream::new(AppInfo::new("invoices", "0.1.0"))
+            .with_broker(SqsBroker::new().region("us-east-1"), |b| {
+                b.include(charge).max_attempts(nonzero!(4u32))
+            });
 
         let refused = TestApp::start(app)
             .await

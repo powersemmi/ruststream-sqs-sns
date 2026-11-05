@@ -44,9 +44,8 @@ async fn settle(invoice: &Invoice, cx: &mut Context<'_>) -> HandlerOutcome {
 // --8<-- [end:retry_after]
 
 fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
-    RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(broker, |b| {
-        b.include(settle.name(queue));
-    })
+    RustStream::new(AppInfo::new("invoices", "0.1.0"))
+        .with_broker(broker, |b| b.include(settle.name(queue)))
 }
 
 /// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve

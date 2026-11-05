@@ -75,17 +75,17 @@ fn app() -> impl App {
             .region("us-east-1")
             .test_credentials(),
         |b| {
-            b.include(pack);
-            // Up to ten payments per call: one receive is one batch.
-            b.include(
-                reconcile
-                    .batch(nonzero!(10))
-                    .wait(Duration::from_secs(20))
-                    .create_if_missing(),
-            );
-            // One definition, two queues.
-            b.include(audit.name("audit-eu").create_if_missing());
-            b.include(audit.name("audit-us").create_if_missing());
+            b.include(pack)
+                // Up to ten payments per call: one receive is one batch.
+                .include(
+                    reconcile
+                        .batch(nonzero!(10))
+                        .wait(Duration::from_secs(20))
+                        .create_if_missing(),
+                )
+                // One definition, two queues.
+                .include(audit.name("audit-eu").create_if_missing())
+                .include(audit.name("audit-us").create_if_missing())
         },
     )
 }

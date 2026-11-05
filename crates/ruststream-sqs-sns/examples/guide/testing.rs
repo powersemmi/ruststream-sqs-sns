@@ -57,10 +57,8 @@ async fn notify(confirmation: &Confirmation) -> HandlerOutcome {
 }
 
 fn service(broker: SqsBroker) -> RustStream {
-    RustStream::new(AppInfo::new("checkout", "0.1.0")).with_broker(broker, |b| {
-        b.include(confirm);
-        b.include(notify);
-    })
+    RustStream::new(AppInfo::new("checkout", "0.1.0"))
+        .with_broker(broker, |b| b.include(confirm).include(notify))
 }
 
 #[ruststream::app]

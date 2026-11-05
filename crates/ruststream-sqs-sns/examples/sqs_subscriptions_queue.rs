@@ -33,9 +33,7 @@ async fn place(order: &Order) -> HandlerOutcome {
 }
 
 fn service(broker: SqsBroker) -> impl App {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-        b.include(place);
-    })
+    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| b.include(place))
 }
 // --8<-- [end:descriptor]
 

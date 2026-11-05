@@ -39,7 +39,7 @@ fn app(endpoint: &str, queue: String) -> impl App<State = ()> {
         .region("us-east-1")
         .test_credentials();
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(broker, |b| {
-        b.include(accept.name(queue).create_if_missing());
+        b.include(accept.name(queue).create_if_missing())
     })
 }
 

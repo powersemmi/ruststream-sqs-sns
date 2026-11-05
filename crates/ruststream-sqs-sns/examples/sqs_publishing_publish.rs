@@ -32,7 +32,7 @@ async fn confirm(order: &Order) -> Confirmation {
 fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
         // No `.out_reply(..)`: the reply rides the broker's default policy, `Publish`.
-        b.include(confirm);
+        b.include(confirm)
     })
 }
 // --8<-- [end:publish]
