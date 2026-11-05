@@ -13,13 +13,15 @@
 //! Cancelling the in-flight long poll happens only when the stream is dropped, where the cost (one
 //! closed HTTP connection) does not matter.
 
+use std::collections::VecDeque;
+use std::mem;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
-use aws_sdk_sqs::types::{Message as AwsMessage, MessageSystemAttributeName};
+use aws_sdk_sqs::types::MessageSystemAttributeName;
 use futures::Stream;
 #[cfg(feature = "testing")]
 use futures::StreamExt;
@@ -222,66 +224,31 @@ impl SqsSubscriber {
 
 impl Receiver {
     /// Starts a pump asking for `size` messages per receive (clamped to the protocol cap) and
-    /// returns the channel of its receives.
+    /// returns the two ends of its channels.
     ///
     /// The pump lives as long as the receiver: the returned stream owns it, and dropping the
     /// stream closes the channel, which ends the pump on its next select. Because `stream` and
     /// `batches` borrow the subscriber mutably, at most one pump runs per subscription.
-    fn pump(&self, size: usize) -> mpsc::Receiver<Result<Received, SqsError>> {
-        // One receive in flight, so the pump stays exactly one receive ahead of the consumer.
-        let (tx, rx) = mpsc::channel(1);
+    fn pump(&self, size: usize) -> Pumped {
+        // One batch in flight, so the pump stays exactly one receive ahead of the consumer.
+        let (tx, batches) = mpsc::channel(1);
+        // The emptied vectors go back to the pump; the one in flight and the one being drained
+        // are all that circulate.
+        let (spares, spare_rx) = mpsc::channel(2);
         self.runtime.spawn(pump(
             Arc::clone(&self.clients),
+            self.runtime.clone(),
             self.queue_url.clone(),
             Receive {
                 size: receive_size(size),
                 wait: i32::try_from(self.wait.as_secs()).unwrap_or(20),
-                requested: self.visibility.requested().is_some(),
-                visibility: self.visibility.seconds(),
+                visibility: self.visibility,
+                redrive_max: self.redrive_max,
             },
             tx,
+            spare_rx,
         ));
-        rx
-    }
-
-    /// The single-message stream: a pump at the protocol maximum, handed over one at a time.
-    fn one_by_one(&self) -> OneByOne<'_> {
-        OneByOne {
-            receives: self.pump(RECEIVE_CAP.get()),
-            receiver: self,
-            pending: Vec::new().into_iter(),
-            asked: Instant::now(),
-        }
-    }
-
-    /// The batch stream: a pump at `size`, one receive per batch.
-    fn batches(&self, size: NonZeroUsize) -> Batches<'_> {
-        Batches {
-            receives: self.pump(size.get()),
-            receiver: self,
-        }
-    }
-
-    /// The delivery one received message becomes, or `None` for a message the service handed
-    /// over without a receipt handle, which nothing could settle.
-    ///
-    /// The conversion runs where the delivery is handed over rather than in the pump, so it
-    /// writes straight into the slot the runtime lends a batch, and takes the receipt handle out
-    /// of the message instead of copying it.
-    fn delivery(&self, mut message: AwsMessage, received: Instant) -> Option<SqsMessage> {
-        let receipt = message.receipt_handle.take()?;
-        Some(SqsMessage::new(
-            &message,
-            &self.runtime,
-            Arc::clone(&self.clients),
-            self.queue_url.clone(),
-            receipt,
-            Hold {
-                visibility: self.visibility.held(),
-                received,
-            },
-            self.redrive_max,
-        ))
+        Pumped { batches, spares }
     }
 }
 
@@ -290,81 +257,85 @@ impl Receiver {
 struct Receive {
     size: i32,
     wait: i32,
-    /// Whether the receive names the visibility, or leaves the queue's own timeout in force.
-    requested: bool,
-    visibility: i32,
+    visibility: Visibility,
+    redrive_max: Option<NonZeroU32>,
 }
 
-/// One answer of `ReceiveMessage` that carried messages, as the pump hands it to the stream.
-#[derive(Debug)]
-struct Received {
-    /// The messages, each with its receipt handle.
-    messages: Vec<AwsMessage>,
-    /// When the receive was asked for: the twelve hours a received message may stay invisible
-    /// run from the queue's answer, so counting from before the call keeps every later change
-    /// inside them.
-    asked: Instant,
+/// The stream's ends of a pump: the batches it receives, and the way back for the vectors they
+/// came in, so the pump collects the next batch without allocating.
+struct Pumped {
+    batches: mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>>,
+    spares: mpsc::Sender<Vec<SqsMessage>>,
 }
 
-/// The single-message stream of the live lane: each receive's messages, one at a time.
-struct OneByOne<'r> {
-    receiver: &'r Receiver,
-    receives: mpsc::Receiver<Result<Received, SqsError>>,
-    /// The messages of the receive being handed over, and when it was asked for.
-    pending: std::vec::IntoIter<AwsMessage>,
-    asked: Instant,
-}
-
-impl Stream for OneByOne<'_> {
-    type Item = Result<SqsMessage, SqsError>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        loop {
-            if let Some(message) = this.pending.next() {
-                if let Some(delivery) = this.receiver.delivery(message, this.asked) {
-                    return Poll::Ready(Some(Ok(delivery)));
-                }
-                continue;
-            }
-            match ready!(this.receives.poll_recv(cx)) {
-                Some(Ok(received)) => {
-                    this.pending = received.messages.into_iter();
-                    this.asked = received.asked;
-                }
-                Some(Err(err)) => return Poll::Ready(Some(Err(err))),
-                None => return Poll::Ready(None),
-            }
+impl Pumped {
+    /// Hands an emptied vector back to the pump. A pump that has gone, or already holds spares,
+    /// lets it drop.
+    fn recycle(&self, spare: Vec<SqsMessage>) {
+        if spare.capacity() > 0 {
+            let _ = self.spares.try_send(spare);
         }
     }
 }
 
-/// The batch stream of the live lane: one receive is one batch, written into the lent slot.
-struct Batches<'r> {
-    receiver: &'r Receiver,
-    receives: mpsc::Receiver<Result<Received, SqsError>>,
+/// The single-message stream of the live lane: each batch the pump received, one delivery at a
+/// time.
+struct OneByOne {
+    pumped: Pumped,
+    /// The batch being handed over.
+    pending: VecDeque<SqsMessage>,
 }
 
-impl BatchStream<Vec<SqsMessage>> for Batches<'_> {
+impl Stream for OneByOne {
+    type Item = Result<SqsMessage, SqsError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(delivery) = this.pending.pop_front() {
+            return Poll::Ready(Some(Ok(delivery)));
+        }
+        match ready!(this.pumped.batches.poll_recv(cx)) {
+            Some(Ok(batch)) => {
+                // Both conversions keep the buffer: a `Vec` becomes a deque in place, and an
+                // emptied deque becomes a `Vec` again.
+                let spent = mem::replace(&mut this.pending, VecDeque::from(batch));
+                this.pumped.recycle(Vec::from(spent));
+                Poll::Ready(this.pending.pop_front().map(Ok))
+            }
+            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+/// The batch stream of the live lane: one receive is one batch, which takes the place of the
+/// lent slot.
+struct Batches {
+    pumped: Pumped,
+}
+
+impl BatchStream<Vec<SqsMessage>> for Batches {
     type Error = SqsError;
 
-    // A receive is taken off the channel and written into the slot within one poll, so no batch
-    // is held half-filled between polls and the stream is cancel-safe.
+    // A batch is taken off the channel and swapped into the slot within one poll, so no batch is
+    // held half-filled between polls and the stream is cancel-safe. The swap moves no message:
+    // the runtime keeps the pump's vector, and the emptied one it lent goes back to the pump.
     fn poll_fill(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         slot: &mut Vec<SqsMessage>,
     ) -> Poll<Option<Result<(), SqsError>>> {
         let this = self.get_mut();
-        match ready!(this.receives.poll_recv(cx)) {
-            Some(Ok(received)) => {
-                let asked = received.asked;
-                slot.extend(
-                    received
-                        .messages
-                        .into_iter()
-                        .filter_map(|message| this.receiver.delivery(message, asked)),
-                );
+        match ready!(this.pumped.batches.poll_recv(cx)) {
+            Some(Ok(mut batch)) => {
+                if slot.is_empty() {
+                    mem::swap(slot, &mut batch);
+                } else {
+                    // The runtime lends the slot drained; should it not be, its messages stay
+                    // ahead of these.
+                    slot.append(&mut batch);
+                }
+                this.pumped.recycle(batch);
                 Poll::Ready(Some(Ok(())))
             }
             Some(Err(err)) => Poll::Ready(Some(Err(err))),
@@ -439,6 +410,14 @@ pub(crate) fn one_at_a_time(
     })
 }
 
+/// The single-message stream: a pump at the protocol maximum, handed over one at a time.
+fn one_by_one(receiver: &Receiver) -> OneByOne {
+    OneByOne {
+        pumped: receiver.pump(RECEIVE_CAP.get()),
+        pending: VecDeque::new(),
+    }
+}
+
 impl Subscriber for SqsSubscriber {
     type Message = SqsMessage;
     type Error = SqsError;
@@ -449,9 +428,9 @@ impl Subscriber for SqsSubscriber {
         // time costs a tenth of what one receive per message would.
         match &mut self.lane {
             #[cfg(not(feature = "testing"))]
-            Lane::Aws(receiver) => receiver.one_by_one(),
+            Lane::Aws(receiver) => one_by_one(receiver),
             #[cfg(feature = "testing")]
-            Lane::Aws(receiver) => Either::Left(receiver.one_by_one()),
+            Lane::Aws(receiver) => Either::Left(one_by_one(receiver)),
             #[cfg(feature = "testing")]
             Lane::InProcess(deliveries) => Either::Right(deliveries.stream()),
         }
@@ -477,9 +456,13 @@ impl BatchSubscriber for SqsSubscriber {
         let size = receive_batch(size, self.queue_url());
         match &mut self.lane {
             #[cfg(not(feature = "testing"))]
-            Lane::Aws(receiver) => receiver.batches(size),
+            Lane::Aws(receiver) => Batches {
+                pumped: receiver.pump(size.get()),
+            },
             #[cfg(feature = "testing")]
-            Lane::Aws(receiver) => LaneBatches::Aws(receiver.batches(size)),
+            Lane::Aws(receiver) => LaneBatches::Aws(Batches {
+                pumped: receiver.pump(size.get()),
+            }),
             // The in-process receives are an async loop over the account; pinning it once, when
             // the subscription opens, lets the slot be filled from it.
             #[cfg(feature = "testing")]
@@ -492,10 +475,15 @@ impl BatchSubscriber for SqsSubscriber {
 
 async fn pump(
     clients: Arc<Clients>,
+    runtime: Handle,
     queue_url: String,
     call: Receive,
-    out: mpsc::Sender<Result<Received, SqsError>>,
+    out: mpsc::Sender<Result<Vec<SqsMessage>, SqsError>>,
+    mut spares: mpsc::Receiver<Vec<SqsMessage>>,
 ) {
+    let visibility = call.visibility.held();
+    // The vector an empty receive left unused, kept for the next one.
+    let mut unused: Option<Vec<SqsMessage>> = None;
     // The pump runs on the broker's runtime, so it receives through that runtime's client.
     let client = &clients.home().sqs;
     loop {
@@ -506,9 +494,12 @@ async fn pump(
             .wait_time_seconds(call.wait)
             .message_attribute_names("All")
             .message_system_attribute_names(MessageSystemAttributeName::All);
-        if call.requested {
-            receive = receive.visibility_timeout(call.visibility);
+        if call.visibility.requested().is_some() {
+            receive = receive.visibility_timeout(call.visibility.seconds());
         }
+        // The queue's twelve hours of invisibility for what this receive hands over run from when
+        // the queue answers it; counting from before the call keeps every later change inside
+        // them.
         let asked = Instant::now();
         // Dropping this future when the stream is dropped is safe (hyper aborts the request); it
         // only costs the connection, and it happens once.
@@ -520,15 +511,38 @@ async fn pump(
 
         match received {
             Ok(output) => {
-                let mut messages = output.messages.unwrap_or_default();
-                // A message without a receipt handle cannot be settled, so it is not handed over.
-                messages.retain(|message| message.receipt_handle.is_some());
+                // The deliveries are built here, as the queue answers, so each one's visibility
+                // is extended from its receive on, also while it waits to be handed over. The
+                // batch is collected into a vector the stream gave back, so after the first two
+                // receives a batch allocates none.
+                let mut batch = unused
+                    .take()
+                    .or_else(|| spares.try_recv().ok())
+                    .unwrap_or_default();
+                batch.extend(output.messages.unwrap_or_default().into_iter().filter_map(
+                    |mut message| {
+                        let receipt = message.receipt_handle.take()?;
+                        Some(SqsMessage::new(
+                            &message,
+                            &runtime,
+                            Arc::clone(&clients),
+                            queue_url.clone(),
+                            receipt,
+                            Hold {
+                                visibility,
+                                received: asked,
+                            },
+                            call.redrive_max,
+                        ))
+                    },
+                ));
                 // A long poll that timed out has no batch to deliver, and an empty one would
                 // break the "a batch is never empty" half of the contract.
-                if messages.is_empty() {
+                if batch.is_empty() {
+                    unused = Some(batch);
                     continue;
                 }
-                if out.send(Ok(Received { messages, asked })).await.is_err() {
+                if out.send(Ok(batch)).await.is_err() {
                     return;
                 }
             }
