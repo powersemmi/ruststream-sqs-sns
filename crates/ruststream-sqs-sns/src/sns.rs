@@ -219,7 +219,8 @@ impl SnsPublisher {
         // The same mapping the SQS side makes, refusals and limit included: SNS carries the
         // same attribute types and as many of them.
         let fifo = is_fifo(&arn);
-        let mut attributes = HashMap::with_capacity(headers.len() + usize::from(body.base64_marker()));
+        let mut attributes =
+            HashMap::with_capacity(headers.len() + usize::from(body.base64_marker()));
         let resolved = encode_attributes_with(
             &headers,
             body.base64_marker(),

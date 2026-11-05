@@ -709,7 +709,10 @@ mod tests {
 
         let body = encode_body(payload);
 
-        assert!(!body.base64_marker(), "a JSON body is text the service accepts");
+        assert!(
+            !body.base64_marker(),
+            "a JSON body is text the service accepts"
+        );
         assert_eq!(
             body.as_str().as_ptr(),
             written,
@@ -766,11 +769,19 @@ mod tests {
         let written = payload.as_ptr();
         let back = encode_body(payload).into_payload();
         assert_eq!(&back[..], b"plain text");
-        assert_eq!(back.as_ptr(), written, "the text lane returns its buffer, not a copy");
+        assert_eq!(
+            back.as_ptr(),
+            written,
+            "the text lane returns its buffer, not a copy"
+        );
 
         let raw = [0u8, 159, 146, 150];
         let back = encode_body(BytesMut::from(&raw[..])).into_payload();
-        assert_eq!(&back[..], raw, "the base64 lane returns the bytes as written");
+        assert_eq!(
+            &back[..],
+            raw,
+            "the base64 lane returns the bytes as written"
+        );
     }
 
     /// A header value the service refuses as text becomes a binary attribute rather than a

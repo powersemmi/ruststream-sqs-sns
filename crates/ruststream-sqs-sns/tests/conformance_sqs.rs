@@ -32,14 +32,14 @@ use std::time::Duration;
 
 use futures::future::poll_fn;
 use ruststream::conformance::harness::InProcessBroker;
-use ruststream::conformance::lifecycle::Unsent;
 use ruststream::conformance::helpers::unique_subject;
+use ruststream::conformance::lifecycle::Unsent;
 use ruststream::conformance::message_shape::{self, OptionCases};
 use ruststream::conformance::{capabilities, harness, lifecycle, retry, settlement};
 use ruststream::testing::Backlog;
 use ruststream::{
-    BatchStream, BatchSubscriber, Bytes, ConnectedBroker, HeaderMap, IncomingMessage, Name, OutgoingMessage,
-    Publisher, Settle,
+    BatchStream, BatchSubscriber, Bytes, ConnectedBroker, HeaderMap, IncomingMessage, Name,
+    OutgoingMessage, Publisher, Settle,
 };
 #[cfg(feature = "asyncapi")]
 use ruststream_sqs_sns::ConnectedSqsBroker;

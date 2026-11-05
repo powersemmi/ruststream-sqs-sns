@@ -20,9 +20,9 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use aws_sdk_sqs::types::{Message as AwsMessage, MessageSystemAttributeName};
+use futures::Stream;
 #[cfg(feature = "testing")]
 use futures::StreamExt;
-use futures::Stream;
 #[cfg(feature = "testing")]
 use futures::future::Either;
 use ruststream::{BatchStream, BatchSubscriber, Subscriber, nonzero};
