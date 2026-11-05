@@ -14,7 +14,9 @@ use aws_sdk_sqs::Client as SqsClient;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
-use ruststream::{OutgoingFor, PairError, PublishPolicy, Publisher, Take};
+use ruststream::{
+    OutgoingFor, PairError, PublishMessageError, PublishOutcome, PublishPolicy, Publisher, Take,
+};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
@@ -350,14 +352,14 @@ impl Publisher for SqsPublisher {
     type Error = SqsError;
     type Options = SqsPublishOptions;
 
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'msg, Take>,
         options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
+    ) -> PublishOutcome<'msg, SqsError, Take> {
         #[cfg(all(feature = "testing", feature = "sns"))]
         let destination = msg.name();
-        let sent = self.send(msg, options).await;
+        let sent = self.send(msg, options).await.map_err(PublishMessageError::new);
         #[cfg(all(feature = "testing", feature = "sns"))]
         if sent.is_ok() {
             self.note(destination);

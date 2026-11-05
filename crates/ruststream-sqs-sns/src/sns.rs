@@ -19,7 +19,9 @@ use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
-use ruststream::{OutgoingFor, PairError, PublishPolicy, Publisher, Take};
+use ruststream::{
+    OutgoingFor, PairError, PublishMessageError, PublishOutcome, PublishPolicy, Publisher, Take,
+};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
@@ -163,16 +165,21 @@ impl Publisher for SnsPublisher {
     type Error = SqsError;
     type Options = SqsPublishOptions;
 
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'msg, Take>,
         options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
+    ) -> PublishOutcome<'msg, SqsError, Take> {
         #[cfg(feature = "testing")]
         let destination = msg.name();
         #[cfg(feature = "testing")]
-        in_process::declare_fan_out(self.core()?, destination, &self.fan_out)?;
-        let published = self.publish_to_topic(msg, options).await;
+        self.core()
+            .and_then(|core| in_process::declare_fan_out(core, destination, &self.fan_out))
+            .map_err(PublishMessageError::new)?;
+        let published = self
+            .publish_to_topic(msg, options)
+            .await
+            .map_err(PublishMessageError::new);
         #[cfg(feature = "testing")]
         if published.is_ok() {
             self.note(destination);
