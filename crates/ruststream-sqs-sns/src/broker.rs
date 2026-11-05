@@ -598,9 +598,7 @@ impl InProcess for SqsBroker {
     // The body awaits nothing, but it has to run where the future is polled: the runtime it
     // captures is the one the harness connects on, and a caller outside any runtime may build
     // the future before handing it to one. `lazy` defers the body to the first poll.
-    fn connect_in_process(
-        self,
-    ) -> impl Future<Output = Result<Self::Connected, Self::Error>> + Send {
+    fn connect_in_process(self) -> impl Future<Output = Result<Self::Connected, Self::Error>> {
         lazy(move |_| {
             let region = self
                 .region
