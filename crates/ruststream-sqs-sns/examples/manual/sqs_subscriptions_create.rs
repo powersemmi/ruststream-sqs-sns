@@ -50,7 +50,7 @@ fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
                 .build()
                 .name(queue)
                 .create_if_missing(),
-        );
+        )
     })
 }
 // --8<-- [end:create]
@@ -145,7 +145,7 @@ mod tests {
                     subscriber(Unnamed::<SqsQueue>::new(), Review)
                         .build()
                         .name(queue),
-                );
+                )
             });
 
         assert!(

@@ -64,7 +64,7 @@ fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
                 .build()
                 .name(queue)
                 .create_if_missing(),
-        );
+        )
     })
 }
 

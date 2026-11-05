@@ -90,7 +90,7 @@ fn app() -> impl App {
                 subscriber("orders", TakeOrder)
                     .map_source(|_| SqsQueue::new("orders").visibility(Duration::from_secs(120)))
                     .build(),
-            );
+            )
         },
     )
 }

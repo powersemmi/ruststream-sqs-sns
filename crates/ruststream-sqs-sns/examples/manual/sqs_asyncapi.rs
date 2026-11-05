@@ -108,16 +108,16 @@ fn broker() -> SqsBroker {
 fn service(broker: SqsBroker) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker_labeled("sqs", broker, |b| {
         let confirm = subscriber("orders", Confirm).map_source(|_| orders());
-        b.include(confirm.reply().to("confirmations").build());
-        b.include(
-            subscriber("shipments.fifo", Ship)
-                .map_source(|_| shipments())
-                .build(),
-        );
         // The reply fans out from a FIFO topic.
         let settle = subscriber("payments", Settle);
-        b.include(settle.reply().to("payment-events.fifo").build())
-            .out_reply(SnsPublish::default());
+        b.include(confirm.reply().to("confirmations").build())
+            .include(
+                subscriber("shipments.fifo", Ship)
+                    .map_source(|_| shipments())
+                    .build(),
+            )
+            .include(settle.reply().to("payment-events.fifo").build())
+            .out_reply(SnsPublish::default())
     })
 }
 // --8<-- [end:topics]

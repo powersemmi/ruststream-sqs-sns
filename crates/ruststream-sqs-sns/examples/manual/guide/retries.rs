@@ -101,12 +101,12 @@ fn app() -> impl App {
                     .build(),
             )
             .max_attempts(nonzero!(4u32))
-            .dead_letter("invoices-dead");
-            b.include(
+            .dead_letter("invoices-dead")
+            .include(
                 subscriber("invoices-dead", Review)
                     .map_source(|_| SqsQueue::new("invoices-dead").create_if_missing())
                     .build(),
-            );
+            )
         },
     )
 }
@@ -188,7 +188,7 @@ mod tests {
                         .map_source(|_| SqsQueue::new("invoices"))
                         .build(),
                 )
-                .max_attempts(nonzero!(4u32));
+                .max_attempts(nonzero!(4u32))
             },
         );
 

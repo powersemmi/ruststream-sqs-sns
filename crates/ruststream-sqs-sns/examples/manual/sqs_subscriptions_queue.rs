@@ -45,7 +45,7 @@ fn service(broker: SqsBroker) -> impl App {
         let orders = SqsQueue::new("orders")
             .wait(Duration::from_secs(10))
             .visibility(Duration::from_secs(60));
-        b.include(subscriber("orders", Place).build().map_source(|_| orders));
+        b.include(subscriber("orders", Place).build().map_source(|_| orders))
     })
 }
 // --8<-- [end:descriptor]

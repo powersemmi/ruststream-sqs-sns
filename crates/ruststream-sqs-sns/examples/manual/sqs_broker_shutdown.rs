@@ -63,7 +63,7 @@ fn service(broker: SqsBroker, queue: String) -> (impl App<State = ()>, SqsPublis
                 .build()
                 .name(queue)
                 .create_if_missing(),
-        );
+        )
     });
     (app, intake)
 }
@@ -119,7 +119,13 @@ mod tests {
             .publish()
             .await;
         assert!(
-            matches!(refused, Err(PublishError::Publish(SqsError::NotConnected))),
+            matches!(
+                refused,
+                Err(PublishError::Publish {
+                    source: SqsError::NotConnected,
+                    ..
+                })
+            ),
             "{refused:?}",
         );
         Ok(())

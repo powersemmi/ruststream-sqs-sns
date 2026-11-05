@@ -62,7 +62,7 @@ fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
                 .build()
                 .name(queue)
                 .visibility(Duration::from_secs(2)),
-        );
+        )
     })
 }
 // --8<-- [end:visibility]
@@ -151,7 +151,7 @@ mod tests {
                         .build()
                         .name("reports")
                         .visibility(Duration::from_hours(13)),
-                );
+                )
             },
         );
 

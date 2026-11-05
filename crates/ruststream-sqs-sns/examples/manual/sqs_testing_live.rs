@@ -67,7 +67,7 @@ fn app(endpoint: &str, queue: String) -> impl App<State = ()> {
                 .build()
                 .name(queue)
                 .create_if_missing(),
-        );
+        )
     })
 }
 

@@ -61,7 +61,7 @@ fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
             subscriber(Unnamed::<SqsQueue>::new(), Settle)
                 .build()
                 .name(queue),
-        );
+        )
     })
 }
 

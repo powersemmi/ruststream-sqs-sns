@@ -62,7 +62,7 @@ fn app() -> impl App {
             subscriber(Unnamed::<SqsQueue>::new(), Bill)
                 .build()
                 .name("orders"),
-        );
+        )
     })
 }
 

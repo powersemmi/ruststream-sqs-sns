@@ -111,12 +111,12 @@ fn service(broker: SqsBroker) -> RustStream {
                 .map_source(|_| SqsQueue::new("checkout-orders").create_if_missing())
                 .reply()
                 .build(),
-        );
-        b.include(
+        )
+        .include(
             subscriber("checkout-confirmations", Notify)
                 .map_source(|_| SqsQueue::new("checkout-confirmations").create_if_missing())
                 .build(),
-        );
+        )
     })
 }
 

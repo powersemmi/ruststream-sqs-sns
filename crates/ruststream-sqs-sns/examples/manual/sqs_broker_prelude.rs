@@ -40,7 +40,7 @@ fn app() -> impl App {
                 .name("orders")
                 .wait(Duration::from_secs(20)),
         )
-        .out_reply(Publish::default());
+        .out_reply(Publish::default())
     })
 }
 // --8<-- [end:app]

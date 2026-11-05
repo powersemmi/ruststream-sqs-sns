@@ -140,17 +140,17 @@ fn service(broker: SqsBroker) -> RustStream {
                     .reply()
                     .build(),
             )
-            .out_reply(SnsPublish::default());
-            b.include(
+            .out_reply(SnsPublish::default())
+            .include(
                 subscriber("shop-billing", Bill)
                     .map_source(|_| SqsQueue::new("shop-billing").create_if_missing())
                     .build(),
-            );
-            b.include(
+            )
+            .include(
                 subscriber("shop-shipping", Ship)
                     .map_source(|_| SqsQueue::new("shop-shipping").create_if_missing())
                     .build(),
-            );
+            )
         })
 }
 
