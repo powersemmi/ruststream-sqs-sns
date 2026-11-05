@@ -36,7 +36,7 @@ async fn a_batch_handler_opens_its_subscription_at_the_size_it_named() {
     // size bound this test is here for.
     let producer = broker.publisher();
     let app = RustStream::new(AppInfo::new("batches", "0.1.0")).with_broker(broker, |b| {
-        b.include(drain.name("orders").batch(nonzero!(2)));
+        b.include(drain.name("orders").batch(nonzero!(2)))
     });
 
     let tb = TestApp::start(app).await.expect("the app starts");
@@ -98,12 +98,8 @@ async fn issue(request: &Request) -> Receipt {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_that_declares_a_destination_lands_on_it() {
-    let app = RustStream::new(AppInfo::new("declared-reply", "0.1.0")).with_broker(
-        SqsBroker::new(),
-        |b| {
-            b.include(announce);
-        },
-    );
+    let app = RustStream::new(AppInfo::new("declared-reply", "0.1.0"))
+        .with_broker(SqsBroker::new(), |b| b.include(announce));
 
     let tb = TestApp::start(app).await.expect("the app starts");
     tb.broker::<SqsBroker>()
@@ -125,12 +121,8 @@ async fn a_reply_that_declares_a_destination_lands_on_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_without_a_destination_lands_on_the_mount_site_name() {
-    let app = RustStream::new(AppInfo::new("mounted-reply", "0.1.0")).with_broker(
-        SqsBroker::new(),
-        |b| {
-            b.include(issue);
-        },
-    );
+    let app = RustStream::new(AppInfo::new("mounted-reply", "0.1.0"))
+        .with_broker(SqsBroker::new(), |b| b.include(issue));
 
     let tb = TestApp::start(app).await.expect("the app starts");
     tb.broker::<SqsBroker>()

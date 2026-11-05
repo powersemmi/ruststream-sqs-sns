@@ -18,7 +18,7 @@ use futures::StreamExt;
 use ruststream::runtime::PublishExt;
 use ruststream::{
     ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, PublishPolicy,
-    Publisher, Serialized, Subscriber,
+    Publisher, Serialized, Settle, Subscriber,
 };
 use ruststream_sqs_sns::{PARTITION_KEY_HEADER, SnsPublish, SqsError, SqsPublishSteps, SqsQueue};
 
@@ -268,7 +268,8 @@ async fn a_notification_over_the_attribute_limit_names_what_the_crate_added() {
             None,
         )
         .await
-        .expect_err("eleven attributes are more than a notification carries");
+        .expect_err("eleven attributes are more than a notification carries")
+        .into_error();
     let reason = refused.to_string();
     assert!(
         matches!(

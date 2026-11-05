@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use ruststream::testing::InProcess;
-use ruststream::{IncomingMessage, OutgoingMessage, Publisher, Subscriber};
+use ruststream::{
+    IncomingMessage, OutgoingMessage, PublishMessageError, Publisher, Settle, Subscriber,
+};
 use ruststream_sqs_sns::{SqsBroker, SqsError, SqsQueue};
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot;
@@ -114,7 +116,8 @@ async fn a_stream_opened_on_another_runtime_outlives_it() -> Result<(), Box<dyn 
     connected
         .publisher()
         .publish(OutgoingMessage::new(&queue, b"order".as_slice()), None)
-        .await?;
+        .await
+        .map_err(PublishMessageError::into_error)?;
     let delivered = timeout(RECV_TIMEOUT, stream.next())
         .await
         .map_err(|_| "nothing arrived")?
@@ -202,6 +205,7 @@ async fn a_queue_publish_does_not_wait_on_a_busy_dedicated_thread() -> Result<()
                 None,
             )
             .await
+            .map_err(PublishMessageError::into_error)
     };
     let publisher = connected.publisher();
     let from_broker = async move {
@@ -211,6 +215,7 @@ async fn a_queue_publish_does_not_wait_on_a_busy_dedicated_thread() -> Result<()
                 None,
             )
             .await
+            .map_err(PublishMessageError::into_error)
     };
     Box::pin(a_publish_from_the_broker_runtime_is_prompt(
         from_thread,
@@ -241,6 +246,7 @@ async fn a_topic_publish_does_not_wait_on_a_busy_dedicated_thread() -> Result<()
                 None,
             )
             .await
+            .map_err(PublishMessageError::into_error)
     };
     let publisher = connected.sns_publisher();
     let from_broker = async move {
@@ -250,6 +256,7 @@ async fn a_topic_publish_does_not_wait_on_a_busy_dedicated_thread() -> Result<()
                 None,
             )
             .await
+            .map_err(PublishMessageError::into_error)
     };
     Box::pin(a_publish_from_the_broker_runtime_is_prompt(
         from_thread,
