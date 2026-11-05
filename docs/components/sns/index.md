@@ -32,7 +32,7 @@ Either way, SNS delivers to the queue only when the queue's access policy lets t
 The dependency line:
 
 ```toml
-ruststream-sqs-sns = { version = "0.7", features = ["sns"] }
+ruststream-sqs-sns = { version = "0.8", features = ["sns"] }
 ```
 
 The notification names its topic, so the handler answers with a bare `reply` clause.

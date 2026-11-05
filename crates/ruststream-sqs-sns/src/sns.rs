@@ -313,7 +313,7 @@ impl SnsPublisher {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
 ///         // Without the step the reply would ride `SqsPublish` and land on a queue named
 ///         // `orders-events`; with it the same reply fans out from the topic of that name.
-///         b.include(accept).out_reply(SnsPublish::default());
+///         b.include(accept).out_reply(SnsPublish::default())
 ///     })
 /// }
 /// ```
@@ -389,8 +389,9 @@ impl SnsPublish {
     ///
     /// fn app() -> RustStream {
     ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-    ///         b.include(accept).out_reply(announcements());
-    ///         b.include(bill);
+    ///         b.include(accept)
+    ///             .out_reply(announcements())
+    ///             .include(bill)
     ///     })
     /// }
     ///

@@ -75,7 +75,7 @@ pub(crate) struct Redrive {
 /// #[app]
 /// fn service() -> impl App {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-///         b.include(handle);
+///         b.include(handle)
 ///     })
 /// }
 /// ```
@@ -110,7 +110,7 @@ pub(crate) struct Redrive {
 ///     RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(SqsBroker::new(), |b| {
 ///         b.include(settle)
 ///             .max_attempts(nonzero!(3u32))
-///             .dead_letter("invoices-dead");
+///             .dead_letter("invoices-dead")
 ///     })
 /// }
 /// ```
@@ -390,7 +390,7 @@ impl SubscriptionSource<ConnectedSqsBroker> for SqsQueue {
 ///                 .batch(nonzero!(6))
 ///                 .wait(Duration::from_secs(20))
 ///                 .create_if_missing(),
-///         );
+///         )
 ///     })
 /// }
 /// ```

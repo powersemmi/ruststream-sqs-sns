@@ -392,7 +392,7 @@ fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
 ///         .test_credentials()
 ///         .region("us-east-1");
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-///         b.include(handle);
+///         b.include(handle)
 ///     })
 /// }
 /// ```
@@ -425,7 +425,7 @@ fn redrive_policy(dead_letter_arn: &str, max_receive_count: u32) -> String {
 /// /// The app `main` runs.
 /// fn app() -> RustStream {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-///         b.include(handle);
+///         b.include(handle)
 ///     })
 /// }
 ///
@@ -738,8 +738,9 @@ impl ConnectedSqsBroker {
     ///                 .map_err(io::Error::other)
     ///         })
     ///         .with_broker(broker, |b| {
-    ///             b.include(accept).out_reply(SnsPublish::default());
-    ///             b.include(bill);
+    ///             b.include(accept)
+    ///                 .out_reply(SnsPublish::default())
+    ///                 .include(bill)
     ///         })
     /// }
     /// ```

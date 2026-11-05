@@ -30,7 +30,7 @@ The dependency line:
 
 ```toml
 [dev-dependencies]
-ruststream-sqs-sns = { version = "0.7", features = ["sns", "testing"] }
+ruststream-sqs-sns = { version = "0.8", features = ["sns", "testing"] }
 ```
 
 The operator subscribed `billing` to `orders-events`, and the test build of the policy says so.

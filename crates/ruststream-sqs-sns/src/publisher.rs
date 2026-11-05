@@ -81,7 +81,7 @@ use crate::queue::SQS_BINDING_VERSION;
 ///
 /// fn app() -> RustStream {
 ///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-///         b.include(ship).out(Shipments, Publish::default()).build();
+///         b.include(ship).out(Shipments, Publish::default()).build()
 ///     })
 /// }
 ///
@@ -177,7 +177,7 @@ impl SqsPublishOptions {
 ///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
 ///         b.include(ship)
 ///             .out(Shipments, Publish::default().group_id("orders"))
-///             .build();
+///             .build()
 ///     })
 /// }
 /// ```
@@ -534,7 +534,7 @@ fn sqs_channel_binding(channel: &str) -> Bindings {
 ///         // Everything this position publishes is ordered within one group.
 ///         b.include(ship)
 ///             .out(Shipments, SqsPublish::default().group_id("orders"))
-///             .build();
+///             .build()
 ///     })
 /// }
 /// ```
