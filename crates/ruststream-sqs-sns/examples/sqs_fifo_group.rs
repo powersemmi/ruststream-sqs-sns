@@ -79,7 +79,7 @@ fn service(broker: SqsBroker) -> impl App {
                     sqs.message(&order)
                         .publish()
                         .await
-                        .map_err(io::Error::other)?
+                        .map_err(io::Error::other)?;
                 }
                 Ok(())
             },
