@@ -65,6 +65,6 @@ SQS 没有只拒绝而不删除消息的操作，所以 `drop` 会删除消息�
 
 重试从不离开队列。`retry_after(d)` 让消息在 `d` 内不可见，然后它作为同一条消息回来，id 不变，接收计数加一。没有任何东西被重新发布，因此运行时的重新发布回退在这里从不运行，`.out_retry(..)` 在 [`SqsQueue`](api:ruststream_sqs_sns::SqsQueue) 上无法编译。可见性的结束时间晚于接收后 12 小时时，SQS 会拒绝它。
 
-[`max_attempts(n)`](api:ruststream::runtime::Mounting::max_attempts) 与 [`dead_letter(q)`](api:ruststream::runtime::Mounting::dead_letter) 合起来就是队列的重新驱动策略：`maxReceiveCount` 是 `n`，死信队列是 `q`。订阅打开时把这个策略写到队列上，由 SQS 统计接收次数，并自行移走用尽次数的消息。只设其中一项，启动时就会得到 [`SqsError::IncompleteRedrive`](api:ruststream_sqs_sns::SqsError::IncompleteRedrive)。
+[`max_attempts(n)`](api:ruststream::runtime::RouterWith::max_attempts) 与 [`dead_letter(q)`](api:ruststream::runtime::RouterWith::dead_letter) 合起来就是队列的重新驱动策略：`maxReceiveCount` 是 `n`，死信队列是 `q`。订阅打开时把这个策略写到队列上，由 SQS 统计接收次数，并自行移走用尽次数的消息。只设其中一项，启动时就会得到 [`SqsError::IncompleteRedrive`](api:ruststream_sqs_sns::SqsError::IncompleteRedrive)。
 
 队列保存着等待中的消息，所以服务崩溃不会丢失任何重试：消息在可见性结束时回来，交给下一个轮询的消费者。
