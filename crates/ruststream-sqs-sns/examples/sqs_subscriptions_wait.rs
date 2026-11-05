@@ -29,9 +29,7 @@ async fn page(alert: &Alert) -> HandlerOutcome {
 // --8<-- [end:wait]
 
 fn service(broker: SqsBroker) -> impl App {
-    RustStream::new(AppInfo::new("alerts", "0.1.0")).with_broker(broker, |b| {
-        b.include(page);
-    })
+    RustStream::new(AppInfo::new("alerts", "0.1.0")).with_broker(broker, |b| b.include(page))
 }
 
 /// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve
@@ -76,12 +74,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_wait_past_twenty_seconds_stops_startup() {
-        let app = RustStream::new(AppInfo::new("alerts", "0.1.0")).with_broker(
-            broker("http://localhost:4566"),
-            |b| {
-                b.include(page.workers(nonzero!(1)).wait(Duration::from_secs(21)));
-            },
-        );
+        let app = RustStream::new(AppInfo::new("alerts", "0.1.0"))
+            .with_broker(broker("http://localhost:4566"), |b| {
+                b.include(page.workers(nonzero!(1)).wait(Duration::from_secs(21)))
+            });
 
         let refused = TestApp::start(app)
             .await

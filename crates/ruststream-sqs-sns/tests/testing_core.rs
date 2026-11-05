@@ -148,9 +148,8 @@ async fn forward(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_descriptor_declared_for_sqs_mounts_in_process() {
-    let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(), |b| {
-        b.include(handle_order);
-    });
+    let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(broker(), |b| b.include(handle_order));
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.broker::<SqsBroker>()
@@ -172,7 +171,7 @@ async fn a_descriptor_declared_for_sqs_mounts_in_process() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_definition_that_fixes_only_the_kind_takes_the_mount_sites_name() {
     let app = RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(broker(), |b| {
-        b.include(audit.name("audit-trail").wait(Duration::from_secs(10)));
+        b.include(audit.name("audit-trail").wait(Duration::from_secs(10)))
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -207,7 +206,7 @@ async fn the_mount_site_settings_ride_that_descriptor_in_process() {
                 .wait(Duration::from_secs(20))
                 .visibility(Duration::from_secs(30))
                 .create_if_missing(),
-        );
+        )
     });
 
     let tb = TestApp::start(app).await.expect("the app starts");
@@ -240,9 +239,8 @@ async fn a_batch_never_holds_more_than_one_receive_returns() {
     // A producer handle taken before the app is built, for the reason the test above gives: the
     // harness's own publish would close a batch per message.
     let producer = broker.publisher();
-    let app = RustStream::new(AppInfo::new("ledger", "0.1.0")).with_broker(broker, |b| {
-        b.include(post_ledger.batch(nonzero!(25)));
-    });
+    let app = RustStream::new(AppInfo::new("ledger", "0.1.0"))
+        .with_broker(broker, |b| b.include(post_ledger.batch(nonzero!(25))));
 
     let tb = TestApp::start(app).await.expect("the app starts");
     for id in 0..25 {
@@ -275,7 +273,7 @@ async fn a_reply_takes_the_brokers_default_policy_in_process() {
     let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {
         // No `.out(..)`: the reply rides whatever the connected broker names as its default
         // policy, and in process that has to be the production one.
-        b.include(accept);
+        b.include(accept)
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -299,7 +297,7 @@ async fn the_production_publish_policy_mounts_in_process() {
     let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {
         // The line a routes file writes, unchanged: the broker under it is the only
         // difference between this and production.
-        b.include(accept).out_reply(Publish::default());
+        b.include(accept).out_reply(Publish::default())
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -322,7 +320,7 @@ async fn the_production_publish_policy_mounts_in_process() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fan_out_policy_mounts_the_same_way() {
     let app = RustStream::new(AppInfo::new("accepted", "0.1.0")).with_broker(broker(), |b| {
-        b.include(accept).out_reply(SnsPublish::default());
+        b.include(accept).out_reply(SnsPublish::default())
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -346,7 +344,6 @@ async fn the_fan_out_policy_mounts_the_same_way() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_startup_hook_publishes_under_the_group_the_policy_fixed() {
     let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
-        b.include(ship);
         // The hook takes the live form of the production policy, so what it may call on that
         // publisher is what decides whether the service's own startup code compiles here.
         b.after_startup(
@@ -358,7 +355,8 @@ async fn a_startup_hook_publishes_under_the_group_the_policy_fixed() {
                     .await
                     .map_err(io::Error::other)
             },
-        );
+        )
+        .include(ship)
     });
 
     let tb = TestApp::start(app).await.expect("the app starts");
@@ -383,7 +381,6 @@ async fn a_startup_hook_publishes_under_the_group_the_policy_fixed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_call_step_wins_over_the_group_the_policy_fixed() {
     let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
-        b.include(ship);
         b.after_startup(
             Publish::default().group_id("user-42"),
             async move |sqs| -> io::Result<()> {
@@ -394,7 +391,8 @@ async fn a_call_step_wins_over_the_group_the_policy_fixed() {
                     .await
                     .map_err(io::Error::other)
             },
-        );
+        )
+        .include(ship)
     });
 
     let tb = TestApp::start(app).await.expect("the app starts");
@@ -413,10 +411,10 @@ async fn a_call_step_wins_over_the_group_the_policy_fixed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_slot_view_reads_back_the_options_a_publish_carried() {
     let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
-        b.include(ship);
-        b.include(dispatch)
+        b.include(ship)
+            .include(dispatch)
             .out(Shipments, Publish::default().group_id("user-42"))
-            .build();
+            .build()
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -439,10 +437,10 @@ async fn the_slot_view_reads_back_the_options_a_publish_carried() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unstepped_slot_publish_carries_the_policy_defaults() {
     let app = RustStream::new(AppInfo::new("shipments", "0.1.0")).with_broker(broker(), |b| {
-        b.include(ship);
-        b.include(forward)
+        b.include(ship)
+            .include(forward)
             .out(Shipments, Publish::default().group_id("user-42"))
-            .build();
+            .build()
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -472,9 +470,8 @@ async fn an_unstepped_slot_publish_carries_the_policy_defaults() {
 /// log still holds the one original.
 #[tokio::test(start_paused = true)]
 async fn a_deferred_retry_waits_out_the_delay_in_process() {
-    let app = RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(broker(), |b| {
-        b.include(defer);
-    });
+    let app = RustStream::new(AppInfo::new("invoices", "0.1.0"))
+        .with_broker(broker(), |b| b.include(defer));
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.broker::<SqsBroker>()
@@ -520,9 +517,8 @@ async fn compile_report(order: &Order) -> HandlerOutcome {
 /// hours after the handler asked.
 #[tokio::test(start_paused = true)]
 async fn a_deferred_retry_comes_back_when_the_twelve_hours_from_the_receive_run_out() {
-    let app = RustStream::new(AppInfo::new("reports", "0.1.0")).with_broker(broker(), |b| {
-        b.include(compile_report);
-    });
+    let app = RustStream::new(AppInfo::new("reports", "0.1.0"))
+        .with_broker(broker(), |b| b.include(compile_report));
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.broker::<SqsBroker>()
@@ -620,7 +616,7 @@ async fn a_capped_delivery_ends_in_the_dead_letter_queue() {
     let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
         b.include(appraise)
             .max_attempts(nonzero!(3u32))
-            .dead_letter("claims-dead");
+            .dead_letter("claims-dead")
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -656,7 +652,7 @@ async fn an_immediate_retry_obeys_the_same_cap() {
     let app = RustStream::new(AppInfo::new("disputes", "0.1.0")).with_broker(broker(), |b| {
         b.include(arbitrate)
             .max_attempts(nonzero!(3u32))
-            .dead_letter("disputes-dead");
+            .dead_letter("disputes-dead")
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -687,7 +683,7 @@ async fn a_handler_reads_the_queues_receive_count() {
             .max_attempts(nonzero!(3u32))
             .dead_letter("attempts-dead")
             .out(Attempts, Publish::default())
-            .build();
+            .build()
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -724,7 +720,7 @@ async fn a_bare_name_declaration_reaches_the_queues_redrive_policy() {
     let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(), |b| {
         b.include(reprice)
             .max_attempts(nonzero!(5u32))
-            .dead_letter("orders-dead");
+            .dead_letter("orders-dead")
     });
     let tb = TestApp::start(app).await.expect("the app starts");
 
@@ -751,7 +747,7 @@ async fn a_bare_name_declaration_reaches_the_queues_redrive_policy() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn half_a_bare_name_declaration_refuses_to_start() {
     let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(), |b| {
-        b.include(reprice).max_attempts(nonzero!(2u32));
+        b.include(reprice).max_attempts(nonzero!(2u32))
     });
 
     let refused = TestApp::start(app)
@@ -769,7 +765,7 @@ async fn half_a_bare_name_declaration_refuses_to_start() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn half_a_declaration_refuses_to_start() {
     let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
-        b.include(audit.name("half")).max_attempts(nonzero!(2u32));
+        b.include(audit.name("half")).max_attempts(nonzero!(2u32))
     });
 
     let refused = TestApp::start(app)

@@ -78,8 +78,8 @@ export const retries = {
 работает, и `.out_retry(..)` на [`SqsQueue`](api:ruststream_sqs_sns::SqsQueue) не компилируется.
 Видимость, которая заканчивается позже 12 часов после получения, SQS отвергает.
 
-[`max_attempts(n)`](api:ruststream::runtime::Mounting::max_attempts) и
-[`dead_letter(q)`](api:ruststream::runtime::Mounting::dead_letter) вместе образуют политику
+[`max_attempts(n)`](api:ruststream::runtime::RouterWith::max_attempts) и
+[`dead_letter(q)`](api:ruststream::runtime::RouterWith::dead_letter) вместе образуют политику
 перенаправления очереди: `maxReceiveCount` равен `n`, а DLQ - `q`.
 Подписка записывает политику в очередь при открытии, и SQS сам считает получения и переносит
 исчерпавшее попытки сообщение. Одна половина без другой даёт ошибку

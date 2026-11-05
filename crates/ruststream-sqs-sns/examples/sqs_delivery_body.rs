@@ -8,6 +8,8 @@
 //! SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --example sqs_delivery_body --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 // A plain build compiles the service; the tests that use it exist only in the test build.
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
@@ -31,9 +33,8 @@ async fn store(thumbnail: &Thumbnail<'_>) -> HandlerOutcome {
 
 /// The service reading `queue`, which it creates on a fresh stack.
 fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
-    RustStream::new(AppInfo::new("thumbnails", "0.1.0")).with_broker(broker, |b| {
-        b.include(store.name(queue).create_if_missing());
-    })
+    RustStream::new(AppInfo::new("thumbnails", "0.1.0"))
+        .with_broker(broker, |b| b.include(store.name(queue).create_if_missing()))
 }
 
 /// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve

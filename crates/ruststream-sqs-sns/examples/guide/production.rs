@@ -58,12 +58,10 @@ async fn take_order(order: &Order) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-        SqsBroker::from_config(aws_config()),
-        |b| {
-            b.include(take_order);
-        },
-    )
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(SqsBroker::from_config(aws_config()), |b| {
+            b.include(take_order)
+        })
 }
 // --8<-- [end:service]
 

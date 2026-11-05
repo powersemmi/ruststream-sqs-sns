@@ -68,7 +68,7 @@ async fn notify(order: &Order) -> OrderPlaced {
 /// The document of a service whose reply leaves for a queue.
 fn publish_document() -> Value {
     let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(SqsBroker::new(), |b| {
-        b.include(accept).out_reply(Publish::default());
+        b.include(accept).out_reply(Publish::default())
     });
     let json = build_spec(&app).to_json().expect("the document serializes");
     serde_json::from_str(&json).expect("the document is JSON")
@@ -78,8 +78,10 @@ fn publish_document() -> Value {
 #[cfg(feature = "sns")]
 fn fan_out_document() -> Value {
     let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(SqsBroker::new(), |b| {
-        b.include(announce).out_reply(SnsPublish::default());
-        b.include(notify).out_reply(SnsPublish::default());
+        b.include(announce)
+            .out_reply(SnsPublish::default())
+            .include(notify)
+            .out_reply(SnsPublish::default())
     });
     let json = build_spec(&app).to_json().expect("the document serializes");
     serde_json::from_str(&json).expect("the document is JSON")
@@ -90,8 +92,8 @@ fn document() -> Value {
     let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(SqsBroker::new(), |b| {
         b.include(reconcile)
             .max_attempts(nonzero!(5u32))
-            .dead_letter("orders-dead");
-        b.include(ship);
+            .dead_letter("orders-dead")
+            .include(ship)
     });
     let json = build_spec(&app).to_json().expect("the document serializes");
     serde_json::from_str(&json).expect("the document is JSON")
@@ -128,9 +130,7 @@ fn a_fifo_queue_says_so_and_names_no_timeout_it_was_not_given() {
 fn the_document_names_the_sqs_service() {
     let app = RustStream::new(AppInfo::new("orders", "1.0.0"))
         .server("aws", SqsBroker::new().describe_server())
-        .with_broker(SqsBroker::new(), |b| {
-            b.include(reconcile);
-        });
+        .with_broker(SqsBroker::new(), |b| b.include(reconcile));
     let json = build_spec(&app).to_json().expect("the document serializes");
     let value: Value = serde_json::from_str(&json).expect("the document is JSON");
 
@@ -151,9 +151,7 @@ fn a_broker_with_a_region_names_the_regional_service() {
     let broker = SqsBroker::new().region("eu-west-1");
     let app = RustStream::new(AppInfo::new("orders", "1.0.0"))
         .server("aws", broker.describe_server())
-        .with_broker(broker, |b| {
-            b.include(reconcile);
-        });
+        .with_broker(broker, |b| b.include(reconcile));
     let json = build_spec(&app).to_json().expect("the document serializes");
     let value: Value = serde_json::from_str(&json).expect("the document is JSON");
 

@@ -9,6 +9,8 @@
 //!     cargo test --example sqs_testing_live --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 // A plain build compiles the service; the tests that use it exist only in the test build.
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
@@ -39,7 +41,7 @@ fn app(endpoint: &str, queue: String) -> impl App<State = ()> {
         .region("us-east-1")
         .test_credentials();
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(broker, |b| {
-        b.include(accept.name(queue).create_if_missing());
+        b.include(accept.name(queue).create_if_missing())
     })
 }
 

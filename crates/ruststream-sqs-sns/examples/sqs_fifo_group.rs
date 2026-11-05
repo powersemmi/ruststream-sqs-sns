@@ -71,8 +71,6 @@ fn pending() -> Vec<OrderPlaced> {
 // --8<-- [start:policy]
 fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-        b.include(place).out(Placements, Publish::default()).build();
-        b.include(fulfil);
         // The replay keeps its own order: every message the hook sends is in the group `replay`.
         b.after_startup(
             Publish::default().group_id("replay"),
@@ -85,7 +83,11 @@ fn service(broker: SqsBroker) -> impl App {
                 }
                 Ok(())
             },
-        );
+        )
+        .include(place)
+        .out(Placements, Publish::default())
+        .build()
+        .include(fulfil)
     })
 }
 // --8<-- [end:policy]

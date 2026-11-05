@@ -79,8 +79,8 @@ republished, so the runtime's republish fallback never runs here, and `.out_retr
 compile on an [`SqsQueue`](../components/subscriptions/sqs-queue.md). SQS refuses a visibility that ends
 more than 12 hours after the receive.
 
-[`max_attempts(n)`](api:ruststream::runtime::Mounting::max_attempts) and
-[`dead_letter(q)`](api:ruststream::runtime::Mounting::dead_letter) together are the queue's
+[`max_attempts(n)`](api:ruststream::runtime::RouterWith::max_attempts) and
+[`dead_letter(q)`](api:ruststream::runtime::RouterWith::dead_letter) together are the queue's
 [redrive policy](../components/settlement/dead-letters.md): `maxReceiveCount` is `n` and the dead-letter queue is `q`. The subscription writes the
 policy onto the queue when it opens, and SQS counts the receives and moves a spent message itself.
 One half without the other is

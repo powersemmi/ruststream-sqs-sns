@@ -140,8 +140,10 @@ fn app() -> impl App<State = Ledger> {
                 .region("us-east-1")
                 .test_credentials(),
             |b| {
-                b.include(book).out(Entries, Publish::default()).build();
-                b.include(settle_refunds.batch(nonzero!(10)));
+                b.include(book)
+                    .out(Entries, Publish::default())
+                    .build()
+                    .include(settle_refunds.batch(nonzero!(10)))
             },
         )
 }

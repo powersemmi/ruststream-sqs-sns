@@ -9,6 +9,8 @@
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.
 
 #![cfg(feature = "testing")]
+// The harness futures of core 0.8 are not `Send`, and these bodies run on its current-thread driver.
+#![allow(clippy::future_not_send)]
 
 use std::error::Error;
 use std::time::Duration;
@@ -58,7 +60,7 @@ async fn settle(invoice: &Invoice, cx: &mut Context<'_>) -> HandlerOutcome {
 
 fn invoices() -> RustStream {
     RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(broker(), |b| {
-        b.include(settle.name(INVOICES).create_if_missing());
+        b.include(settle.name(INVOICES).create_if_missing())
     })
 }
 

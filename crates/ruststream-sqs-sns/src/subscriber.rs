@@ -6,20 +6,28 @@
 //! rides the same call at the protocol maximum and hands the messages over one at a time,
 //! because SQS bills per request rather than per message.
 //!
-//! The pump forwards whole batches into a channel that holds one, so it never runs more than one
-//! receive ahead of what the consumer drains; settlement goes straight through the SDK client
-//! carried by each message (no round trip). Cancelling the in-flight long poll happens only when
-//! the stream is dropped, where the cost (one closed HTTP connection) does not matter.
+//! The pump forwards each receive into a channel that holds one, so it never runs more than one
+//! receive ahead of what the consumer drains. The deliveries are built where they are handed
+//! over: a batch is written into the slot the runtime lends, so it allocates no vector of its
+//! own. Settlement goes straight through the SDK client carried by each message (no round trip).
+//! Cancelling the in-flight long poll happens only when the stream is dropped, where the cost (one
+//! closed HTTP connection) does not matter.
 
+use std::collections::VecDeque;
+use std::mem;
 use std::num::{NonZeroU32, NonZeroUsize};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use aws_sdk_sqs::types::MessageSystemAttributeName;
+use futures::Stream;
+#[cfg(feature = "testing")]
+use futures::StreamExt;
 #[cfg(feature = "testing")]
 use futures::future::Either;
-use futures::{Stream, StreamExt};
-use ruststream::{BatchSubscriber, Subscriber, nonzero};
+use ruststream::{BatchStream, BatchSubscriber, Subscriber, nonzero};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -216,14 +224,17 @@ impl SqsSubscriber {
 
 impl Receiver {
     /// Starts a pump asking for `size` messages per receive (clamped to the protocol cap) and
-    /// returns the batch channel.
+    /// returns the two ends of its channels.
     ///
     /// The pump lives as long as the receiver: the returned stream owns it, and dropping the
     /// stream closes the channel, which ends the pump on its next select. Because `stream` and
     /// `batches` borrow the subscriber mutably, at most one pump runs per subscription.
-    fn pump(&self, size: usize) -> mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>> {
+    fn pump(&self, size: usize) -> Pumped {
         // One batch in flight, so the pump stays exactly one receive ahead of the consumer.
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, batches) = mpsc::channel(1);
+        // The emptied vectors go back to the pump; the one in flight and the one being drained
+        // are all that circulate.
+        let (spares, spare_rx) = mpsc::channel(2);
         self.runtime.spawn(pump(
             Arc::clone(&self.clients),
             self.runtime.clone(),
@@ -235,8 +246,9 @@ impl Receiver {
                 redrive_max: self.redrive_max,
             },
             tx,
+            spare_rx,
         ));
-        rx
+        Pumped { batches, spares }
     }
 }
 
@@ -249,14 +261,146 @@ struct Receive {
     redrive_max: Option<NonZeroU32>,
 }
 
-/// Turns a batch channel into the stream shape both lanes are built from.
-fn batch_stream(
-    mut rx: mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>>,
-) -> impl Stream<Item = Result<Vec<SqsMessage>, SqsError>> + Send {
-    futures::stream::poll_fn(move |cx| rx.poll_recv(cx))
+/// The stream's ends of a pump: the batches it receives, and the way back for the vectors they
+/// came in, so the pump collects the next batch without allocating.
+struct Pumped {
+    batches: mpsc::Receiver<Result<Vec<SqsMessage>, SqsError>>,
+    spares: mpsc::Sender<Vec<SqsMessage>>,
+}
+
+impl Pumped {
+    /// Hands an emptied vector back to the pump. A pump that has gone, or already holds spares,
+    /// lets it drop.
+    fn recycle(&self, spare: Vec<SqsMessage>) {
+        if spare.capacity() > 0 {
+            let _ = self.spares.try_send(spare);
+        }
+    }
+}
+
+/// The single-message stream of the live lane: each batch the pump received, one delivery at a
+/// time.
+struct OneByOne {
+    pumped: Pumped,
+    /// The batch being handed over.
+    pending: VecDeque<SqsMessage>,
+}
+
+impl Stream for OneByOne {
+    type Item = Result<SqsMessage, SqsError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(delivery) = this.pending.pop_front() {
+            return Poll::Ready(Some(Ok(delivery)));
+        }
+        match ready!(this.pumped.batches.poll_recv(cx)) {
+            Some(Ok(batch)) => {
+                // Both conversions keep the buffer: a `Vec` becomes a deque in place, and an
+                // emptied deque becomes a `Vec` again.
+                let spent = mem::replace(&mut this.pending, VecDeque::from(batch));
+                this.pumped.recycle(Vec::from(spent));
+                Poll::Ready(this.pending.pop_front().map(Ok))
+            }
+            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+/// The batch stream of the live lane: one receive is one batch, which takes the place of the
+/// lent slot.
+struct Batches {
+    pumped: Pumped,
+}
+
+impl BatchStream<Vec<SqsMessage>> for Batches {
+    type Error = SqsError;
+
+    // A batch is taken off the channel and swapped into the slot within one poll, so no batch is
+    // held half-filled between polls and the stream is cancel-safe. The swap moves no message:
+    // the runtime keeps the pump's vector, and the emptied one it lent goes back to the pump.
+    fn poll_fill(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        slot: &mut Vec<SqsMessage>,
+    ) -> Poll<Option<Result<(), SqsError>>> {
+        let this = self.get_mut();
+        match ready!(this.pumped.batches.poll_recv(cx)) {
+            Some(Ok(mut batch)) => {
+                if slot.is_empty() {
+                    mem::swap(slot, &mut batch);
+                } else {
+                    // The runtime lends the slot drained; should it not be, its messages stay
+                    // ahead of these.
+                    slot.append(&mut batch);
+                }
+                this.pumped.recycle(batch);
+                Poll::Ready(Some(Ok(())))
+            }
+            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+/// The batch stream of the in-process lane: each receive of the account, written into the lent
+/// slot.
+#[cfg(feature = "testing")]
+struct InProcessBatches<Receives>(Receives);
+
+#[cfg(feature = "testing")]
+impl<Receives> BatchStream<Vec<SqsMessage>> for InProcessBatches<Receives>
+where
+    Receives: Stream<Item = Result<Vec<SqsMessage>, SqsError>> + Unpin,
+{
+    type Error = SqsError;
+
+    fn poll_fill(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        slot: &mut Vec<SqsMessage>,
+    ) -> Poll<Option<Result<(), SqsError>>> {
+        match ready!(self.get_mut().0.poll_next_unpin(cx)) {
+            Some(Ok(batch)) => {
+                slot.extend(batch);
+                Poll::Ready(Some(Ok(())))
+            }
+            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+/// Either lane's batch stream, chosen by the lane the subscription opened on.
+#[cfg(feature = "testing")]
+enum LaneBatches<Aws, InProcess> {
+    Aws(Aws),
+    InProcess(InProcess),
+}
+
+#[cfg(feature = "testing")]
+impl<Aws, InProcess> BatchStream<Vec<SqsMessage>> for LaneBatches<Aws, InProcess>
+where
+    Aws: BatchStream<Vec<SqsMessage>, Error = SqsError> + Unpin,
+    InProcess: BatchStream<Vec<SqsMessage>, Error = SqsError> + Unpin,
+{
+    type Error = SqsError;
+
+    fn poll_fill(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        slot: &mut Vec<SqsMessage>,
+    ) -> Poll<Option<Result<(), SqsError>>> {
+        match self.get_mut() {
+            Self::Aws(lane) => Pin::new(lane).poll_fill(cx, slot),
+            Self::InProcess(lane) => Pin::new(lane).poll_fill(cx, slot),
+        }
+    }
 }
 
 /// Hands a batch's messages over one at a time, an error as itself.
+#[cfg(feature = "testing")]
 pub(crate) fn one_at_a_time(
     batch: Result<Vec<SqsMessage>, SqsError>,
 ) -> futures::stream::Iter<std::vec::IntoIter<Result<SqsMessage, SqsError>>> {
@@ -264,6 +408,14 @@ pub(crate) fn one_at_a_time(
         Ok(messages) => messages.into_iter().map(Ok).collect(),
         Err(err) => vec![Err(err)],
     })
+}
+
+/// The single-message stream: a pump at the protocol maximum, handed over one at a time.
+fn one_by_one(receiver: &Receiver) -> OneByOne {
+    OneByOne {
+        pumped: receiver.pump(RECEIVE_CAP.get()),
+        pending: VecDeque::new(),
+    }
 }
 
 impl Subscriber for SqsSubscriber {
@@ -276,13 +428,9 @@ impl Subscriber for SqsSubscriber {
         // time costs a tenth of what one receive per message would.
         match &mut self.lane {
             #[cfg(not(feature = "testing"))]
-            Lane::Aws(receiver) => {
-                batch_stream(receiver.pump(RECEIVE_CAP.get())).flat_map(one_at_a_time)
-            }
+            Lane::Aws(receiver) => one_by_one(receiver),
             #[cfg(feature = "testing")]
-            Lane::Aws(receiver) => {
-                Either::Left(batch_stream(receiver.pump(RECEIVE_CAP.get())).flat_map(one_at_a_time))
-            }
+            Lane::Aws(receiver) => Either::Left(one_by_one(receiver)),
             #[cfg(feature = "testing")]
             Lane::InProcess(deliveries) => Either::Right(deliveries.stream()),
         }
@@ -290,7 +438,8 @@ impl Subscriber for SqsSubscriber {
 }
 
 /// Batches are the transport's own: the size a registration names becomes
-/// `MaxNumberOfMessages`, and one `ReceiveMessage` call is one batch.
+/// `MaxNumberOfMessages`, and one `ReceiveMessage` call is one batch, written into the slot the
+/// runtime lends.
 ///
 /// `ReceiveMessage` returns at most ten messages, so a larger size is clamped to ten rather than
 /// refused: the framework's contract already lets a batch come back shorter than it was asked
@@ -303,15 +452,23 @@ impl BatchSubscriber for SqsSubscriber {
     fn batches(
         &mut self,
         size: NonZeroUsize,
-    ) -> impl Stream<Item = Result<Self::Batch, SqsError>> + Send + '_ {
+    ) -> impl BatchStream<Self::Batch, Error = SqsError> + Send + '_ {
         let size = receive_batch(size, self.queue_url());
         match &mut self.lane {
             #[cfg(not(feature = "testing"))]
-            Lane::Aws(receiver) => batch_stream(receiver.pump(size.get())),
+            Lane::Aws(receiver) => Batches {
+                pumped: receiver.pump(size.get()),
+            },
             #[cfg(feature = "testing")]
-            Lane::Aws(receiver) => Either::Left(batch_stream(receiver.pump(size.get()))),
+            Lane::Aws(receiver) => LaneBatches::Aws(Batches {
+                pumped: receiver.pump(size.get()),
+            }),
+            // The in-process receives are an async loop over the account; pinning it once, when
+            // the subscription opens, lets the slot be filled from it.
             #[cfg(feature = "testing")]
-            Lane::InProcess(deliveries) => Either::Right(deliveries.batches(size)),
+            Lane::InProcess(deliveries) => {
+                LaneBatches::InProcess(InProcessBatches(Box::pin(deliveries.batches(size))))
+            }
         }
     }
 }
@@ -322,8 +479,11 @@ async fn pump(
     queue_url: String,
     call: Receive,
     out: mpsc::Sender<Result<Vec<SqsMessage>, SqsError>>,
+    mut spares: mpsc::Receiver<Vec<SqsMessage>>,
 ) {
     let visibility = call.visibility.held();
+    // The vector an empty receive left unused, kept for the next one.
+    let mut unused: Option<Vec<SqsMessage>> = None;
     // The pump runs on the broker's runtime, so it receives through that runtime's client.
     let client = &clients.home().sqs;
     loop {
@@ -337,7 +497,6 @@ async fn pump(
         if call.visibility.requested().is_some() {
             receive = receive.visibility_timeout(call.visibility.seconds());
         }
-
         // The queue's twelve hours of invisibility for what this receive hands over run from when
         // the queue answers it; counting from before the call keeps every later change inside
         // them.
@@ -352,28 +511,35 @@ async fn pump(
 
         match received {
             Ok(output) => {
-                let batch: Vec<SqsMessage> = output
-                    .messages()
-                    .iter()
-                    .filter_map(|message| {
-                        let receipt = message.receipt_handle()?;
+                // The deliveries are built here, as the queue answers, so each one's visibility
+                // is extended from its receive on, also while it waits to be handed over. The
+                // batch is collected into a vector the stream gave back, so after the first two
+                // receives a batch allocates none.
+                let mut batch = unused
+                    .take()
+                    .or_else(|| spares.try_recv().ok())
+                    .unwrap_or_default();
+                batch.extend(output.messages.unwrap_or_default().into_iter().filter_map(
+                    |mut message| {
+                        let receipt = message.receipt_handle.take()?;
                         Some(SqsMessage::new(
-                            message,
+                            &message,
                             &runtime,
                             Arc::clone(&clients),
                             queue_url.clone(),
-                            receipt.to_owned(),
+                            receipt,
                             Hold {
                                 visibility,
                                 received: asked,
                             },
                             call.redrive_max,
                         ))
-                    })
-                    .collect();
+                    },
+                ));
                 // A long poll that timed out has no batch to deliver, and an empty one would
                 // break the "a batch is never empty" half of the contract.
                 if batch.is_empty() {
+                    unused = Some(batch);
                     continue;
                 }
                 if out.send(Ok(batch)).await.is_err() {

@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 # Dead letters
 
-[`max_attempts`](api:ruststream::runtime::Mounting::max_attempts) and [`dead_letter`](api:ruststream::runtime::Mounting::dead_letter) together become the queue's redrive policy, and SQS moves a spent message to the dead-letter queue itself.
+[`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts) and [`dead_letter`](api:ruststream::runtime::RouterWith::dead_letter) together become the queue's redrive policy, and SQS moves a spent message to the dead-letter queue itself.
 
 The cap is the policy's `maxReceiveCount`, at most 1000, and the destination is the queue it points at.
 The subscription writes the policy onto its queue with `SetQueueAttributes` when it [opens](../broker/startup.md).

@@ -86,8 +86,8 @@ fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(broker, |b| {
         b.include(subscriber("payments", Bill).build())
             .out(Charges, Publish::default())
-            .build();
-        b.include(subscriber("charges.fifo", Post).build());
+            .build()
+            .include(subscriber("charges.fifo", Post).build())
     })
 }
 

@@ -19,7 +19,9 @@ use aws_sdk_sns::primitives::Blob;
 use aws_sdk_sns::types::MessageAttributeValue as SnsAttributeValue;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
-use ruststream::{OutgoingFor, PairError, PublishPolicy, Publisher, Take};
+use ruststream::{
+    OutgoingFor, PairError, PublishMessageError, PublishOutcome, PublishPolicy, Publisher, Take,
+};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
@@ -28,7 +30,7 @@ use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process;
 use crate::message::{AttributeValue, encode_attributes_with, encode_body};
-use crate::publisher::{SqsPublishOptions, fifo_settings, is_fifo};
+use crate::publisher::{SqsPublishOptions, fifo_settings, is_fifo, unsent};
 
 /// The binding version this crate writes for the `sns` protocol.
 #[cfg(feature = "asyncapi")]
@@ -163,15 +165,20 @@ impl Publisher for SnsPublisher {
     type Error = SqsError;
     type Options = SqsPublishOptions;
 
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'msg, Take>,
         options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
+    ) -> PublishOutcome<'msg, SqsError, Take> {
         #[cfg(feature = "testing")]
         let destination = msg.name();
         #[cfg(feature = "testing")]
-        in_process::declare_fan_out(self.core()?, destination, &self.fan_out)?;
+        if let Err(err) = self
+            .core()
+            .and_then(|core| in_process::declare_fan_out(core, destination, &self.fan_out))
+        {
+            return Err(PublishMessageError::with_message(err, msg));
+        }
         let published = self.publish_to_topic(msg, options).await;
         #[cfg(feature = "testing")]
         if published.is_ok() {
@@ -183,12 +190,17 @@ impl Publisher for SnsPublisher {
 
 impl SnsPublisher {
     /// `Publish` of one message to the topic it names.
-    async fn publish_to_topic(
+    ///
+    /// Refused before the request is built, the message comes back whole, as on the SQS side.
+    async fn publish_to_topic<'msg>(
         &self,
-        msg: OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'msg, Take>,
         options: Option<&SqsPublishOptions>,
-    ) -> Result<(), SqsError> {
-        let core = self.core()?;
+    ) -> PublishOutcome<'msg, SqsError, Take> {
+        let core = match self.core() {
+            Ok(core) => core,
+            Err(err) => return Err(PublishMessageError::with_message(err, msg)),
+        };
         let aws = match &core.transport {
             Transport::Aws(aws) => aws,
             #[cfg(feature = "testing")]
@@ -196,17 +208,25 @@ impl SnsPublisher {
                 return in_process::publish_topic(bus, msg, options, self.default_group.as_deref());
             }
         };
-        let arn = aws.topic_arn(msg.name()).await?;
+        let arn = match aws.topic_arn(msg.name()).await {
+            Ok(arn) => arn,
+            Err(err) => return Err(PublishMessageError::with_message(err, msg)),
+        };
         // The destination is the caller's string and outlives the message the body is taken from.
         let (destination, payload, headers) = msg.into_parts();
-        let (body, base64_marker) = encode_body(payload);
+        let body = encode_body(payload);
 
         // The same mapping the SQS side makes, refusals and limit included: SNS carries the
         // same attribute types and as many of them.
         let fifo = is_fifo(&arn);
-        let mut attributes = HashMap::with_capacity(headers.len() + usize::from(base64_marker));
-        let partition_key =
-            encode_attributes_with(&headers, base64_marker, fifo, destination, |name, value| {
+        let mut attributes =
+            HashMap::with_capacity(headers.len() + usize::from(body.base64_marker()));
+        let resolved = encode_attributes_with(
+            &headers,
+            body.base64_marker(),
+            fifo,
+            destination,
+            |name, value| {
                 let attribute = match value {
                     AttributeValue::Text(text) => SnsAttributeValue::builder()
                         .data_type("String")
@@ -217,36 +237,41 @@ impl SnsPublisher {
                 };
                 attributes.insert(name.to_owned(), attribute.build()?);
                 Ok::<_, BuildError>(())
-            })?
-            .map(|key| String::from_utf8_lossy(key).into_owned());
+            },
+        )
+        .and_then(|partition_key| {
+            fifo_settings(
+                destination,
+                fifo,
+                options,
+                partition_key.map(|key| String::from_utf8_lossy(key).into_owned()),
+                self.default_group.as_deref(),
+            )
+        });
+        let settings = match resolved {
+            Ok(settings) => settings,
+            Err(err) => return Err(unsent(err, destination, body, headers)),
+        };
 
         let mut publish = aws
             .clients
             .sns(SnsClient::publish)
             .topic_arn(&arn)
-            .message(body);
+            .message(body.into_string());
         if !attributes.is_empty() {
             publish = publish.set_message_attributes(Some(attributes));
         }
-        if let Some(settings) = fifo_settings(
-            destination,
-            fifo,
-            options,
-            partition_key,
-            self.default_group.as_deref(),
-        )? {
+        if let Some(settings) = settings {
             publish = publish
                 .message_group_id(settings.group)
                 .message_deduplication_id(settings.deduplication);
         }
-        publish
-            .send()
-            .await
-            .map(|_| ())
-            .map_err(|e| SqsError::Publish {
+        publish.send().await.map(|_| ()).map_err(|e| {
+            PublishMessageError::new(SqsError::Publish {
                 destination: destination.to_owned(),
                 source: sdk_err(&e),
             })
+        })
     }
 }
 
@@ -289,7 +314,7 @@ impl SnsPublisher {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
 ///         // Without the step the reply would ride `SqsPublish` and land on a queue named
 ///         // `orders-events`; with it the same reply fans out from the topic of that name.
-///         b.include(accept).out_reply(SnsPublish::default());
+///         b.include(accept).out_reply(SnsPublish::default())
 ///     })
 /// }
 /// ```
@@ -365,8 +390,9 @@ impl SnsPublish {
     ///
     /// fn app() -> RustStream {
     ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-    ///         b.include(accept).out_reply(announcements());
-    ///         b.include(bill);
+    ///         b.include(accept)
+    ///             .out_reply(announcements())
+    ///             .include(bill)
     ///     })
     /// }
     ///

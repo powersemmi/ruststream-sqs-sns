@@ -82,12 +82,12 @@ fn app() -> impl App {
                 .name("orders"),
         )
         .out(Packing, Publish::default())
-        .build();
-        b.include(
+        .build()
+        .include(
             subscriber(Unnamed::<SqsQueue>::new(), Pack)
                 .build()
                 .name("packing.fifo"),
-        );
+        )
     })
 }
 

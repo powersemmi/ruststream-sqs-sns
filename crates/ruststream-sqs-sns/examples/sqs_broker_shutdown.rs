@@ -8,6 +8,8 @@
 //! SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --example sqs_broker_shutdown --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 // A plain build compiles the service; the tests that use it exist only in the test build.
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
@@ -35,7 +37,7 @@ async fn handle(order: &Order) -> HandlerOutcome {
 fn service(broker: SqsBroker, queue: String) -> (impl App<State = ()>, SqsPublisher) {
     let intake = broker.publisher();
     let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-        b.include(handle.name(queue).create_if_missing());
+        b.include(handle.name(queue).create_if_missing())
     });
     (app, intake)
 }
@@ -87,7 +89,13 @@ mod tests {
             .publish()
             .await;
         assert!(
-            matches!(refused, Err(PublishError::Publish(SqsError::NotConnected))),
+            matches!(
+                refused,
+                Err(PublishError::Publish {
+                    source: SqsError::NotConnected,
+                    ..
+                })
+            ),
             "{refused:?}",
         );
         Ok(())

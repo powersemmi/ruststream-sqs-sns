@@ -41,7 +41,7 @@ fn service(broker: SqsBroker) -> impl App<State = ()> {
                 .batch(nonzero!(10))
                 .wait(Duration::from_secs(20))
                 .create_if_missing(),
-        );
+        )
     })
 }
 // --8<-- [end:mount]

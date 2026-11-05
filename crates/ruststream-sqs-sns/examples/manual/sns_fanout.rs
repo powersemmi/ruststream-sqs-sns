@@ -85,14 +85,16 @@ fn service(broker: SqsBroker) -> impl App {
         .with_broker(broker, |b| {
             let accept = subscriber("orders", Accept)
                 .map_source(|_| SqsQueue::new("orders").create_if_missing());
+            let record = |queue: &'static str| {
+                subscriber(queue, Record(queue))
+                    .map_source(move |_| SqsQueue::new(queue).create_if_missing())
+                    .build()
+            };
             // One step moves the reply from the queue of that name to the topic.
             b.include(accept.reply().build())
-                .out_reply(SnsPublish::default());
-            for queue in ["billing", "shipping"] {
-                let record = subscriber(queue, Record(queue))
-                    .map_source(move |_| SqsQueue::new(queue).create_if_missing());
-                b.include(record.build());
-            }
+                .out_reply(SnsPublish::default())
+                .include(record("billing"))
+                .include(record("shipping"))
         })
 }
 // --8<-- [end:app]

@@ -67,8 +67,8 @@ fn announcements() -> SnsPublish {
 fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
         b.include(subscriber("orders", Accept).reply().build())
-            .out_reply(announcements());
-        b.include(subscriber("billing", Bill).build());
+            .out_reply(announcements())
+            .include(subscriber("billing", Bill).build())
     })
 }
 // --8<-- [end:policy]

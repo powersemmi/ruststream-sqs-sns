@@ -55,7 +55,7 @@ fn app() -> impl App {
             .max_attempts(nonzero!(ATTEMPTS))
             .dead_letter("payments-dead")
             .out(Review, Publish::default())
-            .build();
+            .build()
     })
 }
 // --8<-- [end:handler]

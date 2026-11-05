@@ -7,6 +7,8 @@
 //! SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --example sqs_subscriptions_visibility --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 // A plain build compiles the service; the tests that use it exist only in the test build.
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
@@ -50,7 +52,7 @@ fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
             publish_report
                 .name(queue)
                 .visibility(Duration::from_secs(2)),
-        );
+        )
     })
 }
 // --8<-- [end:visibility]
@@ -135,7 +137,7 @@ mod tests {
                     publish_report
                         .name("reports")
                         .visibility(Duration::from_hours(13)),
-                );
+                )
             },
         );
 

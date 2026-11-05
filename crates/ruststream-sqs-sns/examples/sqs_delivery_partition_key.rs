@@ -49,8 +49,10 @@ async fn pack(order: &Order, cx: &mut Context<'_>) -> HandlerOutcome {
 #[app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("packing", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-        b.include(route).out(Packing, Publish::default()).build();
-        b.include(pack);
+        b.include(route)
+            .out(Packing, Publish::default())
+            .build()
+            .include(pack)
     })
 }
 

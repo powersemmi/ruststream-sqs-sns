@@ -61,7 +61,7 @@ async fn ship(
 #[app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-        b.include(ship).out(Shipments, Publish::default()).build();
+        b.include(ship).out(Shipments, Publish::default()).build()
     })
 }
 
@@ -146,10 +146,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_startup_carries_the_sqs_error() {
-        let app =
-            RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-                b.include(too_patient);
-            });
+        let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+            .with_broker(SqsBroker::new(), |b| b.include(too_patient));
 
         let failed = TestApp::start(app).await.err();
         let mut cause: Option<&(dyn Error + 'static)> = failed.as_ref().map(|err| err as _);

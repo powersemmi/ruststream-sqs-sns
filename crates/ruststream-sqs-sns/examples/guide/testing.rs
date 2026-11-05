@@ -5,6 +5,8 @@
 //! cargo test --example guide_testing --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 use std::time::Duration;
 
 use ruststream_sqs_sns::prelude::*;
@@ -57,10 +59,8 @@ async fn notify(confirmation: &Confirmation) -> HandlerOutcome {
 }
 
 fn service(broker: SqsBroker) -> RustStream {
-    RustStream::new(AppInfo::new("checkout", "0.1.0")).with_broker(broker, |b| {
-        b.include(confirm);
-        b.include(notify);
-    })
+    RustStream::new(AppInfo::new("checkout", "0.1.0"))
+        .with_broker(broker, |b| b.include(confirm).include(notify))
 }
 
 #[ruststream::app]

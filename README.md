@@ -47,15 +47,15 @@ routing, codecs and middleware come from the framework; this crate is the transp
 
 ```toml
 [dependencies]
-ruststream = { version = "0.7", features = ["macros", "json"] }
-ruststream-sqs-sns = "0.7"
+ruststream = { version = "0.8", features = ["macros", "json"] }
+ruststream-sqs-sns = "0.8"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-sqs-sns = { version = "0.7", features = ["testing"] }
+ruststream-sqs-sns = { version = "0.8", features = ["testing"] }
 ```
 
-Publishing to SNS topics takes the `sns` feature, which the service below uses: `ruststream-sqs-sns = { version = "0.7", features = ["sns"] }`.
+Publishing to SNS topics takes the `sns` feature, which the service below uses: `ruststream-sqs-sns = { version = "0.8", features = ["sns"] }`.
 
 ## Write a service
 
@@ -86,7 +86,7 @@ async fn accept(order: &PlaceOrder) -> OrderPlaced {
 #[app]
 fn service() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-        b.include(accept).out_reply(SnsPublish::default());
+        b.include(accept).out_reply(SnsPublish::default())
     })
 }
 ```

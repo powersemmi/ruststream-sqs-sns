@@ -64,7 +64,7 @@ fn app() -> impl App<State = ()> {
                 .name("payments"),
         )
         .max_attempts(nonzero!(3u32))
-        .dead_letter("payments-dead");
+        .dead_letter("payments-dead")
     })
 }
 

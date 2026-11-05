@@ -11,7 +11,8 @@
 //! * the routing contract ([`harness::run_suite`], in process only: it drives the
 //!   `TestableBroker` surface, which no live broker has);
 //! * the lifecycle ladder ([`harness::lifecycle`]) through the crate's descriptor and through a
-//!   bare name, and what a shutdown must finish ([`lifecycle::shutdown_flushes`]);
+//!   bare name, what a shutdown must finish ([`lifecycle::shutdown_flushes`]), and the message a
+//!   refused publish hands back ([`lifecycle::refused_publish_returns_message`]);
 //! * what a settlement means ([`settlement`]), and the in-process answers held to the server's;
 //! * the queue's own redrive ([`retry::broker_moves`]): a queue moves a spent delivery itself, so
 //!   no subscription reports an address for a retry copy;
@@ -29,15 +30,16 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::pin::pin;
 use std::time::Duration;
 
-use futures::StreamExt;
+use futures::future::poll_fn;
 use ruststream::conformance::harness::InProcessBroker;
 use ruststream::conformance::helpers::unique_subject;
+use ruststream::conformance::lifecycle::Unsent;
 use ruststream::conformance::message_shape::{self, OptionCases};
 use ruststream::conformance::{capabilities, harness, lifecycle, retry, settlement};
 use ruststream::testing::Backlog;
 use ruststream::{
-    BatchSubscriber, Bytes, ConnectedBroker, HeaderMap, IncomingMessage, Name, OutgoingMessage,
-    Publisher,
+    BatchStream, BatchSubscriber, Bytes, ConnectedBroker, HeaderMap, IncomingMessage, Name,
+    OutgoingMessage, Publisher, Settle,
 };
 #[cfg(feature = "asyncapi")]
 use ruststream_sqs_sns::ConnectedSqsBroker;
@@ -143,6 +145,26 @@ async fn in_process_passes_lifecycle() {
         in_process,
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
+    )
+    .await;
+}
+
+// A publish refused before the message reaches the client hands it back whole: the publisher
+// checks the connection, the destination and the settings before it takes the body.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_hands_a_refused_message_back() {
+    lifecycle::refused_publish_returns_message(
+        in_process,
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+    #[cfg(feature = "sns")]
+    lifecycle::refused_publish_returns_message(
+        in_process,
+        |connected| connected.sns_publisher(),
+        Unsent::Returned,
     )
     .await;
 }
@@ -260,6 +282,27 @@ async fn sqs_broker_passes_lifecycle() {
         |name| SqsQueue::new(name).create_if_missing(),
         |connected| connected.publisher(),
     ))
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sqs_hands_a_refused_message_back() {
+    let Some(endpoint) = test_endpoint() else {
+        return;
+    };
+    lifecycle::refused_publish_returns_message(
+        || live_broker(&endpoint),
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+    #[cfg(feature = "sns")]
+    lifecycle::refused_publish_returns_message(
+        || live_broker(&endpoint),
+        |connected| connected.sns_publisher(),
+        Unsent::Returned,
+    )
     .await;
 }
 
@@ -408,11 +451,16 @@ async fn a_batch_above_the_protocol_cap_is_clamped_rather_than_refused() {
 
     let asked = NonZeroUsize::new(QUEUED * 2).expect("a batch size is never zero");
     let mut batches = pin!(subscriber.batches(asked));
-    let batch = tokio::time::timeout(RECV_TIMEOUT, batches.next())
-        .await
-        .expect("a batch arrives")
-        .expect("stream is open")
-        .expect("the receive asked for a size the service accepts");
+    // The slot the runtime would lend: room for the size asked, filled by one poll that is ready.
+    let mut batch = Vec::with_capacity(asked.get());
+    tokio::time::timeout(
+        RECV_TIMEOUT,
+        poll_fn(|cx| batches.as_mut().poll_fill(cx, &mut batch)),
+    )
+    .await
+    .expect("a batch arrives")
+    .expect("stream is open")
+    .expect("the receive asked for a size the service accepts");
     assert!(
         (1..=RECEIVE_CAP).contains(&batch.len()),
         "one receive returned {} messages, and the protocol tops out at {RECEIVE_CAP}",

@@ -42,7 +42,7 @@ impl Handle<Order> for Fulfil {
 
 fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("fulfillment", "0.1.0")).with_broker(broker, |b| {
-        b.include(subscriber("orders.fifo", Fulfil).build());
+        b.include(subscriber("orders.fifo", Fulfil).build())
     })
 }
 // --8<-- [end:fifo]

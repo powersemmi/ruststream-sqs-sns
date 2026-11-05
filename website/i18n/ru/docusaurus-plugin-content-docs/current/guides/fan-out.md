@@ -16,7 +16,7 @@ import TabItem from '@theme/TabItem';
 
 ```toml title="Cargo.toml"
 [dependencies]
-ruststream-sqs-sns = { version = "0.7", features = ["sns"] }
+ruststream-sqs-sns = { version = "0.8", features = ["sns"] }
 ```
 
 Пример - магазин.

@@ -39,7 +39,10 @@ mod routing;
 use std::sync::Arc;
 
 use ruststream::testing::{Coordinator, TestableBroker};
-use ruststream::{BytesMut, HeaderMap, OutgoingFor, OutgoingMessage, RawMessage, Take};
+use ruststream::{
+    BytesMut, HeaderMap, OutgoingFor, OutgoingMessage, PublishMessageError, PublishOutcome,
+    RawMessage, Take,
+};
 
 pub(crate) use bus::Bus;
 #[cfg(feature = "sns")]
@@ -54,8 +57,8 @@ use crate::SqsPublishOptions;
 use crate::broker::Core;
 use crate::broker::{ConnectedSqsBroker, Transport};
 use crate::error::SqsError;
-use crate::message::{encode_attributes, encode_body};
-use crate::publisher::{fifo_settings, is_fifo};
+use crate::message::{Body, encode_attributes, encode_body};
+use crate::publisher::{fifo_settings, is_fifo, unsent};
 use crate::queue::SqsQueue;
 use crate::subscriber::SqsSubscriber;
 
@@ -116,33 +119,50 @@ fn frame(
     headers: &HeaderMap,
     options: Option<&SqsPublishOptions>,
     default_group: Option<&str>,
-) -> Result<Outbound, SqsError> {
-    let (body, base64_marker) = encode_body(payload);
-    let (attributes, partition_key) = encode_attributes(headers, base64_marker, fifo, destination)?;
-    let fifo = fifo_settings(destination, fifo, options, partition_key, default_group)?;
-    Ok(Outbound {
-        body,
-        attributes,
-        fifo,
-    })
+) -> Result<Outbound, Box<(SqsError, Body)>> {
+    // Boxed: the refusal is the rare answer, and it keeps the success the size of the frame.
+    let body = encode_body(payload);
+    let settings = encode_attributes(headers, body.base64_marker(), fifo, destination).and_then(
+        |(attributes, partition_key)| {
+            let fifo = fifo_settings(destination, fifo, options, partition_key, default_group)?;
+            Ok((attributes, fifo))
+        },
+    );
+    match settings {
+        Ok((attributes, fifo)) => Ok(Outbound {
+            body: body.into_string(),
+            attributes,
+            fifo,
+        }),
+        Err(err) => Err(Box::new((err, body))),
+    }
 }
 
 /// `SendMessage` of one message to the queue it names.
+///
+/// Refused before the account takes it, the message comes back whole, as on the live lane; one
+/// the account refuses comes back without it, as the client consumes the body there.
 ///
 /// # Errors
 ///
 /// Returns [`SqsError::Queue`] for a queue name SQS refuses, [`SqsError::NotFifo`] for a FIFO
 /// setting on a standard queue, and [`SqsError::Publish`] for a message SQS refuses.
-pub(crate) fn send(
+pub(crate) fn send<'msg>(
     bus: &Bus,
-    msg: OutgoingFor<'_, Take>,
+    msg: OutgoingFor<'msg, Take>,
     options: Option<&SqsPublishOptions>,
     default_group: Option<&str>,
-) -> Result<(), SqsError> {
-    let key = queue_key(msg.name()).map_err(|reason| SqsError::Queue {
-        name: msg.name().to_owned(),
-        source: reason.into(),
-    })?;
+) -> PublishOutcome<'msg, SqsError, Take> {
+    let key = match queue_key(msg.name()) {
+        Ok(key) => key,
+        Err(reason) => {
+            let err = SqsError::Queue {
+                name: msg.name().to_owned(),
+                source: reason.into(),
+            };
+            return Err(PublishMessageError::with_message(err, msg));
+        }
+    };
     let (destination, payload, headers) = msg.into_parts();
     let outbound = frame(
         destination,
@@ -151,31 +171,44 @@ pub(crate) fn send(
         &headers,
         options,
         default_group,
-    )?;
-    bus.send(destination, &key, outbound)
-        .map_err(|reason| SqsError::Publish {
+    )
+    .map_err(|refused| {
+        let (err, body) = *refused;
+        unsent(err, destination, body, headers)
+    })?;
+    bus.send(destination, &key, outbound).map_err(|reason| {
+        PublishMessageError::new(SqsError::Publish {
             destination: destination.to_owned(),
             source: reason.into(),
         })
+    })
 }
 
 /// `Publish` of one message to the topic it names.
+///
+/// Refused before the account takes it, the message comes back whole, as on the live lane.
 ///
 /// # Errors
 ///
 /// Returns [`SqsError::Admin`] for a topic name SNS refuses, [`SqsError::NotFifo`] for a FIFO
 /// setting on a standard topic, and [`SqsError::Publish`] for a message SNS refuses.
 #[cfg(feature = "sns")]
-pub(crate) fn publish_topic(
+pub(crate) fn publish_topic<'msg>(
     bus: &Bus,
-    msg: OutgoingFor<'_, Take>,
+    msg: OutgoingFor<'msg, Take>,
     options: Option<&SqsPublishOptions>,
     default_group: Option<&str>,
-) -> Result<(), SqsError> {
-    let key = topic_key(msg.name()).map_err(|reason| SqsError::Admin {
-        name: msg.name().to_owned(),
-        source: reason.into(),
-    })?;
+) -> PublishOutcome<'msg, SqsError, Take> {
+    let key = match topic_key(msg.name()) {
+        Ok(key) => key,
+        Err(reason) => {
+            let err = SqsError::Admin {
+                name: msg.name().to_owned(),
+                source: reason.into(),
+            };
+            return Err(PublishMessageError::with_message(err, msg));
+        }
+    };
     let (destination, payload, headers) = msg.into_parts();
     let outbound = frame(
         destination,
@@ -184,11 +217,17 @@ pub(crate) fn publish_topic(
         &headers,
         options,
         default_group,
-    )?;
+    )
+    .map_err(|refused| {
+        let (err, body) = *refused;
+        unsent(err, destination, body, headers)
+    })?;
     bus.publish_topic(destination, &key, &outbound)
-        .map_err(|reason| SqsError::Publish {
-            destination: destination.to_owned(),
-            source: reason.into(),
+        .map_err(|reason| {
+            PublishMessageError::new(SqsError::Publish {
+                destination: destination.to_owned(),
+                source: reason.into(),
+            })
         })
 }
 
@@ -302,7 +341,8 @@ impl TestableBroker for ConnectedSqsBroker {
                     &headers,
                     None,
                     None,
-                )?;
+                )
+                .map_err(|refused| refused.0)?;
                 bus.send(name, &key, outbound)
                     .map_err(|reason| SqsError::Publish {
                         destination: name.to_owned(),

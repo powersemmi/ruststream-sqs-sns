@@ -63,7 +63,7 @@ fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
                 .build()
                 .name(queue)
                 .wait(Duration::from_secs(20)),
-        );
+        )
     })
 }
 // --8<-- [end:service]
@@ -142,7 +142,7 @@ mod tests {
                         .build()
                         .name("orders")
                         .wait(Duration::from_secs(30)),
-                );
+                )
             },
         );
 

@@ -71,10 +71,11 @@ async fn settle(payment: &Payment) -> PaymentSettled {
 // --8<-- [start:app]
 fn service(broker: SqsBroker) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker_labeled("sqs", broker, |b| {
-        b.include(confirm);
-        b.include(ship);
-        // The reply fans out from the topic its clause names.
-        b.include(settle).out_reply(SnsPublish::default());
+        b.include(confirm)
+            .include(ship)
+            // The reply fans out from the topic its clause names.
+            .include(settle)
+            .out_reply(SnsPublish::default())
     })
 }
 // --8<-- [end:topics]
