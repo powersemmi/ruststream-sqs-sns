@@ -6,10 +6,12 @@
 //! rides the same call at the protocol maximum and hands the messages over one at a time,
 //! because SQS bills per request rather than per message.
 //!
-//! The pump forwards whole batches into a channel that holds one, so it never runs more than one
-//! receive ahead of what the consumer drains; settlement goes straight through the SDK client
-//! carried by each message (no round trip). Cancelling the in-flight long poll happens only when
-//! the stream is dropped, where the cost (one closed HTTP connection) does not matter.
+//! The pump forwards each receive into a channel that holds one, so it never runs more than one
+//! receive ahead of what the consumer drains. The deliveries are built where they are handed
+//! over: a batch is written into the slot the runtime lends, so it allocates no vector of its
+//! own. Settlement goes straight through the SDK client carried by each message (no round trip).
+//! Cancelling the in-flight long poll happens only when the stream is dropped, where the cost (one
+//! closed HTTP connection) does not matter.
 
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::pin::Pin;
