@@ -26,7 +26,7 @@ use aws_sdk_sqs::types::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Str};
+use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Settle, Str};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -293,16 +293,22 @@ impl IncomingMessage for SqsMessage {
         &self.headers
     }
 
-    async fn ack(self) -> Result<(), AckError> {
-        self.stop_extending();
-        self.delete().await
-    }
-
     /// SQS counts every receive of a message and reports it with the delivery, so a cap counts
     /// the queue's own redeliveries rather than only what this process sent back. The receive in
     /// hand is counted, which is what the first delivery answering one means.
     fn redelivery_count(&self) -> Option<u64> {
         self.receives.map(u64::from)
+    }
+
+    fn partition_key(&self) -> Option<&[u8]> {
+        Partitioned::partition_key(self)
+    }
+}
+
+impl Settle for SqsMessage {
+    async fn ack(self) -> Result<(), AckError> {
+        self.stop_extending();
+        self.delete().await
     }
 
     async fn nack(self, requeue: bool) -> Result<(), AckError> {
@@ -346,10 +352,6 @@ impl IncomingMessage for SqsMessage {
         }
         let seconds = i32::try_from(requested.min(left)).unwrap_or(i32::MAX);
         self.set_visibility(seconds).await
-    }
-
-    fn partition_key(&self) -> Option<&[u8]> {
-        Partitioned::partition_key(self)
     }
 }
 
