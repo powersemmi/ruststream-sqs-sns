@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkruststream_sqs_sns_website=self.webpackChunkruststream_sqs_sns_website||[]).push([["497"],{3192(s,e,t){t.d(e,{createArchitectureServices:()=>r.S});var r=t(4549);t(184)}}]);

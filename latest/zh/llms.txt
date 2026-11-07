@@ -1,0 +1,80 @@
+# ruststream-sqs-sns
+
+> `ruststream-sqs-sns` is the Amazon SQS broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them, with publishing to SNS topics behind the off-by-default `sns` feature. It runs over the official `aws-sdk-sqs` client (and `aws-sdk-sns` with `sns` on): a subscription long-polls its queue, a retry waits in the queue through the visibility timeout, and an attempt cap is the queue's redrive policy.
+
+A subscription is the descriptor `SqsQueue`, by queue name or URL, with its long-polling wait, visibility timeout and queue creation; a bare `#[subscriber("orders")]` reads the queue with the defaults. A routes file imports `ruststream_sqs_sns::prelude::*`, which offers `SqsPublish` (send to a queue) as `Publish` and, with the `sns` feature, `SnsPublish` (publish to a topic) under its own name. The message group and the deduplication id of a publish to a FIFO queue or topic are its per-message settings, set with the steps of `SqsPublishSteps`.
+
+This site holds the guides, one page per component and the architecture of the crate; the API reference is on docs.rs, and the framework itself is documented on the RustStream site.
+
+## Guides
+
+- [Guides](https://powersemmi.github.io/ruststream-sqs-sns/latest/): building an SQS service with the crate, from installation to production
+- [Getting started](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/getting-started/): installation, a local SQS, a first subscriber against it and its test without a server
+- [Consuming queues](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/consuming/): long polling, the visibility timeout of a slow handler, parallel handlers and batches of up to ten
+- [Acknowledgement and delivery guarantees](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/acknowledgement/): what each outcome does to a message, a handler that stays correct when a message arrives twice, and a batch settled message by message
+- [Retries and dead-letter queues](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/retries/): a retry now or later, the attempt cap as the queue's redrive policy, and reading the dead-letter queue
+- [FIFO queues](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/fifo/): message groups, deduplication ids, and several groups handled at once, each in order
+- [Fan-out with SNS](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/fan-out/): a reply published to a topic once and delivered to every queue subscribed to it
+- [Testing an SQS service](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/testing/): `TestApp` on the production app with replies and delays, and the same test against LocalStack
+- [Running in production](https://powersemmi.github.io/ruststream-sqs-sns/latest/guides/production/): credentials and region, a configuration of your own, timeouts and the IAM permissions
+
+## Components
+
+- [Components](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/): the parts of the crate an SQS service uses, one page each
+- [SqsBroker](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/): the broker type, which records its configuration and connects at startup
+- [Credentials](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/credentials/): the AWS SDK's default chain, `from_config` with an `SdkConfig` of your own, and the IAM permissions
+- [Endpoint](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/endpoint/): `endpoint`, `region` and `test_credentials` for a local stack, and queue URLs rebased onto the endpoint
+- [Startup](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/startup/): each subscription resolves its queue, writes its redrive policy and reads the queue's visibility timeout
+- [Shutdown](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/shutdown/): the connection marked closed, and `SqsError::NotConnected` for a publisher used afterwards
+- [Prelude](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/prelude/): `ruststream_sqs_sns::prelude`, the one glob an SQS service imports
+- [Errors](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/broker/errors/): `SqsError`, the one error type of the crate
+- [Subscriptions](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/): a queue name in `#[subscriber]`, and one definition on several queues
+- [SqsQueue](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/sqs-queue/): one queue by name or URL, with its long poll, visibility timeout and queue creation
+- [wait](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/wait/): the long poll of each receive, 20 seconds by default and at most
+- [visibility](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/visibility/): how long a received message stays hidden, re-armed while the handler runs
+- [create_if_missing](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/create-if-missing/): a queue, and its dead-letter queue, created at startup when missing
+- [SqsSubscription](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/sqs-subscription/): the queue steps on the mount chain, after `batch(n)` and `name`
+- [Batches](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/batches/): a slice handler over one `ReceiveMessage` call, at most ten messages
+- [FIFO](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/subscriptions/fifo/): a `.fifo` queue, which hands out each message group in order
+- [Outcomes](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/settlement/): what `ack`, `drop` and `retry` do to a message, one SQS call each
+- [retry_after](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/settlement/retry-after/): a retry that waits in the queue through the visibility timeout, within 12 hours of the receive
+- [Dead letters](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/settlement/dead-letters/): `max_attempts` and `dead_letter` as the queue's redrive policy
+- [Delivery](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/delivery/): headers as SQS message attributes, read as a typed contract
+- [RECEIVE_COUNT_HEADER](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/delivery/receive-count/): the queue's receive count, so a handler can tell the last attempt
+- [PARTITION_KEY_HEADER](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/delivery/partition-key/): the portable spelling of the FIFO message group
+- [Body](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/delivery/body/): a payload SQS does not take as text, sent base64-encoded and decoded on receive
+- [SqsPublish](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/publishing/): the queue publish policy, `Publish` in the prelude and the broker's default
+- [SqsPublishOptions](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/publishing/options/): one message's group or deduplication id, set through the publish steps
+- [group_id](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/publishing/group-id/): the message group of a position, and the order in which a group is chosen
+- [deduplication_id](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/publishing/deduplication-id/): the idempotency key of one message on a FIFO destination
+- [SnsPublish](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/sns/): the topic publish policy behind the `sns` feature, which fans a reply out to every subscribed queue
+- [subscribe_queue_to_topic](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/sns/subscribe-queue-to-topic/): a queue subscribed to a topic with raw message delivery, the topic granted the right to send to it in the queue's access policy
+- [fans_out_to](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/sns/fans-out-to/): the queues an operator subscribed to a topic, named for a test
+- [SQS bindings](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/asyncapi/): the `sqs` and `sns` bindings of the AsyncAPI document behind the `asyncapi` feature
+- [Server](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/asyncapi/server/): the endpoint's host and port with the protocol `sqs`, never a credential
+- [Channels](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/asyncapi/channels/): the queue behind each channel and the polling settings a subscription names
+- [SNS topics](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/asyncapi/topics/): the topic of a fan-out position, with FIFO ordering on a `.fifo` topic
+- [Testing](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/testing/): `TestApp::start` with `SqsBroker` on an in-process account behind the `testing` feature
+- [Live](https://powersemmi.github.io/ruststream-sqs-sns/latest/components/testing/live/): `TestApp::start_live`, the same test body against LocalStack or AWS
+
+## Architecture
+
+- [Architecture](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/): how SQS and SNS work, where the crate sits between them and the RustStream runtime, and what that costs
+- [Queues](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/sqs/): a queue stores each message until a consumer deletes it, and its consumers compete
+- [Visibility](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/sqs/visibility/): a received message stays in the queue, invisible, until a delete or another receive
+- [Groups](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/sqs/fifo/): a FIFO queue delivers each message group in order, and the groups go on in parallel
+- [Topics](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/sqs/topics/): an SNS topic delivers a copy of every message to each queue subscribed to it
+- [Design](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/design/): one pump per subscription and one set of SDK clients per runtime, between the runtime and the AWS SDK
+- [Lifecycle](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/lifecycle/): `new`, `connect`, a pump per queue at startup, and the connection closed at shutdown
+- [Path](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/path/): one message from the receive through the handler and the reply to its delete
+- [Lanes](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/lanes/): one pump per subscription, and `workers(n, by_key)` lanes keyed by the FIFO message group
+- [Settlement](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/settlement/): what `ack`, `retry`, `retry_after` and `drop` become on SQS, and a retry that waits in the queue
+- [Benchmarks](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/benchmarks/): what the crate and the framework's runtime cost over the raw `aws-sdk-sqs` client, and the cost of the crate's own code
+- [Benchmarks: Numbers](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/benchmarks/numbers/): what each published number measures, and what it does not allow you to conclude
+- [Benchmarks: Methodology](https://powersemmi.github.io/ruststream-sqs-sns/latest/architecture/benchmarks/methodology/): the three loops, the run on an SQS endpoint and the code count with `just bench`
+
+## Optional
+
+- [API reference](https://docs.rs/ruststream-sqs-sns): the full rustdoc of the crate, whose overview maps each topic to its page here
+- [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
+- [Source](https://github.com/powersemmi/ruststream-sqs-sns): the crate's repository and its examples
