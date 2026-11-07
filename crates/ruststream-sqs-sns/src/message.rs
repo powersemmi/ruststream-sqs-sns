@@ -26,7 +26,7 @@ use aws_sdk_sqs::types::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Str};
+use ruststream::{AckError, BytesMut, HeaderMap, IncomingMessage, Partitioned, Settle, Str};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -293,16 +293,22 @@ impl IncomingMessage for SqsMessage {
         &self.headers
     }
 
-    async fn ack(self) -> Result<(), AckError> {
-        self.stop_extending();
-        self.delete().await
-    }
-
     /// SQS counts every receive of a message and reports it with the delivery, so a cap counts
     /// the queue's own redeliveries rather than only what this process sent back. The receive in
     /// hand is counted, which is what the first delivery answering one means.
     fn redelivery_count(&self) -> Option<u64> {
         self.receives.map(u64::from)
+    }
+
+    fn partition_key(&self) -> Option<&[u8]> {
+        Partitioned::partition_key(self)
+    }
+}
+
+impl Settle for SqsMessage {
+    async fn ack(self) -> Result<(), AckError> {
+        self.stop_extending();
+        self.delete().await
     }
 
     async fn nack(self, requeue: bool) -> Result<(), AckError> {
@@ -346,10 +352,6 @@ impl IncomingMessage for SqsMessage {
         }
         let seconds = i32::try_from(requested.min(left)).unwrap_or(i32::MAX);
         self.set_visibility(seconds).await
-    }
-
-    fn partition_key(&self) -> Option<&[u8]> {
-        Partitioned::partition_key(self)
     }
 }
 
@@ -495,20 +497,78 @@ pub(crate) fn is_service_text(text: &str) -> bool {
     })
 }
 
-/// Encodes a payload into an SQS body: text the service accepts passes through, anything else
-/// travels base64 with the marker attribute. Returns the body and whether the marker must be
-/// set.
+/// A payload taken for a request body: text the service accepts as it was written, anything
+/// else base64 with the marker attribute.
 ///
 /// "Anything else" is wider than "not UTF-8": a binary codec's output is often valid UTF-8 and
 /// still carries control bytes the service refuses, and a rejected send is a worse answer than
 /// a transparently encoded one.
-pub(crate) fn encode_body(payload: BytesMut) -> (String, bool) {
+///
+/// Until the request is built the body can still give the payload back, so a publish refused
+/// before it reaches the client returns the message whole.
+#[derive(Debug)]
+pub(crate) enum Body {
+    /// The payload itself, validated as text the service accepts.
+    Text(String),
+    /// The payload in base64, with the bytes as they were written kept until the request is
+    /// built.
+    Base64 { encoded: String, written: Vec<u8> },
+}
+
+impl Body {
+    /// Whether the body travels base64, so the marker attribute must be set.
+    pub(crate) const fn base64_marker(&self) -> bool {
+        matches!(self, Self::Base64 { .. })
+    }
+
+    /// The body as the request carries it.
+    #[cfg(test)]
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Base64 { encoded, .. } => encoded,
+        }
+    }
+
+    /// The body for the request, which keeps it.
+    pub(crate) fn into_string(self) -> String {
+        match self {
+            Self::Text(text) => text,
+            Self::Base64 { encoded, .. } => encoded,
+        }
+    }
+
+    /// The payload as it was written, for a message handed back unsent. The text lane gives its
+    /// buffer back without a copy.
+    pub(crate) fn into_payload(self) -> BytesMut {
+        let written = match self {
+            Self::Text(text) => text.into_bytes(),
+            Self::Base64 { written, .. } => written,
+        };
+        BytesMut::from(Bytes::from(written))
+    }
+}
+
+/// Takes a payload for an SQS or SNS body.
+pub(crate) fn encode_body(payload: BytesMut) -> Body {
     // `Vec::from` reclaims the buffer the framework wrote and `String::from_utf8` validates it in
     // place, so a body the service accepts as text reaches the request without a copy.
     match String::from_utf8(Vec::from(payload)) {
-        Ok(text) if is_service_text(&text) => (text, false),
-        Ok(text) => (BASE64.encode(text.as_bytes()), true),
-        Err(invalid) => (BASE64.encode(invalid.as_bytes()), true),
+        Ok(text) if is_service_text(&text) => Body::Text(text),
+        Ok(text) => {
+            let written = text.into_bytes();
+            Body::Base64 {
+                encoded: BASE64.encode(&written),
+                written,
+            }
+        }
+        Err(invalid) => {
+            let written = invalid.into_bytes();
+            Body::Base64 {
+                encoded: BASE64.encode(&written),
+                written,
+            }
+        }
     }
 }
 
@@ -647,11 +707,14 @@ mod tests {
         let payload = BytesMut::from(&br#"{"id":1}"#[..]);
         let written = payload.as_ptr();
 
-        let (body, base64_marker) = encode_body(payload);
+        let body = encode_body(payload);
 
-        assert!(!base64_marker, "a JSON body is text the service accepts");
+        assert!(
+            !body.base64_marker(),
+            "a JSON body is text the service accepts"
+        );
         assert_eq!(
-            body.as_ptr(),
+            body.as_str().as_ptr(),
             written,
             "the body is the buffer the framework wrote, validated as text rather than copied"
         );
@@ -659,17 +722,19 @@ mod tests {
 
     #[test]
     fn utf8_payloads_pass_through() {
-        let (body, marker) = encode_body(BytesMut::from(&b"{\"id\":1}"[..]));
-        assert_eq!(body, "{\"id\":1}");
+        let body = encode_body(BytesMut::from(&b"{\"id\":1}"[..]));
+        let marker = body.base64_marker();
+        assert_eq!(body.as_str(), "{\"id\":1}");
         assert!(!marker);
     }
 
     #[test]
     fn binary_payloads_travel_base64_with_marker() {
         let raw = [0u8, 159, 146, 150];
-        let (body, marker) = encode_body(BytesMut::from(&raw[..]));
+        let body = encode_body(BytesMut::from(&raw[..]));
+        let marker = body.base64_marker();
         assert!(marker);
-        assert_eq!(BASE64.decode(body).expect("valid base64"), raw);
+        assert_eq!(BASE64.decode(body.as_str()).expect("valid base64"), raw);
     }
 
     /// The bytes a binary codec emits are often valid UTF-8 and still carry control characters
@@ -682,16 +747,41 @@ mod tests {
             std::str::from_utf8(&raw).is_ok(),
             "the sample is valid UTF-8"
         );
-        let (body, marker) = encode_body(BytesMut::from(&raw[..]));
+        let body = encode_body(BytesMut::from(&raw[..]));
+        let marker = body.base64_marker();
         assert!(marker);
-        assert_eq!(BASE64.decode(body).expect("valid base64"), raw);
+        assert_eq!(BASE64.decode(body.as_str()).expect("valid base64"), raw);
     }
 
     #[test]
     fn whitespace_the_service_accepts_stays_text() {
-        let (body, marker) = encode_body(BytesMut::from(&b"a\tb\r\nc"[..]));
+        let body = encode_body(BytesMut::from(&b"a\tb\r\nc"[..]));
+        let marker = body.base64_marker();
         assert!(!marker);
-        assert_eq!(body, "a\tb\r\nc");
+        assert_eq!(body.as_str(), "a\tb\r\nc");
+    }
+
+    /// A publish refused after the body was taken hands the payload back as it was written, on
+    /// both lanes, and the text lane gives back the very buffer it took.
+    #[test]
+    fn a_taken_body_gives_the_payload_back() {
+        let payload = BytesMut::from(&b"plain text"[..]);
+        let written = payload.as_ptr();
+        let back = encode_body(payload).into_payload();
+        assert_eq!(&back[..], b"plain text");
+        assert_eq!(
+            back.as_ptr(),
+            written,
+            "the text lane returns its buffer, not a copy"
+        );
+
+        let raw = [0u8, 159, 146, 150];
+        let back = encode_body(BytesMut::from(&raw[..])).into_payload();
+        assert_eq!(
+            &back[..],
+            raw,
+            "the base64 lane returns the bytes as written"
+        );
     }
 
     /// A header value the service refuses as text becomes a binary attribute rather than a

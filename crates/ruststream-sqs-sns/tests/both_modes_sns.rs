@@ -8,6 +8,8 @@
 //! `SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --all-features -- --test-threads=1`.
 
 #![cfg(all(feature = "testing", feature = "sns"))]
+// The harness futures of core 0.8 are not `Send`, and these bodies run on its current-thread driver.
+#![allow(clippy::future_not_send)]
 
 use std::error::Error;
 use std::io;
@@ -88,9 +90,9 @@ fn fan_out() -> RustStream {
         .after_startup(async move |_state| wire_topology(topology).await)
         .with_broker(broker, |b| {
             b.include(accept.name(ORDERS).create_if_missing())
-                .out_reply(SnsPublish::default());
-            b.include(bill.name(BILLING).create_if_missing());
-            b.include(ship.name(SHIPPING).create_if_missing());
+                .out_reply(SnsPublish::default())
+                .include(bill.name(BILLING).create_if_missing())
+                .include(ship.name(SHIPPING).create_if_missing())
         })
 }
 
@@ -192,9 +194,9 @@ fn parcels() -> RustStream {
         .after_startup(async move |_state| wire_parcels(topology).await)
         .with_broker(broker, |b| {
             b.include(receive.name(PARCELS).create_if_missing())
-                .out_reply(announcements());
-            b.include(audit.name(AUDIT).create_if_missing());
-            b.include(notify.name(NOTIFY).create_if_missing());
+                .out_reply(announcements())
+                .include(audit.name(AUDIT).create_if_missing())
+                .include(notify.name(NOTIFY).create_if_missing())
         })
 }
 

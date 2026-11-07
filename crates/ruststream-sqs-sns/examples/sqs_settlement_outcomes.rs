@@ -54,9 +54,7 @@ async fn charge(payment: &Payment, cx: &mut Context<'_>) -> HandlerOutcome {
 // --8<-- [end:outcomes]
 
 fn service(broker: SqsBroker) -> impl App {
-    RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(broker, |b| {
-        b.include(charge);
-    })
+    RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(broker, |b| b.include(charge))
 }
 
 /// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve

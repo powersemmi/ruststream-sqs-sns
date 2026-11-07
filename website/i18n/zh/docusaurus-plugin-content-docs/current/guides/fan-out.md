@@ -17,7 +17,7 @@ SNS 到 SQS 是 AWS 服务做扇出的方式：一个主题，每个消费者一
 
 ```toml title="Cargo.toml"
 [dependencies]
-ruststream-sqs-sns = { version = "0.7", features = ["sns"] }
+ruststream-sqs-sns = { version = "0.8", features = ["sns"] }
 ```
 
 示例是一个商店。

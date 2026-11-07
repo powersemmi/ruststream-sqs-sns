@@ -36,7 +36,7 @@ async fn handle(order: &Order) -> HandlerOutcome {
 /// timeout, so startup reads the queue's own.
 fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-        b.include(handle.name(queue).wait(Duration::from_secs(20)));
+        b.include(handle.name(queue).wait(Duration::from_secs(20)))
     })
 }
 // --8<-- [end:service]
@@ -101,12 +101,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_wait_above_twenty_seconds_stops_startup() {
-        let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-            broker("http://localhost:4566"),
-            |b| {
-                b.include(handle.name("orders").wait(Duration::from_secs(30)));
-            },
-        );
+        let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+            .with_broker(broker("http://localhost:4566"), |b| {
+                b.include(handle.name("orders").wait(Duration::from_secs(30)))
+            });
 
         let Err(failed) = TestApp::start(app).await else {
             panic!("a long poll waits 20 seconds at most");

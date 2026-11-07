@@ -47,9 +47,8 @@ impl Handle<Order> for Place {
 }
 
 fn service(broker: SqsBroker) -> impl App {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-        b.include(subscriber("orders", Place).build());
-    })
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(broker, |b| b.include(subscriber("orders", Place).build()))
 }
 // --8<-- [end:name]
 
@@ -75,12 +74,12 @@ fn audits(broker: SqsBroker) -> impl App {
             subscriber(Unnamed::<SqsQueue>::new(), Audit)
                 .build()
                 .name("audit-eu"),
-        );
-        b.include(
+        )
+        .include(
             subscriber(Unnamed::<SqsQueue>::new(), Audit)
                 .build()
                 .name("audit-us"),
-        );
+        )
     })
 }
 // --8<-- [end:kind]

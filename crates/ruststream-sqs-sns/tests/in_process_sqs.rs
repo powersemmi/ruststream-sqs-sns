@@ -8,8 +8,9 @@
 #![cfg(feature = "testing")]
 
 use std::error::Error;
+use std::future::poll_fn;
 use std::io;
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -17,10 +18,11 @@ use futures::StreamExt;
 use ruststream::PublishPolicy;
 use ruststream::testing::{InProcess, TestApp, TestableBroker};
 use ruststream::{
-    BatchSubscriber, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, Subscriber,
+    BatchStream, BatchSubscriber, HeaderMap, IncomingMessage, OutgoingMessage, PublishMessageError,
+    Publisher, Settle, Subscriber,
 };
 use ruststream_sqs_sns::prelude::*;
-use ruststream_sqs_sns::{ConnectedSqsBroker, RECEIVE_COUNT_HEADER, SqsError};
+use ruststream_sqs_sns::{ConnectedSqsBroker, RECEIVE_COUNT_HEADER, SqsError, SqsMessage};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
@@ -55,8 +57,8 @@ async fn take_too(order: &Order) -> HandlerOutcome {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_queue_hands_each_message_to_one_of_its_subscriptions() -> Result<(), Box<dyn Error>> {
     let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
-        b.include(take.name("claims"));
-        b.include(take_too.name("claims"));
+        b.include(take.name("claims"))
+            .include(take_too.name("claims"))
     });
     let tb = TestApp::start(app).await?;
 
@@ -80,7 +82,6 @@ async fn a_queue_hands_each_message_to_one_of_its_subscriptions() -> Result<(), 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fifo_queue_delivers_a_deduplication_id_once() -> Result<(), Box<dyn Error>> {
     let app = RustStream::new(AppInfo::new("dedup", "0.1.0")).with_broker(broker(), |b| {
-        b.include(take.name("orders.fifo"));
         b.after_startup(Publish::default(), async move |sqs| -> io::Result<()> {
             for _ in 0..2 {
                 sqs.message(&Order { id: 1 })
@@ -91,7 +92,8 @@ async fn a_fifo_queue_delivers_a_deduplication_id_once() -> Result<(), Box<dyn E
                     .map_err(io::Error::other)?;
             }
             Ok(())
-        });
+        })
+        .include(take.name("orders.fifo"))
     });
     let tb = TestApp::start(app).await?;
     tb.settle().await?;
@@ -114,7 +116,7 @@ async fn a_dead_letter_queue_of_the_other_kind_refuses_to_start() {
     let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
         b.include(take.name("claims.fifo"))
             .max_attempts(nonzero!(3u32))
-            .dead_letter("claims-dead");
+            .dead_letter("claims-dead")
     });
 
     let refused = TestApp::start(app)
@@ -133,7 +135,7 @@ async fn a_cap_over_a_thousand_receives_refuses_to_start() {
     let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
         b.include(take.name("claims"))
             .max_attempts(nonzero!(1001u32))
-            .dead_letter("claims-dead");
+            .dead_letter("claims-dead")
     });
 
     let refused = TestApp::start(app)
@@ -150,9 +152,8 @@ async fn a_cap_over_a_thousand_receives_refuses_to_start() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_queue_name_sqs_does_not_take_refuses_to_start() {
     let long = "q".repeat(81);
-    let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
-        b.include(take.name(long));
-    });
+    let app = RustStream::new(AppInfo::new("claims", "0.1.0"))
+        .with_broker(broker(), |b| b.include(take.name(long)));
 
     let refused = TestApp::start(app)
         .await
@@ -207,7 +208,7 @@ async fn an_unsettled_message_comes_back_once_its_visibility_lapses() -> Result<
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_sub_second_visibility_refuses_to_start() {
     let app = RustStream::new(AppInfo::new("claims", "0.1.0")).with_broker(broker(), |b| {
-        b.include(take.name("claims").visibility(Duration::from_millis(500)));
+        b.include(take.name("claims").visibility(Duration::from_millis(500)))
     });
 
     let refused = TestApp::start(app)
@@ -335,9 +336,9 @@ async fn a_fifo_group_waits_for_its_message_in_flight() -> Result<(), Box<dyn Er
 
     {
         let mut single = pin!(subscriber.batches(nonzero!(1)));
-        let a1 = single.next().await.ok_or("the stream ended")??;
+        let a1 = next_batch(&mut single).await?;
         assert_eq!(a1[0].payload(), b"a1");
-        let b1 = single.next().await.ok_or("the stream ended")??;
+        let b1 = next_batch(&mut single).await?;
         assert_eq!(
             b1[0].payload(),
             b"b1",
@@ -349,10 +350,24 @@ async fn a_fifo_group_waits_for_its_message_in_flight() -> Result<(), Box<dyn Er
     }
 
     let mut whole = pin!(subscriber.batches(nonzero!(10)));
-    let rest = whole.next().await.ok_or("the stream ended")??;
+    let rest = next_batch(&mut whole).await?;
     let bodies: Vec<&[u8]> = rest.iter().map(IncomingMessage::payload).collect();
     assert_eq!(bodies, [b"a2".as_slice(), b"b2".as_slice()]);
     Ok(())
+}
+
+/// The next batch of the stream, collected into a fresh slot.
+async fn next_batch<Batches>(
+    batches: &mut Pin<&mut Batches>,
+) -> Result<Vec<SqsMessage>, Box<dyn Error>>
+where
+    Batches: BatchStream<Vec<SqsMessage>, Error = SqsError> + ?Sized,
+{
+    let mut batch = Vec::new();
+    poll_fn(|cx| batches.as_mut().poll_fill(cx, &mut batch))
+        .await
+        .ok_or("the stream ended")??;
+    Ok(batch)
 }
 
 /// The error a publish of `headers` reports.
@@ -383,6 +398,7 @@ async fn refused_message(payload: &[u8], headers: HeaderMap) -> Result<SqsError,
         )
         .await
         .err()
+        .map(PublishMessageError::into_error)
         .ok_or_else(|| "SQS refuses the message, so the publish must fail".into())
 }
 
@@ -464,7 +480,8 @@ async fn a_notification_over_the_attribute_limit_is_refused() -> Result<(), Box<
         )
         .await
         .err()
-        .ok_or("SNS refuses the message, so the publish must fail")?;
+        .ok_or("SNS refuses the message, so the publish must fail")?
+        .into_error();
     let reason = refused.to_string();
     assert!(
         matches!(
@@ -621,7 +638,7 @@ async fn a_fifo_topic_fans_a_deduplication_id_out_once() -> Result<(), Box<dyn E
     }
 
     let mut batches = pin!(inbox.batches(nonzero!(10)));
-    let received = batches.next().await.ok_or("the stream ended")??;
+    let received = next_batch(&mut batches).await?;
     let bodies: Vec<&[u8]> = received.iter().map(IncomingMessage::payload).collect();
     assert_eq!(bodies, [b"once".as_slice()]);
     Ok(())

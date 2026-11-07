@@ -16,6 +16,7 @@
   ],
   "rules": [
     "Glob `ruststream_sqs_sns::prelude::*` in a routes file and `ruststream::prelude::*` in a handler file; a body that names a per-message FIFO setting globs this crate's prelude (page: Components > Broker > Prelude).",
+    "Mount handlers by returning the chain from the `with_broker` closure, `|b| b.include(accept).out_reply(SnsPublish::default()).include(bill)`, with `after_startup` and `include_router` written before the includes, and `|b| b` for a broker the service only publishes to (page: Guides > Getting started).",
     "Describe a subscription with `SqsQueue::new(queue)` and its `wait`, `visibility` and `create_if_missing` steps, or with a bare queue name for the defaults (page: Components > Subscriptions > SqsQueue).",
     "Chain the queue steps after the framework's at the mount site, `b.include(handler.batch(nonzero!(10)).wait(..))`, through the `SqsSubscription` trait in the prelude (page: Components > Subscriptions > SqsSubscription).",
     "Take a batch as a `&[T]` parameter and size it with `.batch(n)`: one `ReceiveMessage` call is one batch of at most ten messages (page: Components > Subscriptions > Batches).",

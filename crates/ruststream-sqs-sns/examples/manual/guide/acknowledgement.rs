@@ -212,13 +212,13 @@ fn app() -> impl App<State = Ledger> {
                         .build(),
                 )
                 .out(Entries, Publish::default())
-                .build();
-                b.include(
+                .build()
+                .include(
                     subscriber("refunds", SettleRefunds)
                         .batch(nonzero!(10))
                         .map_source(|_| SqsQueue::new("refunds"))
                         .build(),
-                );
+                )
             },
         )
 }

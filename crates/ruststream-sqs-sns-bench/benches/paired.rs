@@ -1,12 +1,14 @@
 // The benchmark is a binary of its own, not library surface: a measured loop panics on a broker
-// fault rather than threading a `Result` through a scenario nobody recovers from.
+// fault rather than threading a `Result` through a scenario nobody recovers from. The scenarios
+// run on one current-thread runtime, and the app's start future of core 0.8 is not `Send`.
 #![allow(
     missing_docs,
     unreachable_pub,
     unused_qualifications,
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::future_not_send
 )]
 //! What this crate's consumer and publisher cost over the `aws-sdk-sqs` client they wrap, and what
 //! the runtime costs on top of them.
@@ -97,7 +99,7 @@ use aws_sdk_sqs::types::{Message, MessageSystemAttributeName, QueueAttributeName
 use futures::StreamExt;
 use futures::future::join_all;
 use ruststream::runtime::RunningApp;
-use ruststream::{Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Subscriber};
+use ruststream::{Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Settle, Subscriber};
 use ruststream_sqs_sns::prelude::*;
 use ruststream_sqs_sns::{SqsPublishOptions, SqsPublisher};
 use serde::Deserialize;
@@ -563,9 +565,7 @@ async fn consume(order: &Order, ctx: &mut Context<'_, (), Run>) -> HandlerOutcom
 async fn start(broker: SqsBroker, run: Run) -> RunningApp {
     RustStream::new(AppInfo::new("sqs-bench", "0.0.0"))
         .on_startup(async move |()| Ok::<_, Infallible>(run))
-        .with_broker(broker, |b| {
-            b.include(consume);
-        })
+        .with_broker(broker, |b| b.include(consume))
         .start()
         .await
         .expect("the service starts")

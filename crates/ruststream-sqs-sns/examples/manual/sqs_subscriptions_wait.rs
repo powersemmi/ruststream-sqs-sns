@@ -45,7 +45,7 @@ fn alerts() -> SqsQueue {
 
 fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("alerts", "0.1.0")).with_broker(broker, |b| {
-        b.include(subscriber("alerts", Page).build().map_source(|_| alerts()));
+        b.include(subscriber("alerts", Page).build().map_source(|_| alerts()))
     })
 }
 // --8<-- [end:wait]
@@ -103,7 +103,7 @@ mod tests {
                         .build()
                         .map_source(|_| alerts())
                         .wait(Duration::from_secs(21)),
-                );
+                )
             },
         );
 

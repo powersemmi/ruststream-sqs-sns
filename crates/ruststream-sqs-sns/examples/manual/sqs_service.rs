@@ -63,7 +63,7 @@ fn app() -> impl App {
                 .name("orders")
                 .wait(Duration::from_secs(20))
                 .create_if_missing(),
-        );
+        )
     })
 }
 // --8<-- [end:app]

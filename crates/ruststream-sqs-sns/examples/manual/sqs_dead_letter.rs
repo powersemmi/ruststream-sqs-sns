@@ -71,8 +71,8 @@ fn service(broker: SqsBroker) -> impl App {
                 .map_source(|_| SqsQueue::new("invoices").create_if_missing()),
         )
         .max_attempts(nonzero!(3u32))
-        .dead_letter("invoices-dead");
-        b.include(subscriber("invoices-dead", Escalate).build());
+        .dead_letter("invoices-dead")
+        .include(subscriber("invoices-dead", Escalate).build())
     })
 }
 // --8<-- [end:mount]
@@ -135,7 +135,7 @@ mod tests {
             broker("http://localhost:4566"),
             |b| {
                 b.include(subscriber("invoices", Settle).build())
-                    .max_attempts(nonzero!(3u32));
+                    .max_attempts(nonzero!(3u32))
             },
         );
 

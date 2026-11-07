@@ -93,23 +93,24 @@ fn pending() -> Vec<OrderPlaced> {
 // --8<-- [start:policy]
 fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-        b.include(subscriber("orders", Place).build())
+        b
+            // The replay keeps its own order: every message the hook sends is in the group `replay`.
+            .after_startup(
+                Publish::default().group_id("replay"),
+                async move |sqs| -> io::Result<()> {
+                    for order in pending() {
+                        sqs.message(&order)
+                            .publish()
+                            .await
+                            .map_err(io::Error::other)?;
+                    }
+                    Ok(())
+                },
+            )
+            .include(subscriber("orders", Place).build())
             .out(Placements, Publish::default())
-            .build();
-        b.include(subscriber("fulfillment.fifo", Fulfil).build());
-        // The replay keeps its own order: every message the hook sends is in the group `replay`.
-        b.after_startup(
-            Publish::default().group_id("replay"),
-            async move |sqs| -> io::Result<()> {
-                for order in pending() {
-                    sqs.message(&order)
-                        .publish()
-                        .await
-                        .map_err(io::Error::other)?;
-                }
-                Ok(())
-            },
-        );
+            .build()
+            .include(subscriber("fulfillment.fifo", Fulfil).build())
     })
 }
 // --8<-- [end:policy]

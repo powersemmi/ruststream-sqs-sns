@@ -7,6 +7,8 @@
 //! SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --example sqs_settlement_retry_after --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 // A plain build compiles the service; the tests that use it exist only in the test build.
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
@@ -44,9 +46,8 @@ async fn settle(invoice: &Invoice, cx: &mut Context<'_>) -> HandlerOutcome {
 // --8<-- [end:retry_after]
 
 fn service(broker: SqsBroker, queue: String) -> impl App<State = ()> {
-    RustStream::new(AppInfo::new("invoices", "0.1.0")).with_broker(broker, |b| {
-        b.include(settle.name(queue));
-    })
+    RustStream::new(AppInfo::new("invoices", "0.1.0"))
+        .with_broker(broker, |b| b.include(settle.name(queue)))
 }
 
 /// The broker for a local stack; production builds `SqsBroker::new()` and lets the SDK resolve

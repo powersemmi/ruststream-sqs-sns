@@ -5,6 +5,8 @@
 //! cargo test --example manual_guide_testing --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 use std::future::{Future, ready};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -111,12 +113,12 @@ fn service(broker: SqsBroker) -> RustStream {
                 .map_source(|_| SqsQueue::new("checkout-orders").create_if_missing())
                 .reply()
                 .build(),
-        );
-        b.include(
+        )
+        .include(
             subscriber("checkout-confirmations", Notify)
                 .map_source(|_| SqsQueue::new("checkout-confirmations").create_if_missing())
                 .build(),
-        );
+        )
     })
 }
 

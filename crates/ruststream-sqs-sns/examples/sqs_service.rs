@@ -41,9 +41,8 @@ async fn handle(order: &Order) -> HandlerOutcome {
 // --8<-- [start:app]
 #[app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-        b.include(handle);
-    })
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(SqsBroker::new(), |b| b.include(handle))
 }
 // --8<-- [end:app]
 

@@ -45,7 +45,7 @@ impl Handle<Order, Confirmation> for Confirm {
 fn service(broker: SqsBroker) -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
         // No `.out_reply(..)`: the reply rides the broker's default policy, `Publish`.
-        b.include(subscriber("orders", Confirm).reply().build());
+        b.include(subscriber("orders", Confirm).reply().build())
     })
 }
 // --8<-- [end:publish]

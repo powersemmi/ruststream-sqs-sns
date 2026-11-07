@@ -17,7 +17,7 @@ use futures::StreamExt;
 use ruststream::runtime::{PublishError, PublishExt};
 use ruststream::{
     ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage, PublishPolicy,
-    Publisher, Serialized, Subscriber,
+    Publisher, Serialized, Settle, Subscriber,
 };
 use ruststream_sqs_sns::{PARTITION_KEY_HEADER, SqsError, SqsPublish, SqsPublishSteps, SqsQueue};
 
@@ -301,7 +301,7 @@ async fn a_standard_queue_refuses_a_group_id_and_sends_nothing() {
     assert!(
         matches!(
             refused,
-            PublishError::Publish(SqsError::NotFifo { ref destination, .. })
+            PublishError::Publish { source: SqsError::NotFifo { ref destination, .. }, .. }
                 if destination == &queue
         ),
         "the refusal names the destination, got {refused}",

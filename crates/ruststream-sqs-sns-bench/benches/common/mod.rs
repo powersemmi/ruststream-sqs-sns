@@ -66,7 +66,10 @@ use aws_sdk_sqs::Client;
 use aws_sdk_sqs::types::SendMessageBatchRequestEntry;
 use futures::{StreamExt, stream};
 use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, LibraryBenchmarkConfig};
-use ruststream::runtime::{AppInfo, BrokerScope, Identity, RunningApp, RustStream};
+use ruststream::runtime::{
+    AppInfo, BrokerScope, Identity, MountChain, MountRoutes, PublishIdentity, RunningApp,
+    RustStream,
+};
 use ruststream_sqs_sns::SqsBroker;
 use serde::Deserialize;
 use tokio::runtime::{Builder, Runtime};
@@ -465,12 +468,23 @@ pub struct Pending {
     messages: usize,
 }
 
-/// The mount a scenario passes in: what `with_broker` does with the scope.
-pub type Mount<'a> = &'a mut BrokerScope<SqsBroker, Identity, (), Latch>;
+/// The scope a scenario's mount receives: what `with_broker` hands its closure.
+pub type Mount = BrokerScope<SqsBroker, Identity, (), Latch>;
+
+/// The chain a scenario's mount returns.
+pub trait Mounted:
+    MountChain<Routes: MountRoutes<SqsBroker, Identity, Latch, PublishIdentity>>
+{
+}
+
+impl<Chain: MountChain<Routes: MountRoutes<SqsBroker, Identity, Latch, PublishIdentity>>> Mounted
+    for Chain
+{
+}
 
 /// Builds a one-handler service on the production broker, pointed at a fresh queue on the stand,
 /// ready to be started by the body.
-pub fn pending(messages: usize, mount: impl FnOnce(Mount<'_>)) -> Pending {
+pub fn pending<Chain: Mounted>(messages: usize, mount: impl FnOnce(Mount) -> Chain) -> Pending {
     let stand = Stand::open();
     *INPUT
         .lock()

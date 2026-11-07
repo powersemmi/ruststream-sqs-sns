@@ -137,6 +137,11 @@ fn app() -> impl App {
             .region("us-east-1")
             .test_credentials(),
         |b| {
+            let audit = |queue: &'static str| {
+                subscriber(queue, Audit)
+                    .map_source(|_| SqsQueue::new(queue).create_if_missing())
+                    .build()
+            };
             // A minute of visibility per receive, four orders packed at once.
             b.include(
                 subscriber("orders", Pack)
@@ -147,9 +152,9 @@ fn app() -> impl App {
                     })
                     .workers(nonzero!(4))
                     .build(),
-            );
+            )
             // Up to ten payments per call: one receive is one batch.
-            b.include(
+            .include(
                 subscriber("payments", Reconcile)
                     .batch(nonzero!(10))
                     .map_source(|_| {
@@ -158,15 +163,10 @@ fn app() -> impl App {
                             .create_if_missing()
                     })
                     .build(),
-            );
+            )
             // One handler, two queues.
-            for queue in ["audit-eu", "audit-us"] {
-                b.include(
-                    subscriber(queue, Audit)
-                        .map_source(|_| SqsQueue::new(queue).create_if_missing())
-                        .build(),
-                );
-            }
+            .include(audit("audit-eu"))
+            .include(audit("audit-us"))
         },
     )
 }

@@ -37,7 +37,7 @@ fn app() -> impl App<State = ()> {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(SqsBroker::new(), |b| {
         b.include(charge)
             .max_attempts(nonzero!(3u32))
-            .dead_letter("payments-dead");
+            .dead_letter("payments-dead")
     })
 }
 

@@ -137,14 +137,14 @@ fn app() -> impl App {
                     .build(),
             )
             .out(Shipments, Publish::default())
-            .build();
+            .build()
             // Four groups at once, each group in its own order.
-            b.include(
+            .include(
                 subscriber("shipments.fifo", Ship)
                     .map_source(|_| SqsQueue::new("shipments.fifo").create_if_missing())
                     .workers_by_key(nonzero!(4))
                     .build(),
-            );
+            )
         },
     )
 }

@@ -85,7 +85,7 @@ fn app() -> impl App {
                 .name("orders"),
         )
         .out(Shipments, Publish::default())
-        .build();
+        .build()
     })
 }
 
@@ -212,7 +212,7 @@ mod tests {
                         .build()
                         .name("orders")
                         .wait(Duration::from_secs(30)),
-                );
+                )
             });
 
         let failed = TestApp::start(app).await.err();

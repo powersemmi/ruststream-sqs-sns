@@ -30,6 +30,7 @@ The SDK's failure behind it is its `source`, formatted with its whole cause chai
 A service meets the error in two places.
 A failed startup carries it in the cause chain of the runtime's error, and the service exits before it reads anything.
 A publish from a handler returns it as the source of the core's `PublishError`, and the handler decides how the delivery settles.
+A publish refused before its request was built (a closed connection, a queue that does not resolve, a header or a FIFO setting SQS does not take) hands the unsent message back with the error; one that SQS or SNS refused comes back without it, because the client consumed the body.
 The enum is `#[non_exhaustive]`, so a `match` on it ends with a wildcard arm.
 
 ## Example

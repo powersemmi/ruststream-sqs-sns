@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use ruststream::{
-    ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, RetryDeclaration, Subscriber,
-    SubscriptionSource,
+    ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, RetryDeclaration, Settle,
+    Subscriber, SubscriptionSource,
 };
 use ruststream_sqs_sns::{ConnectedSqsBroker, SqsQueue};
 

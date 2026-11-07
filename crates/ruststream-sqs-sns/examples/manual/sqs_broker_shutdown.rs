@@ -7,6 +7,8 @@
 //! SQS_TEST_ENDPOINT=http://127.0.0.1:4566 cargo test --example manual_sqs_broker_shutdown --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 // A plain build compiles the service; the tests that use it exist only in the test build.
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
@@ -63,7 +65,7 @@ fn service(broker: SqsBroker, queue: String) -> (impl App<State = ()>, SqsPublis
                 .build()
                 .name(queue)
                 .create_if_missing(),
-        );
+        )
     });
     (app, intake)
 }
@@ -119,7 +121,13 @@ mod tests {
             .publish()
             .await;
         assert!(
-            matches!(refused, Err(PublishError::Publish(SqsError::NotConnected))),
+            matches!(
+                refused,
+                Err(PublishError::Publish {
+                    source: SqsError::NotConnected,
+                    ..
+                })
+            ),
             "{refused:?}",
         );
         Ok(())

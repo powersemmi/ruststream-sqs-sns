@@ -14,7 +14,10 @@ use aws_sdk_sqs::Client as SqsClient;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
-use ruststream::{OutgoingFor, PairError, PublishPolicy, Publisher, Take};
+use ruststream::{
+    HeaderMap, OutgoingFor, OutgoingMessage, PairError, PublishMessageError, PublishOutcome,
+    PublishPolicy, Publisher, Take,
+};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
@@ -22,7 +25,7 @@ use crate::broker::{ConnectedSqsBroker, Core, CoreCell, Transport};
 use crate::error::{SqsError, sdk_err};
 #[cfg(feature = "testing")]
 use crate::in_process;
-use crate::message::{encode_attributes, encode_body};
+use crate::message::{Body, encode_attributes, encode_body};
 #[cfg(feature = "asyncapi")]
 use crate::queue::SQS_BINDING_VERSION;
 
@@ -78,7 +81,7 @@ use crate::queue::SQS_BINDING_VERSION;
 ///
 /// fn app() -> RustStream {
 ///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
-///         b.include(ship).out(Shipments, Publish::default()).build();
+///         b.include(ship).out(Shipments, Publish::default()).build()
 ///     })
 /// }
 ///
@@ -174,7 +177,7 @@ impl SqsPublishOptions {
 ///     RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(SqsBroker::new(), |b| {
 ///         b.include(ship)
 ///             .out(Shipments, Publish::default().group_id("orders"))
-///             .build();
+///             .build()
 ///     })
 /// }
 /// ```
@@ -350,11 +353,14 @@ impl Publisher for SqsPublisher {
     type Error = SqsError;
     type Options = SqsPublishOptions;
 
-    async fn publish(
+    /// A publish refused before the request is built (a closed connection, a queue that does not
+    /// resolve, a header or a FIFO setting SQS refuses) hands the message back whole. One the
+    /// service refuses comes back without it: the client consumed the body.
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'msg, Take>,
         options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
+    ) -> PublishOutcome<'msg, SqsError, Take> {
         #[cfg(all(feature = "testing", feature = "sns"))]
         let destination = msg.name();
         let sent = self.send(msg, options).await;
@@ -368,12 +374,15 @@ impl Publisher for SqsPublisher {
 
 impl SqsPublisher {
     /// `SendMessage` of one message to the queue it names.
-    async fn send(
+    async fn send<'msg>(
         &self,
-        msg: OutgoingFor<'_, Take>,
+        msg: OutgoingFor<'msg, Take>,
         options: Option<&SqsPublishOptions>,
-    ) -> Result<(), SqsError> {
-        let core = self.core()?;
+    ) -> PublishOutcome<'msg, SqsError, Take> {
+        let core = match self.core() {
+            Ok(core) => core,
+            Err(err) => return Err(PublishMessageError::with_message(err, msg)),
+        };
         let aws = match &core.transport {
             Transport::Aws(aws) => aws,
             #[cfg(feature = "testing")]
@@ -381,26 +390,35 @@ impl SqsPublisher {
                 return in_process::send(bus, msg, options, self.default_group.as_deref());
             }
         };
-        let url = aws.queue_url(msg.name()).await?;
+        let url = match aws.queue_url(msg.name()).await {
+            Ok(url) => url,
+            Err(err) => return Err(PublishMessageError::with_message(err, msg)),
+        };
         // The destination is the caller's string and outlives the message the body is taken from.
         let (destination, payload, headers) = msg.into_parts();
-        let (body, base64_marker) = encode_body(payload);
+        let body = encode_body(payload);
         let fifo = is_fifo(destination) || is_fifo(&url);
-        let (attributes, partition_key) =
-            encode_attributes(&headers, base64_marker, fifo, destination)?;
-        let settings = fifo_settings(
-            destination,
-            fifo,
-            options,
-            partition_key,
-            self.default_group.as_deref(),
-        )?;
+        let prepared = encode_attributes(&headers, body.base64_marker(), fifo, destination)
+            .and_then(|(attributes, partition_key)| {
+                let settings = fifo_settings(
+                    destination,
+                    fifo,
+                    options,
+                    partition_key,
+                    self.default_group.as_deref(),
+                )?;
+                Ok((attributes, settings))
+            });
+        let (attributes, settings) = match prepared {
+            Ok(prepared) => prepared,
+            Err(err) => return Err(unsent(err, destination, body, headers)),
+        };
 
         let mut send = aws
             .clients
             .sqs(SqsClient::send_message)
             .queue_url(&url)
-            .message_body(body);
+            .message_body(body.into_string());
         if !attributes.is_empty() {
             send = send.set_message_attributes(Some(attributes));
         }
@@ -409,14 +427,27 @@ impl SqsPublisher {
                 .message_group_id(settings.group)
                 .message_deduplication_id(settings.deduplication);
         }
-        send.send()
-            .await
-            .map(|_| ())
-            .map_err(|e| SqsError::Publish {
+        send.send().await.map(|_| ()).map_err(|e| {
+            PublishMessageError::new(SqsError::Publish {
                 destination: destination.to_owned(),
                 source: sdk_err(&e),
             })
+        })
     }
+}
+
+/// The refusal of a publish whose body was already taken, carrying the message rebuilt from its
+/// parts: the destination, the payload as it was written and the headers.
+pub(crate) fn unsent(
+    error: SqsError,
+    destination: &str,
+    body: Body,
+    headers: HeaderMap,
+) -> PublishMessageError<SqsError, OutgoingFor<'_, Take>> {
+    PublishMessageError::with_message(
+        error,
+        OutgoingMessage::assembled(destination, body.into_payload(), headers),
+    )
 }
 
 /// The `sqs` channel binding a publish position writes: the queue the messages leave for.
@@ -503,7 +534,7 @@ fn sqs_channel_binding(channel: &str) -> Bindings {
 ///         // Everything this position publishes is ordered within one group.
 ///         b.include(ship)
 ///             .out(Shipments, SqsPublish::default().group_id("orders"))
-///             .build();
+///             .build()
 ///     })
 /// }
 /// ```

@@ -44,7 +44,7 @@
 //! fn service() -> impl App {
 //!     RustStream::new(AppInfo::new("orders", "0.1.0"))
 //!         .with_broker(SqsBroker::new(), |b| {
-//!             b.include(handle);
+//!             b.include(handle)
 //!         })
 //! }
 //! ```

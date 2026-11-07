@@ -16,7 +16,7 @@ Publishing to SNS needs the `sns` feature:
 
 ```toml title="Cargo.toml"
 [dependencies]
-ruststream-sqs-sns = { version = "0.7", features = ["sns"] }
+ruststream-sqs-sns = { version = "0.8", features = ["sns"] }
 ```
 
 The example is a shop.

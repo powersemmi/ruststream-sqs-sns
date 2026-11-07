@@ -26,7 +26,7 @@ The binary `#[ruststream::app]` writes prints the document with `asyncapi gen`.
 The dependency line:
 
 ```toml
-ruststream-sqs-sns = { version = "0.7", features = ["asyncapi", "sns"] }
+ruststream-sqs-sns = { version = "0.8", features = ["asyncapi", "sns"] }
 ```
 
 The service registers its broker under the label `sqs`, the key of its server in the document.

@@ -6,6 +6,8 @@
 //! cargo run --example guide_fan_out --features testing,sns -- run
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 use std::io;
 
 use ruststream_sqs_sns::prelude::*;
@@ -78,9 +80,10 @@ fn service(broker: SqsBroker) -> RustStream {
         .after_startup(async move |_state| subscribe_queues(topology).await)
         .with_broker(broker, |b| {
             // The reply goes to the topic named by `OrderPlaced`, through SNS.
-            b.include(accept).out_reply(SnsPublish::default());
-            b.include(bill);
-            b.include(ship);
+            b.include(accept)
+                .out_reply(SnsPublish::default())
+                .include(bill)
+                .include(ship)
         })
 }
 

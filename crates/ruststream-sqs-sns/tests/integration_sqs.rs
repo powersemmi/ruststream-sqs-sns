@@ -12,7 +12,7 @@ use aws_sdk_sqs::types::{MessageAttributeValue, QueueAttributeName};
 use futures::StreamExt;
 use ruststream::{
     ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher, RetryDeclaration,
-    Subscribe, Subscriber, SubscriptionSource,
+    Settle, Subscribe, Subscriber, SubscriptionSource,
 };
 use ruststream_sqs_sns::{
     ConnectedSqsBroker, PARTITION_KEY_HEADER, RECEIVE_COUNT_HEADER, SqsError, SqsQueue,
@@ -629,7 +629,8 @@ async fn a_missing_queue_is_reported_rather_than_created() {
         .publisher()
         .publish(OutgoingMessage::new(&queue, b"nowhere".as_slice()), None)
         .await
-        .expect_err("a queue nobody created cannot be published to");
+        .expect_err("a queue nobody created cannot be published to")
+        .into_error();
     assert!(
         matches!(refused, SqsError::Queue { ref name, .. } if name == &queue),
         "the refusal names the queue, got {refused}",
@@ -681,7 +682,8 @@ async fn a_publish_over_the_attribute_limit_names_what_the_crate_added() {
             None,
         )
         .await
-        .expect_err("eleven attributes are more than a message carries");
+        .expect_err("eleven attributes are more than a message carries")
+        .into_error();
     let reason = refused.to_string();
     assert!(
         matches!(
@@ -729,7 +731,8 @@ async fn a_header_named_like_the_payload_marker_is_refused() {
             None,
         )
         .await
-        .expect_err("the crate's own attribute name is not a header a service may send");
+        .expect_err("the crate's own attribute name is not a header a service may send")
+        .into_error();
     let reason = refused.to_string();
     assert!(
         matches!(refused, SqsError::InvalidHeader { ref header, .. } if header == PAYLOAD_MARKER),
